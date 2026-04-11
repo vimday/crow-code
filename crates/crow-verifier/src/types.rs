@@ -84,8 +84,10 @@ pub struct VerificationResult {
     pub test_run: TestRun,
     /// Process exit code. `None` if killed by timeout or signal.
     pub exit_code: Option<i32>,
-    /// Number of raw output bytes before ACI truncation.
-    pub raw_output_bytes: usize,
+    /// Number of bytes actually retained within the buffer cap.
+    pub captured_output_bytes: usize,
+    /// Number of raw output bytes emitted by the child process before any cap.
+    pub emitted_byte_count: usize,
     /// Whether the output was truncated by ACI.
     pub was_truncated: bool,
 }

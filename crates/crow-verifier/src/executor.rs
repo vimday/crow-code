@@ -23,9 +23,13 @@ use crow_probe::VerificationCommand;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 /// Safe environment variables that are allowed to pass through
 /// to the sandbox process. All other variables are cleared.
@@ -106,6 +110,11 @@ pub fn execute(
     cmd.args(&command.args);
     cmd.current_dir(&cwd);
 
+    // Give the command its own process group (P1 fix), so we can kill
+    // grandchildren processes upon timeout without killing the agent.
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     // Sanitize the environment (P1 fix)
     cmd.env_clear();
     for var in ENV_ALLOWLIST {
@@ -136,16 +145,23 @@ pub fn execute(
     let stderr_buf = Arc::new(Mutex::new(Vec::new()));
 
     let max_bytes = exec_config.max_output_bytes;
+    let remaining = Arc::new(AtomicUsize::new(max_bytes));
+    let emitted = Arc::new(AtomicUsize::new(0));
 
     // Use threads to safely stream output without blocking the child (P2 fix)
+    // Both streams share a single atomic byte budget (P1 fix).
     let out_clone = Arc::clone(&stdout_buf);
+    let rem_clone1 = Arc::clone(&remaining);
+    let em_clone1 = Arc::clone(&emitted);
     let out_thread = thread::spawn(move || {
-        stream_capture(stdout, out_clone, max_bytes);
+        stream_capture(stdout, out_clone, rem_clone1, em_clone1);
     });
 
     let err_clone = Arc::clone(&stderr_buf);
+    let rem_clone2 = Arc::clone(&remaining);
+    let em_clone2 = Arc::clone(&emitted);
     let err_thread = thread::spawn(move || {
-        stream_capture(stderr, err_clone, max_bytes);
+        stream_capture(stderr, err_clone, rem_clone2, em_clone2);
     });
 
     // Enforce timeout using try_wait (P1 fix)
@@ -160,7 +176,7 @@ pub fn execute(
             }
             Ok(None) => {
                 if start.elapsed() >= exec_config.timeout {
-                    let _ = child.kill(); // Best effort kill
+                    kill_process_tree(&mut child);
                     let _ = child.wait(); // Reap the zombie
                     timed_out = true;
                     break;
@@ -168,7 +184,7 @@ pub fn execute(
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
                 return Err(VerifierError::SpawnFailed(e));
             }
         }
@@ -223,24 +239,66 @@ pub fn execute(
     Ok(VerificationResult {
         test_run,
         exit_code,
-        raw_output_bytes: raw_bytes,
+        captured_output_bytes: raw_bytes,
+        emitted_byte_count: emitted.load(Ordering::Relaxed),
         was_truncated: aci_result.was_truncated,
     })
 }
 
+/// Kill the child process and all its subprocesses if possible.
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        unsafe {
+            // Signal negative PID to kill the whole process group
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Fallback to single process kill on non-Unix
+        let _ = child.kill();
+    }
+}
+
 /// Helper to read a stream into a buffer until EOF, capping the buffer size.
-/// Continues reading and discarding after limit to avoid blocking the child pipe.
-fn stream_capture(mut stream: impl Read, buf: Arc<Mutex<Vec<u8>>>, max_bytes: usize) {
+/// Uses an atomic budget shared between stdout and stderr.
+fn stream_capture(
+    mut stream: impl Read,
+    buf: Arc<Mutex<Vec<u8>>>,
+    remaining: Arc<AtomicUsize>,
+    emitted: Arc<AtomicUsize>,
+) {
     let mut chunk = vec![0u8; 4096];
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break, // EOF
             Ok(n) => {
-                let mut current = buf.lock().unwrap();
-                let remaining = max_bytes.saturating_sub(current.len());
-                if remaining > 0 {
-                    let take = std::cmp::min(n, remaining);
-                    current.extend_from_slice(&chunk[..take]);
+                emitted.fetch_add(n, Ordering::Relaxed);
+
+                // Atomically claim up to `n` bytes from the remaining budget
+                let mut current_rem = remaining.load(Ordering::Relaxed);
+                let mut claimed = 0;
+                while current_rem > 0 {
+                    let to_claim = std::cmp::min(n, current_rem);
+                    match remaining.compare_exchange_weak(
+                        current_rem,
+                        current_rem - to_claim,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => {
+                            claimed = to_claim;
+                            break;
+                        }
+                        Err(x) => current_rem = x,
+                    }
+                }
+
+                if claimed > 0 {
+                    let mut b = buf.lock().unwrap();
+                    b.extend_from_slice(&chunk[..claimed]);
                 }
                 // Keep looping to ensure pipe is drained
             }
@@ -372,7 +430,8 @@ mod tests {
         let log = result.test_run.truncated_log;
         
         // The raw captured bytes should be strictly <= 100 before utf8 decode
-        assert!(result.raw_output_bytes <= 100);
+        assert!(result.captured_output_bytes <= 100);
+        assert!(result.emitted_byte_count > 100);
         // It shouldn't contain the later lines because of the byte crop
         assert!(!log.contains("line 999"));
 
