@@ -77,7 +77,9 @@ pub struct MaterializeConfig {
     /// tools can regenerate them without writing through to the source.
     /// A shared read-only cache strategy is planned but not yet safe.
     pub artifact_dirs: Vec<String>,
-    /// Glob patterns to skip entirely (e.g. ".git", "*.swp").
+    /// Exact directory/file names to skip entirely (e.g. ".git").
+    /// Matched against each entry's basename — not a glob pattern.
+    /// Glob semantics will be added in a future step.
     pub skip_patterns: Vec<String>,
     /// If true, include HardlinkTree in the driver fallback chain.
     /// Callers MUST use unlink-before-write discipline with hardlinked
