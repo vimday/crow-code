@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    # 💎 The Currencies — system-wide data primitives
+    "crates/crow-patch",
+    "crates/crow-evidence",
+    "crates/crow-probe",
+
+    # 🗄️ L1: The Runtime
+    "crates/crow-workspace",
+    "crates/crow-materialize",
+
+    # ⚖️ L2: The Crucible
+    "crates/crow-verifier",
+
+    # 👁️ L3: The Intelligence
+    "crates/crow-intel",
+
+    # 🧠 L4: The Reasoning
+    "crates/crow-brain",
+
+    # 🖥️ L5: The Interface & Observability
+    "crates/crow-cli",
+    "crates/crow-replay",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
