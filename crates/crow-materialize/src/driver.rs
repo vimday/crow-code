@@ -1,8 +1,14 @@
 //! Materialization driver implementations.
 //!
 //! Each driver implements the same contract: given a source directory and
-//! config, produce an isolated sandbox directory. The source must NEVER
-//! be modified.
+//! config, produce an isolated sandbox directory.
+//!
+//! # Invariants
+//!
+//! - The source workspace is **never modified**.
+//! - Artifact directories are created as **empty directories** in the
+//!   sandbox — they are never symlinked or copied from the source.
+//! - Source symlinks are preserved (re-created in the sandbox).
 
 use crate::types::{MaterializeConfig, MaterializationDriver, SandboxHandle};
 use std::fs;
@@ -24,11 +30,15 @@ pub fn execute(
 // ─── Sandbox directory creation ─────────────────────────────────────
 
 fn create_sandbox_dir() -> Result<PathBuf, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let id = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let sandbox_path = std::env::temp_dir().join(format!("crow_vfs_{}", id));
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let sandbox_path = std::env::temp_dir().join(format!("crow_vfs_{}_{}", id, seq));
     fs::create_dir_all(&sandbox_path)
         .map_err(|e| format!("failed to create sandbox dir: {}", e))?;
     Ok(sandbox_path)
@@ -42,19 +52,37 @@ fn is_artifact_dir(name: &str, config: &MaterializeConfig) -> bool {
 }
 
 /// Check if a path component matches any skip pattern.
-/// Currently supports exact filename matches only. Glob expansion is
-/// deferred to a future step.
 fn should_skip(name: &str, config: &MaterializeConfig) -> bool {
     config.skip_patterns.iter().any(|p| {
-        // Strip trailing slash for directory pattern matching
         let pattern = p.trim_end_matches('/');
         name == pattern
     })
 }
 
-/// Recursively copy a directory tree, symlinking artifact dirs and
-/// skipping ignored entries.
-fn copy_tree(
+/// Re-create a symlink in the sandbox, preserving its target.
+#[cfg(unix)]
+fn recreate_symlink(src_path: &Path, dst_path: &Path) -> Result<(), String> {
+    let target = fs::read_link(src_path)
+        .map_err(|e| format!("readlink {} failed: {}", src_path.display(), e))?;
+    std::os::unix::fs::symlink(&target, dst_path)
+        .map_err(|e| format!("symlink {} failed: {}", dst_path.display(), e))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn recreate_symlink(_src_path: &Path, _dst_path: &Path) -> Result<(), String> {
+    Err("symlink preservation not yet supported on this platform".into())
+}
+
+// ─── SafeCopy Driver ────────────────────────────────────────────────
+
+fn safe_copy(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
+    let sandbox = create_sandbox_dir()?;
+    safe_copy_tree(&config.source, &sandbox, config)?;
+    Ok(SandboxHandle::new(sandbox, MaterializationDriver::SafeCopy))
+}
+
+fn safe_copy_tree(
     source: &Path,
     dest: &Path,
     config: &MaterializeConfig,
@@ -69,7 +97,6 @@ fn copy_tree(
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
 
-        // Skip ignored entries entirely
         if should_skip(&name, config) {
             continue;
         }
@@ -78,49 +105,32 @@ fn copy_tree(
             .file_type()
             .map_err(|e| format!("file_type error: {}", e))?;
 
-        if file_type.is_dir() {
+        if file_type.is_symlink() {
+            // Preserve symlinks before checking is_dir/is_file
+            // (which follow symlinks).
+            recreate_symlink(&src_path, &dst_path)?;
+        } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                // Symlink artifact directories, never copy them
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&src_path, &dst_path)
-                    .map_err(|e| format!("symlink {} failed: {}", name, e))?;
-                #[cfg(not(unix))]
-                return Err(format!("symlinks not supported on this platform for {}", name));
+                // Create empty directory — never copy or symlink artifact dirs.
+                fs::create_dir_all(&dst_path)
+                    .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
-                copy_tree(&src_path, &dst_path, config)?;
+                safe_copy_tree(&src_path, &dst_path, config)?;
             }
         } else if file_type.is_file() {
             fs::copy(&src_path, &dst_path)
                 .map_err(|e| format!("copy {} failed: {}", name, e))?;
-        } else if file_type.is_symlink() {
-            // Preserve existing symlinks as-is
-            let target = fs::read_link(&src_path)
-                .map_err(|e| format!("readlink {} failed: {}", name, e))?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&target, &dst_path)
-                .map_err(|e| format!("symlink {} failed: {}", name, e))?;
         }
     }
     Ok(())
-}
-
-// ─── SafeCopy Driver ────────────────────────────────────────────────
-
-fn safe_copy(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
-    let sandbox = create_sandbox_dir()?;
-    copy_tree(&config.source, &sandbox, config)?;
-    Ok(SandboxHandle::new(sandbox, MaterializationDriver::SafeCopy))
 }
 
 // ─── APFS Clone Driver (macOS) ──────────────────────────────────────
 
 #[cfg(target_os = "macos")]
 fn apfs_clone(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
-    // clonefile(2) works on individual files, not directories.
-    // For a directory tree, we still walk and clone each file,
-    // but artifact_dirs get symlinked.
     let sandbox = create_sandbox_dir()?;
     apfs_clone_tree(&config.source, &sandbox, config)?;
     Ok(SandboxHandle::new(sandbox, MaterializationDriver::ApfsClone))
@@ -148,10 +158,12 @@ fn apfs_clone_tree(
 
         let file_type = entry.file_type().map_err(|e| format!("file_type: {}", e))?;
 
-        if file_type.is_dir() {
+        if file_type.is_symlink() {
+            recreate_symlink(&src_path, &dst_path)?;
+        } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                std::os::unix::fs::symlink(&src_path, &dst_path)
-                    .map_err(|e| format!("symlink: {}", e))?;
+                fs::create_dir_all(&dst_path)
+                    .map_err(|e| format!("mkdir: {}", e))?;
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir: {}", e))?;
@@ -167,7 +179,6 @@ fn apfs_clone_tree(
                 libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0)
             };
             if ret != 0 {
-                // clonefile failed (e.g. cross-filesystem), fall back to copy
                 fs::copy(&src_path, &dst_path)
                     .map_err(|e| format!("copy fallback: {}", e))?;
             }
@@ -210,13 +221,12 @@ fn hardlink_copy_tree(
 
         let file_type = entry.file_type().map_err(|e| format!("file_type: {}", e))?;
 
-        if file_type.is_dir() {
+        if file_type.is_symlink() {
+            recreate_symlink(&src_path, &dst_path)?;
+        } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&src_path, &dst_path)
-                    .map_err(|e| format!("symlink: {}", e))?;
-                #[cfg(not(unix))]
-                return Err("symlinks not supported".into());
+                fs::create_dir_all(&dst_path)
+                    .map_err(|e| format!("mkdir: {}", e))?;
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir: {}", e))?;
@@ -234,7 +244,6 @@ fn hardlink_copy_tree(
 
 #[cfg(target_os = "linux")]
 fn cow_clone(_config: &MaterializeConfig) -> Result<SandboxHandle, String> {
-    // FICLONE ioctl implementation deferred to Step 3b
     Err("CoW FICLONE not yet implemented".into())
 }
 
@@ -272,6 +281,10 @@ mod tests {
         let mut f = fs::File::create(root.join("node_modules/lodash/index.js")).unwrap();
         f.write_all(b"module.exports = {}").unwrap();
 
+        // Add a symlink inside the workspace
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("src/main.rs", root.join("main_link.rs")).unwrap();
+
         root
     }
 
@@ -280,6 +293,16 @@ mod tests {
             source: source.to_path_buf(),
             artifact_dirs: vec!["node_modules".into()],
             skip_patterns: vec![".git".into()],
+            allow_hardlinks: false,
+        }
+    }
+
+    fn hardlink_config(source: &Path) -> MaterializeConfig {
+        MaterializeConfig {
+            source: source.to_path_buf(),
+            artifact_dirs: vec!["node_modules".into()],
+            skip_patterns: vec![".git".into()],
+            allow_hardlinks: true,
         }
     }
 
@@ -290,44 +313,70 @@ mod tests {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
 
-        // Record source state before materialization
         let src_main = fs::read_to_string(workspace.join("src/main.rs")).unwrap();
         let src_cargo = fs::read_to_string(workspace.join("Cargo.toml")).unwrap();
 
         let handle = safe_copy(&config).unwrap();
 
         // Modify a file inside the sandbox
-        let sandbox_main = handle.path().join("src/main.rs");
-        fs::write(&sandbox_main, b"fn main() { panic!(); }").unwrap();
+        fs::write(handle.path().join("src/main.rs"), b"fn main() { panic!(); }").unwrap();
 
         // Source must be unchanged
         assert_eq!(fs::read_to_string(workspace.join("src/main.rs")).unwrap(), src_main);
         assert_eq!(fs::read_to_string(workspace.join("Cargo.toml")).unwrap(), src_cargo);
 
-        // Cleanup
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
     }
 
-    // ─── artifact_dirs are symlinked, not copied ────────────────────
+    // ─── P1-1 FIX: artifact_dirs are empty dirs, NOT symlinks ───────
 
     #[test]
-    fn artifact_dirs_are_symlinked() {
+    fn artifact_dirs_are_empty_not_symlinked() {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
 
         let handle = safe_copy(&config).unwrap();
         let nm_path = handle.path().join("node_modules");
 
+        // node_modules must exist as a real directory, not a symlink
         assert!(nm_path.exists(), "node_modules should exist in sandbox");
         assert!(
-            nm_path.symlink_metadata().unwrap().file_type().is_symlink(),
-            "node_modules should be a symlink"
+            nm_path.symlink_metadata().unwrap().file_type().is_dir(),
+            "node_modules must be a real directory, not a symlink"
+        );
+        assert!(
+            !nm_path.symlink_metadata().unwrap().file_type().is_symlink(),
+            "node_modules must NOT be a symlink"
         );
 
-        // The symlink should point to the original
-        let target = fs::read_link(&nm_path).unwrap();
-        assert_eq!(target, workspace.join("node_modules"));
+        // It must be empty — no content copied from source
+        let entries: Vec<_> = fs::read_dir(&nm_path).unwrap().collect();
+        assert!(entries.is_empty(), "artifact dir must be empty in sandbox");
+
+        drop(handle);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn writing_to_sandbox_artifact_dir_does_not_pollute_source() {
+        let workspace = create_test_workspace();
+        let config = default_config(&workspace);
+
+        let handle = safe_copy(&config).unwrap();
+
+        // Write a new file inside the sandbox's node_modules
+        let new_file = handle.path().join("node_modules/new_package.json");
+        fs::write(&new_file, b"{}").unwrap();
+
+        // Source node_modules must NOT contain the new file
+        assert!(
+            !workspace.join("node_modules/new_package.json").exists(),
+            "writing to sandbox artifact dir must not pollute source"
+        );
+
+        // Source still has its original content
+        assert!(workspace.join("node_modules/lodash/index.js").exists());
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
@@ -341,9 +390,7 @@ mod tests {
         let config = default_config(&workspace);
 
         let handle = safe_copy(&config).unwrap();
-        let git_path = handle.path().join(".git");
-
-        assert!(!git_path.exists(), ".git should not exist in sandbox");
+        assert!(!handle.path().join(".git").exists(), ".git should not exist in sandbox");
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
@@ -368,24 +415,62 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
     }
 
-    // ─── Hardlink driver: source isolation after unlink ─────────────
+    // ─── P2 FIX: symlinks are preserved ─────────────────────────────
 
+    #[cfg(unix)]
     #[test]
-    fn hardlink_write_does_not_pollute_source() {
+    fn safe_copy_preserves_symlinks() {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
+
+        let handle = safe_copy(&config).unwrap();
+        let link = handle.path().join("main_link.rs");
+
+        assert!(
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "symlink should be preserved in sandbox"
+        );
+        let target = fs::read_link(&link).unwrap();
+        assert_eq!(target, PathBuf::from("src/main.rs"));
+
+        drop(handle);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    // ─── P1-2: HardlinkTree explicit opt-in ─────────────────────────
+
+    #[test]
+    fn hardlink_requires_opt_in() {
+        let workspace = create_test_workspace();
+        let config = default_config(&workspace); // allow_hardlinks = false
+
+        let handle = crate::materialize(&config).unwrap();
+        // On macOS: should be ApfsClone or SafeCopy, never HardlinkTree
+        assert_ne!(
+            handle.driver(),
+            MaterializationDriver::HardlinkTree,
+            "HardlinkTree must not be used without opt-in"
+        );
+
+        drop(handle);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn hardlink_opt_in_write_with_unlink_is_safe() {
+        let workspace = create_test_workspace();
+        let config = hardlink_config(&workspace);
 
         let src_content = fs::read_to_string(workspace.join("src/main.rs")).unwrap();
 
         let handle = hardlink_tree(&config).unwrap();
+        assert_eq!(handle.driver(), MaterializationDriver::HardlinkTree);
 
-        // CRITICAL: For hardlinks, writing directly would modify the source.
-        // The correct pattern is: unlink (remove), then write new file.
+        // The correct protocol: unlink then write
         let sandbox_file = handle.path().join("src/main.rs");
-        fs::remove_file(&sandbox_file).unwrap(); // unlink the hardlink
+        fs::remove_file(&sandbox_file).unwrap();
         fs::write(&sandbox_file, b"fn main() { panic!(); }").unwrap();
 
-        // Source must be unchanged
         assert_eq!(
             fs::read_to_string(workspace.join("src/main.rs")).unwrap(),
             src_content,
@@ -396,7 +481,25 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
     }
 
-    // ─── Materialization top-level fallback ─────────────────────────
+    #[cfg(unix)]
+    #[test]
+    fn hardlink_preserves_symlinks() {
+        let workspace = create_test_workspace();
+        let config = hardlink_config(&workspace);
+
+        let handle = hardlink_tree(&config).unwrap();
+        let link = handle.path().join("main_link.rs");
+
+        assert!(
+            link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "hardlink driver should preserve symlinks"
+        );
+
+        drop(handle);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    // ─── Top-level materialize still works ──────────────────────────
 
     #[test]
     fn materialize_succeeds_via_fallback() {

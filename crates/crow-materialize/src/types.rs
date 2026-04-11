@@ -14,16 +14,26 @@ pub enum MaterializationDriver {
     ApfsClone,
     /// Linux Btrfs/ZFS: `FICLONE` ioctl — copy-on-write.
     CowClone,
-    /// Cross-platform: hardlink tree. Requires unlink-before-write
-    /// discipline to avoid polluting the source.
+    /// Cross-platform: hardlink tree.
+    ///
+    /// # Safety
+    ///
+    /// Hardlinks share inodes with the source. Any write to a hardlinked
+    /// file mutates the source unless the caller unlinks first. This
+    /// driver is **not included** in the default fallback chain and must
+    /// be explicitly opted into via `MaterializeConfig::allow_hardlinks`.
     HardlinkTree,
     /// Final fallback: full recursive copy. Always correct, never fast.
     SafeCopy,
 }
 
 impl MaterializationDriver {
-    /// Return the ranked list of drivers to attempt on this platform.
-    pub fn platform_preference() -> Vec<Self> {
+    /// Return the ranked list of *safe* drivers for this platform.
+    ///
+    /// `HardlinkTree` is **excluded** by default because it cannot
+    /// enforce write isolation without a copy-up layer. Pass
+    /// `allow_hardlinks = true` via config to include it.
+    pub fn platform_preference(allow_hardlinks: bool) -> Vec<Self> {
         let mut drivers = Vec::new();
 
         #[cfg(target_os = "macos")]
@@ -32,7 +42,10 @@ impl MaterializationDriver {
         #[cfg(target_os = "linux")]
         drivers.push(Self::CowClone);
 
-        drivers.push(Self::HardlinkTree);
+        if allow_hardlinks {
+            drivers.push(Self::HardlinkTree);
+        }
+
         drivers.push(Self::SafeCopy);
 
         drivers
@@ -60,10 +73,16 @@ pub struct MaterializeConfig {
     /// Source workspace root (absolute path).
     pub source: PathBuf,
     /// Directory names that are build artifacts (e.g. "node_modules", "target").
-    /// These will be symlinked, never copied.
+    /// These are created as **empty directories** in the sandbox so build
+    /// tools can regenerate them without writing through to the source.
+    /// A shared read-only cache strategy is planned but not yet safe.
     pub artifact_dirs: Vec<String>,
     /// Glob patterns to skip entirely (e.g. ".git", "*.swp").
     pub skip_patterns: Vec<String>,
+    /// If true, include HardlinkTree in the driver fallback chain.
+    /// Callers MUST use unlink-before-write discipline with hardlinked
+    /// sandboxes. Default: false.
+    pub allow_hardlinks: bool,
 }
 
 // ─── Sandbox Handle ─────────────────────────────────────────────────
@@ -158,12 +177,14 @@ impl From<std::io::Error> for MaterializeError {
 ///
 /// Tries drivers in platform preference order. The first driver that
 /// succeeds wins; if all fail, returns `AllDriversFailed`.
+///
+/// `HardlinkTree` is only attempted if `config.allow_hardlinks` is true.
 pub fn materialize(config: &MaterializeConfig) -> Result<SandboxHandle, MaterializeError> {
     if !config.source.is_dir() {
         return Err(MaterializeError::SourceNotFound(config.source.clone()));
     }
 
-    let drivers = MaterializationDriver::platform_preference();
+    let drivers = MaterializationDriver::platform_preference(config.allow_hardlinks);
     let mut last_error = String::new();
 
     for driver in &drivers {
@@ -171,7 +192,6 @@ pub fn materialize(config: &MaterializeConfig) -> Result<SandboxHandle, Material
             Ok(handle) => return Ok(handle),
             Err(e) => {
                 last_error = format!("{}: {}", driver, e);
-                // Continue to next driver
             }
         }
     }
@@ -189,23 +209,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn platform_preference_includes_safe_copy() {
-        let prefs = MaterializationDriver::platform_preference();
+    fn default_preference_excludes_hardlink() {
+        let prefs = MaterializationDriver::platform_preference(false);
+        assert!(!prefs.contains(&MaterializationDriver::HardlinkTree));
         assert!(prefs.contains(&MaterializationDriver::SafeCopy));
-        // SafeCopy is always last
         assert_eq!(prefs.last(), Some(&MaterializationDriver::SafeCopy));
     }
 
     #[test]
-    fn platform_preference_includes_hardlink() {
-        let prefs = MaterializationDriver::platform_preference();
+    fn opt_in_preference_includes_hardlink() {
+        let prefs = MaterializationDriver::platform_preference(true);
         assert!(prefs.contains(&MaterializationDriver::HardlinkTree));
+        // HardlinkTree should come before SafeCopy
+        let hl_pos = prefs.iter().position(|d| *d == MaterializationDriver::HardlinkTree).unwrap();
+        let sc_pos = prefs.iter().position(|d| *d == MaterializationDriver::SafeCopy).unwrap();
+        assert!(hl_pos < sc_pos);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_prefers_apfs_clone() {
-        let prefs = MaterializationDriver::platform_preference();
+        let prefs = MaterializationDriver::platform_preference(false);
         assert_eq!(prefs[0], MaterializationDriver::ApfsClone);
     }
 
@@ -215,6 +239,7 @@ mod tests {
             source: PathBuf::from("/nonexistent/path/that/does/not/exist"),
             artifact_dirs: vec![],
             skip_patterns: vec![],
+            allow_hardlinks: false,
         };
         let result = materialize(&config);
         assert!(result.is_err());
@@ -232,7 +257,6 @@ mod tests {
 
         {
             let _handle = SandboxHandle::new(tmp.clone(), MaterializationDriver::SafeCopy);
-            // handle drops here
         }
 
         assert!(!tmp.exists(), "sandbox should be cleaned up after drop");
@@ -247,8 +271,6 @@ mod tests {
         let path = handle.into_path();
 
         assert!(path.exists(), "path should still exist after into_path");
-
-        // Manual cleanup
         let _ = std::fs::remove_dir_all(&path);
     }
 }
