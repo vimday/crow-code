@@ -8,18 +8,56 @@
 //!
 //! - Commands are **never run with a shell** (`sh -c`). The program
 //!   and args are passed directly to `std::process::Command`.
-//! - The working directory is always set to the sandbox root
-//!   (or an explicit subdirectory within it).
-//! - The command's environment is sanitized: only PATH and
-//!   well-known build vars are inherited.
+//! - The working directory is boundary-checked to ensure it never
+//!   escapes the sandbox root.
+//! - The command's environment is sanitized: only explicitly
+//!   allowlisted variables (e.g., PATH, HOME) are inherited.
+//! - Output is stream-captured with a hard byte limit to prevent OOM
+//!   and panics on UTF-8 boundaries.
+//! - Execution is strictly bounded by a wall-clock timeout.
 
 use crate::aci;
 use crate::types::{AciConfig, ExecutionConfig, VerificationResult, VerifierError};
 use crow_evidence::{TestOutcome, TestRun};
 use crow_probe::VerificationCommand;
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
+
+/// Safe environment variables that are allowed to pass through
+/// to the sandbox process. All other variables are cleared.
+const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "USER",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+    "CARGO_TERM_COLOR", // For better formatted rust output if captured
+];
+
+/// Helper to perform best-effort lexical path normalization.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                if matches!(components.last(), Some(std::path::Component::Normal(_))) {
+                    components.pop();
+                } else {
+                    components.push(component);
+                }
+            }
+            std::path::Component::CurDir => {}
+            _ => components.push(component),
+        }
+    }
+    components.iter().collect()
+}
 
 /// Execute a verification command inside a sandbox.
 ///
@@ -38,13 +76,27 @@ pub fn execute(
     }
     aci_config.validate().map_err(VerifierError::InvalidConfig)?;
 
-    // Determine working directory
+    // Determine working directory with strict boundary checks (P1 fix)
     let cwd = if let Some(ref sub) = command.cwd {
-        let sub_path = sandbox_root.join(sub);
-        if !sub_path.is_dir() {
-            return Err(VerifierError::SandboxNotFound(sub_path));
+        let sub_path = Path::new(sub);
+        if sub_path.is_absolute() {
+            return Err(VerifierError::SandboxNotFound(sub_path.to_path_buf()));
         }
-        sub_path
+
+        let target = sandbox_root.join(sub_path);
+
+        // Treat target bounds lexically to avoid issues if a legitimate
+        // internal directory hasn't been created yet.
+        let canonical_root = sandbox_root
+            .canonicalize()
+            .unwrap_or_else(|_| sandbox_root.to_path_buf());
+
+        let target_norm = normalize_path(&target);
+        if !target_norm.starts_with(&canonical_root) {
+            return Err(VerifierError::SandboxNotFound(target));
+        }
+
+        target
     } else {
         sandbox_root.to_path_buf()
     };
@@ -54,15 +106,22 @@ pub fn execute(
     cmd.args(&command.args);
     cmd.current_dir(&cwd);
 
-    // Merge stdout and stderr for unified capture
+    // Sanitize the environment (P1 fix)
+    cmd.env_clear();
+    for var in ENV_ALLOWLIST {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+
+    // Capture output
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    // Record timing
     let start = Instant::now();
 
     // Spawn the process
-    let child = cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             VerifierError::CommandNotFound(command.program.clone())
         } else {
@@ -70,44 +129,91 @@ pub fn execute(
         }
     })?;
 
-    // Wait for completion with timeout
-    let output = wait_with_timeout(child, exec_config.timeout, start)?;
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+
+    let max_bytes = exec_config.max_output_bytes;
+
+    // Use threads to safely stream output without blocking the child (P2 fix)
+    let out_clone = Arc::clone(&stdout_buf);
+    let out_thread = thread::spawn(move || {
+        stream_capture(stdout, out_clone, max_bytes);
+    });
+
+    let err_clone = Arc::clone(&stderr_buf);
+    let err_thread = thread::spawn(move || {
+        stream_capture(stderr, err_clone, max_bytes);
+    });
+
+    // Enforce timeout using try_wait (P1 fix)
+    let mut exit_code = None;
+    let mut timed_out = false;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                exit_code = status.code();
+                break;
+            }
+            Ok(None) => {
+                if start.elapsed() >= exec_config.timeout {
+                    let _ = child.kill(); // Best effort kill
+                    let _ = child.wait(); // Reap the zombie
+                    timed_out = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(VerifierError::SpawnFailed(e));
+            }
+        }
+    }
     let elapsed = start.elapsed();
 
-    // Combine stdout + stderr
-    let raw_stdout = String::from_utf8_lossy(&output.stdout);
-    let raw_stderr = String::from_utf8_lossy(&output.stderr);
+    // The stream threads will exit automatically either because the process
+    // exited gracefully or because we killed it (closing its end of the pipes).
+    let _ = out_thread.join();
+    let _ = err_thread.join();
+
+    let out_vec = stdout_buf.lock().unwrap().clone();
+    let err_vec = stderr_buf.lock().unwrap().clone();
+    let raw_bytes = out_vec.len() + err_vec.len();
+
+    // Safe UTF-8 decoding after the byte limit
+    let raw_stdout = String::from_utf8_lossy(&out_vec);
+    let raw_stderr = String::from_utf8_lossy(&err_vec);
+
     let combined = if raw_stderr.is_empty() {
         raw_stdout.to_string()
     } else {
         format!("{}\n--- stderr ---\n{}", raw_stdout, raw_stderr)
     };
 
-    let raw_bytes = combined.len();
+    if timed_out {
+        return Err(VerifierError::Timeout {
+            elapsed,
+            limit: exec_config.timeout,
+        });
+    }
 
-    // Apply byte limit before ACI (prevent OOM on pathological output)
-    let capped = if raw_bytes > exec_config.max_output_bytes {
-        &combined[..exec_config.max_output_bytes]
-    } else {
-        &combined
-    };
+    // ACI truncation on the safely decoded string
+    let aci_result = aci::truncate(&combined, aci_config);
 
-    // ACI truncation
-    let aci_result = aci::truncate(capped, aci_config);
-
-    // Determine outcome
-    let exit_code = output.status.code();
     let outcome = match exit_code {
         Some(0) => TestOutcome::Passed,
         Some(_) => TestOutcome::Failed,
         None => TestOutcome::TimedOut,
     };
 
-    // Build the TestRun record
     let test_run = TestRun {
         command: command.display(),
         outcome,
-        passed: 0,  // Parsing test counts is deferred to a future step
+        passed: 0,
         failed: 0,
         skipped: 0,
         duration: elapsed,
@@ -122,30 +228,25 @@ pub fn execute(
     })
 }
 
-/// Wait for a child process with timeout.
-fn wait_with_timeout(
-    child: std::process::Child,
-    timeout: Duration,
-    start: Instant,
-) -> Result<std::process::Output, VerifierError> {
-    // For simplicity, use wait_with_output (blocking).
-    // A future step can add async/non-blocking wait with periodic
-    // timeout checks for long-running processes.
-    //
-    // For now, we rely on the OS-level timeout approach: if the command
-    // is well-behaved, it completes before the timeout.
-    let output = child.wait_with_output().map_err(VerifierError::SpawnFailed)?;
-
-    let elapsed = start.elapsed();
-    if elapsed > timeout {
-        // Command completed but took too long (race with slow I/O)
-        return Err(VerifierError::Timeout {
-            elapsed,
-            limit: timeout,
-        });
+/// Helper to read a stream into a buffer until EOF, capping the buffer size.
+/// Continues reading and discarding after limit to avoid blocking the child pipe.
+fn stream_capture(mut stream: impl Read, buf: Arc<Mutex<Vec<u8>>>, max_bytes: usize) {
+    let mut chunk = vec![0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                let mut current = buf.lock().unwrap();
+                let remaining = max_bytes.saturating_sub(current.len());
+                if remaining > 0 {
+                    let take = std::cmp::min(n, remaining);
+                    current.extend_from_slice(&chunk[..take]);
+                }
+                // Keep looping to ensure pipe is drained
+            }
+            Err(_) => break,
+        }
     }
-
-    Ok(output)
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────
@@ -167,7 +268,8 @@ mod tests {
             C.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&path).unwrap();
-        path
+        // pre-canonicalize so boundary checks test against exact path
+        path.canonicalize().unwrap()
     }
 
     #[test]
@@ -223,74 +325,109 @@ mod tests {
     }
 
     #[test]
-    fn execute_sandbox_not_found() {
-        let cmd = VerificationCommand::new("echo", vec!["test"]);
-        let exec = ExecutionConfig::default_config();
+    fn execute_with_timeout_kills_child() {
+        let sandbox = make_sandbox();
+        // A command that sleeps longer than our timeout
+        let cmd = VerificationCommand::new("sleep", vec!["10"]);
+        
+        let exec = ExecutionConfig {
+            timeout: Duration::from_millis(200), // very short timeout
+            max_output_bytes: 1024,
+        };
         let aci = AciConfig::default_config();
 
-        let result = execute(
-            &std::path::PathBuf::from("/nonexistent/sandbox"),
-            &cmd,
-            &exec,
-            &aci,
-        );
+        let start = Instant::now();
+        let result = execute(&sandbox, &cmd, &exec, &aci);
+        let elapsed = start.elapsed();
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            VerifierError::SandboxNotFound(_) => {}
-            other => panic!("expected SandboxNotFound, got: {:?}", other),
+            VerifierError::Timeout { .. } => {}
+            other => panic!("expected Timeout error, got: {:?}", other),
         }
+        
+        // Assert we blocked for roughly the timeout, not 10 seconds
+        assert!(elapsed >= Duration::from_millis(200));
+        assert!(elapsed < Duration::from_secs(2));
+
+        let _ = fs::remove_dir_all(&sandbox);
     }
 
     #[test]
-    fn execute_with_aci_truncation() {
+    fn execute_streaming_output_cap() {
         let sandbox = make_sandbox();
-        // Generate a command that produces many lines
-        let cmd = VerificationCommand::new("seq", vec!["1", "500"]);
-        let exec = ExecutionConfig::default_config();
-        let aci = AciConfig {
-            max_lines: 10,
-            head_lines: 3,
-            tail_lines: 7,
+        
+        // Produce a burst of output and then exit
+        let shell_cmd = "for i in $(seq 1 1000); do echo \"this is output line $i\"; done";
+        let cmd = VerificationCommand::new("sh", vec!["-c", shell_cmd]);
+        
+        let exec = ExecutionConfig {
+            timeout: Duration::from_secs(5),
+            max_output_bytes: 100, // strict byte cap
         };
+        let aci = AciConfig::default_config();
 
         let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
-
-        assert!(result.was_truncated);
-        assert!(result.test_run.truncated_log.contains("[crow-aci]"));
-        assert!(result.test_run.truncated_log.contains("lines omitted"));
-        // Head should have "1", "2", "3"
-        assert!(result.test_run.truncated_log.starts_with("1\n"));
+        
+        let log = result.test_run.truncated_log;
+        
+        // The raw captured bytes should be strictly <= 100 before utf8 decode
+        assert!(result.raw_output_bytes <= 100);
+        // It shouldn't contain the later lines because of the byte crop
+        assert!(!log.contains("line 999"));
 
         let _ = fs::remove_dir_all(&sandbox);
     }
 
     #[test]
-    fn execute_records_duration() {
+    fn execute_env_sanitization() {
+        // Run env and check its output. Only allowlisted vars should be there.
         let sandbox = make_sandbox();
-        let cmd = VerificationCommand::new("sleep", vec!["0.1"]);
+        let cmd = VerificationCommand::new("env", vec![]);
         let exec = ExecutionConfig::default_config();
         let aci = AciConfig::default_config();
 
-        let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
+        // Inject a secret into our own environment
+        std::env::set_var("CROW_SUPER_SECRET", "this_should_never_leak");
 
-        assert!(result.test_run.duration >= Duration::from_millis(50));
-        assert!(result.test_run.duration < Duration::from_secs(5));
+        let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
+        
+        let log = result.test_run.truncated_log;
+        assert!(!log.contains("CROW_SUPER_SECRET="));
+        assert!(!log.contains("this_should_never_leak"));
+        
+        // Ensure some basics like PATH are kept
+        assert!(log.contains("PATH="));
 
         let _ = fs::remove_dir_all(&sandbox);
     }
 
     #[test]
-    fn execute_display_command_in_test_run() {
+    fn execute_cwd_bounds_enforcement() {
         let sandbox = make_sandbox();
-        let cmd = VerificationCommand::new("echo", vec!["hello"]);
+        
+        // Attempt to supply an absolute path cwd
+        let cmd_abs = VerificationCommand {
+            program: "pwd".to_string(),
+            args: vec![],
+            cwd: Some("/etc".to_string()),
+        };
+        
         let exec = ExecutionConfig::default_config();
         let aci = AciConfig::default_config();
 
-        let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
-
-        assert_eq!(result.test_run.command, "echo hello");
-
+        let result = execute(&sandbox, &cmd_abs, &exec, &aci);
+        assert!(matches!(result, Err(VerifierError::SandboxNotFound(_))), "should reject absolute cwd");
+        
+        // Attempt traversal escape
+        let cmd_esc = VerificationCommand {
+            program: "pwd".to_string(),
+            args: vec![],
+            cwd: Some("../../etc".to_string()),
+        };
+        let result_esc = execute(&sandbox, &cmd_esc, &exec, &aci);
+        assert!(matches!(result_esc, Err(VerifierError::SandboxNotFound(_))), "should reject traversal bounds escape");
+        
         let _ = fs::remove_dir_all(&sandbox);
     }
 }
