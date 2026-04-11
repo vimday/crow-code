@@ -35,8 +35,12 @@ circular-dependency detection from `cargo check` on every commit. The cost
 (interface design overhead) is acceptable because the Currency crates have
 no inter-dependencies and higher-layer crates only depend downward.
 
-**Dependency rule:** crates may only depend on crates listed _above_ them
-in this document. Violations will be caught by `cargo check`.
+**Dependency rule (convention):** crates may only depend on crates listed
+_above_ them in this document. `cargo check` catches cyclic violations but
+does _not_ prevent an acyclic upward dependency (e.g., a Currency crate
+pulling in a Control crate). Until we add an explicit enforcement mechanism
+(planned: `cargo-deny` policy or `xtask lint-deps`), this rule is upheld by
+code review discipline.
 
 ### The Currencies (Data Primitives)
 - `crow-patch`: Fuzzy-matching, struct-based diff application, rename, and structural AST manipulations.

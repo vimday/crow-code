@@ -1,0 +1,280 @@
+//! Core data types for the patch contract.
+
+use std::path::PathBuf;
+
+// ─── Primitives ─────────────────────────────────────────────────────
+
+/// A workspace-relative path. Never an absolute OS path.
+/// Guarantees: no leading `/`, no `..` traversal, UTF-8 clean.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkspacePath(String);
+
+impl WorkspacePath {
+    /// Create a new workspace path, rejecting absolute or traversal paths.
+    pub fn new(raw: impl Into<String>) -> Result<Self, PathError> {
+        let s: String = raw.into();
+        if s.is_empty() {
+            return Err(PathError::Empty);
+        }
+        if s.starts_with('/') || s.starts_with('\\') {
+            return Err(PathError::Absolute);
+        }
+        if s.contains("..") {
+            return Err(PathError::Traversal);
+        }
+        Ok(Self(s))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert to a full OS path given a workspace root.
+    pub fn to_absolute(&self, root: &PathBuf) -> PathBuf {
+        root.join(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathError {
+    Empty,
+    Absolute,
+    Traversal,
+}
+
+impl std::fmt::Display for PathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathError::Empty => write!(f, "workspace path cannot be empty"),
+            PathError::Absolute => write!(f, "workspace path must be relative"),
+            PathError::Traversal => write!(f, "workspace path must not contain '..'"),
+        }
+    }
+}
+
+impl std::error::Error for PathError {}
+
+// ─── Snapshot & Confidence ──────────────────────────────────────────
+
+/// Opaque identifier for a workspace snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SnapshotId(pub String);
+
+/// Confidence level attached to an intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confidence {
+    High,
+    Medium,
+    Low,
+    None,
+}
+
+// ─── Preconditions ──────────────────────────────────────────────────
+
+/// State the file *must* be in before a patch can apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreconditionState {
+    /// SHA-256 hex digest of the file content at snapshot time.
+    pub content_hash: String,
+    /// Optional line-count anchor for sanity checking.
+    pub expected_line_count: Option<usize>,
+}
+
+// ─── Diff Hunks ─────────────────────────────────────────────────────
+
+/// A single contiguous change region within a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffHunk {
+    /// 1-based start line in the original file.
+    pub original_start: usize,
+    /// Lines to remove (empty = pure insertion).
+    pub remove_lines: Vec<String>,
+    /// Lines to insert (empty = pure deletion).
+    pub insert_lines: Vec<String>,
+}
+
+// ─── Edit Operations ────────────────────────────────────────────────
+
+/// Strategy for handling conflicts on rename/create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictStrategy {
+    /// Fail if the target already exists.
+    Fail,
+    /// Overwrite the target (requires explicit user intent).
+    Overwrite,
+}
+
+/// A single atomic filesystem mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditOp {
+    Modify {
+        path: WorkspacePath,
+        preconditions: PreconditionState,
+        hunks: Vec<DiffHunk>,
+    },
+    Create {
+        path: WorkspacePath,
+        content: String,
+    },
+    Rename {
+        from: WorkspacePath,
+        to: WorkspacePath,
+        on_conflict: ConflictStrategy,
+    },
+    Delete {
+        path: WorkspacePath,
+    },
+}
+
+// ─── Intent Plan ────────────────────────────────────────────────────
+
+/// The top-level container: a complete set of intended changes anchored
+/// to a specific workspace snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntentPlan {
+    /// The snapshot this plan was derived from. The materializer MUST
+    /// reject application if the current workspace state diverges.
+    pub base_snapshot_id: SnapshotId,
+    /// Human-readable explanation of *why* these changes are proposed.
+    pub rationale: String,
+    /// If true, the model is expressing uncertainty and asking to probe
+    /// further before committing.
+    pub is_partial: bool,
+    /// Model's self-assessed confidence.
+    pub confidence: Confidence,
+    /// The ordered list of atomic operations.
+    pub operations: Vec<EditOp>,
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- WorkspacePath validation ---
+
+    #[test]
+    fn valid_relative_path() {
+        let p = WorkspacePath::new("src/main.rs").unwrap();
+        assert_eq!(p.as_str(), "src/main.rs");
+    }
+
+    #[test]
+    fn rejects_absolute_path() {
+        assert_eq!(WorkspacePath::new("/etc/passwd"), Err(PathError::Absolute));
+    }
+
+    #[test]
+    fn rejects_traversal() {
+        assert_eq!(
+            WorkspacePath::new("src/../../etc/passwd"),
+            Err(PathError::Traversal)
+        );
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert_eq!(WorkspacePath::new(""), Err(PathError::Empty));
+    }
+
+    #[test]
+    fn to_absolute_joins_correctly() {
+        let root = PathBuf::from("/home/user/project");
+        let p = WorkspacePath::new("src/lib.rs").unwrap();
+        assert_eq!(p.to_absolute(&root), PathBuf::from("/home/user/project/src/lib.rs"));
+    }
+
+    // --- DiffHunk construction ---
+
+    #[test]
+    fn pure_insertion_hunk() {
+        let h = DiffHunk {
+            original_start: 10,
+            remove_lines: vec![],
+            insert_lines: vec!["// new comment".into()],
+        };
+        assert!(h.remove_lines.is_empty());
+        assert_eq!(h.insert_lines.len(), 1);
+    }
+
+    #[test]
+    fn pure_deletion_hunk() {
+        let h = DiffHunk {
+            original_start: 5,
+            remove_lines: vec!["old line".into()],
+            insert_lines: vec![],
+        };
+        assert!(h.insert_lines.is_empty());
+    }
+
+    // --- IntentPlan construction ---
+
+    #[test]
+    fn minimal_intent_plan() {
+        let plan = IntentPlan {
+            base_snapshot_id: SnapshotId("snap-001".into()),
+            rationale: "Fix typo in README".into(),
+            is_partial: false,
+            confidence: Confidence::High,
+            operations: vec![EditOp::Modify {
+                path: WorkspacePath::new("README.md").unwrap(),
+                preconditions: PreconditionState {
+                    content_hash: "abc123".into(),
+                    expected_line_count: Some(42),
+                },
+                hunks: vec![DiffHunk {
+                    original_start: 3,
+                    remove_lines: vec!["teh".into()],
+                    insert_lines: vec!["the".into()],
+                }],
+            }],
+        };
+        assert_eq!(plan.operations.len(), 1);
+        assert!(!plan.is_partial);
+    }
+
+    #[test]
+    fn partial_exploratory_plan() {
+        let plan = IntentPlan {
+            base_snapshot_id: SnapshotId("snap-002".into()),
+            rationale: "Not sure about auth refactor".into(),
+            is_partial: true,
+            confidence: Confidence::Low,
+            operations: vec![],
+        };
+        assert!(plan.is_partial);
+        assert_eq!(plan.confidence, Confidence::Low);
+        assert!(plan.operations.is_empty());
+    }
+
+    #[test]
+    fn multi_op_plan() {
+        let plan = IntentPlan {
+            base_snapshot_id: SnapshotId("snap-003".into()),
+            rationale: "Rename module and update imports".into(),
+            is_partial: false,
+            confidence: Confidence::Medium,
+            operations: vec![
+                EditOp::Rename {
+                    from: WorkspacePath::new("src/old.rs").unwrap(),
+                    to: WorkspacePath::new("src/new.rs").unwrap(),
+                    on_conflict: ConflictStrategy::Fail,
+                },
+                EditOp::Modify {
+                    path: WorkspacePath::new("src/lib.rs").unwrap(),
+                    preconditions: PreconditionState {
+                        content_hash: "def456".into(),
+                        expected_line_count: None,
+                    },
+                    hunks: vec![DiffHunk {
+                        original_start: 1,
+                        remove_lines: vec!["mod old;".into()],
+                        insert_lines: vec!["mod new;".into()],
+                    }],
+                },
+            ],
+        };
+        assert_eq!(plan.operations.len(), 2);
+    }
+}
