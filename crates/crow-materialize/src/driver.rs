@@ -118,22 +118,26 @@ fn recreate_symlink(
         ));
     }
 
-    // Resolve the relative target against the link's parent dir
+    // Resolve the relative target against the link's parent dir.
+    // Canonicalize link_parent first so that symlinked workspace roots
+    // don't cause false out-of-bounds rejections (P2 fix).
     let link_parent = src_path.parent().unwrap_or(workspace_root);
-    let resolved = link_parent.join(&target);
+    let canonical_parent = link_parent.canonicalize()
+        .unwrap_or_else(|_| link_parent.to_path_buf());
+    let resolved = canonical_parent.join(&target);
 
-    // Canonicalize to resolve ../ components, then check bounds
-    // If the target doesn't exist yet, we do a manual normalization
+    let canonical_root = workspace_root.canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
+
+    // Canonicalize to resolve ../ components, then check bounds.
+    // If the target doesn't exist yet, normalize both sides lexically
+    // to keep the comparison symmetric.
     let canonical = if resolved.exists() {
         resolved.canonicalize()
             .map_err(|e| format!("canonicalize {} failed: {}", resolved.display(), e))?
     } else {
-        // Target doesn't exist — do best-effort normalization
         normalize_path(&resolved)
     };
-
-    let canonical_root = workspace_root.canonicalize()
-        .unwrap_or_else(|_| workspace_root.to_path_buf());
 
     if !canonical.starts_with(&canonical_root) {
         return Err(format!(
