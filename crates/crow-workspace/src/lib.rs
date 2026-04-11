@@ -2,3 +2,5 @@
 //!
 //! Maintains the canonical event ledger for all workspace mutations.
 //! Supports checkpointing, compaction, and deterministic replay.
+
+pub mod applier;

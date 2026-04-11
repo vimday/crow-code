@@ -9,3 +9,8 @@ name = "crow"
 path = "src/main.rs"
 
 [dependencies]
+crow-materialize = { version = "0.1.0", path = "../crow-materialize" }
+crow-patch = { version = "0.1.0", path = "../crow-patch" }
+crow-probe = { version = "0.1.0", path = "../crow-probe" }
+crow-verifier = { version = "0.1.0", path = "../crow-verifier" }
+crow-workspace = { version = "0.1.0", path = "../crow-workspace" }

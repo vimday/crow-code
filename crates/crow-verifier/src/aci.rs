@@ -22,10 +22,25 @@ const OMISSION_MARKER: &str = "\n... [crow-aci] {} lines omitted ...\n";
 /// Otherwise, keep `head_lines` from the top and `tail_lines` from
 /// the bottom, with an omission marker in between.
 pub fn truncate(raw: &str, config: &AciConfig) -> AciResult {
-    let lines: Vec<&str> = raw.lines().collect();
-    let total = lines.len();
+    let mut head = Vec::with_capacity(config.head_lines);
+    let mut tail = std::collections::VecDeque::with_capacity(config.tail_lines);
+    let mut total = 0;
 
-    if total <= config.max_lines {
+    for line in raw.lines() {
+        total += 1;
+        if head.len() < config.head_lines {
+            head.push(line);
+        } else {
+            if tail.len() == config.tail_lines && config.tail_lines > 0 {
+                tail.pop_front();
+            }
+            if config.tail_lines > 0 {
+                tail.push_back(line);
+            }
+        }
+    }
+
+    if total <= config.max_lines || config.head_lines + config.tail_lines >= total {
         return AciResult {
             output: raw.to_string(),
             original_lines: total,
@@ -35,51 +50,33 @@ pub fn truncate(raw: &str, config: &AciConfig) -> AciResult {
         };
     }
 
-    let head_end = config.head_lines;
-    let tail_start = total.saturating_sub(config.tail_lines);
-
-    // Guard against overlap (shouldn't happen with valid config)
-    let (head_end, tail_start) = if head_end >= tail_start {
-        // Config allows more lines than we have — just keep everything
-        return AciResult {
-            output: raw.to_string(),
-            original_lines: total,
-            retained_lines: total,
-            omitted_lines: 0,
-            was_truncated: false,
-        };
-    } else {
-        (head_end, tail_start)
-    };
-
-    let omitted = tail_start - head_end;
+    let omitted = total - config.head_lines - config.tail_lines;
     let marker = OMISSION_MARKER.replace("{}", &omitted.to_string());
 
-    let mut result = String::with_capacity(raw.len() / 2);
+    let mut result = String::with_capacity(
+        head.iter().map(|s| s.len() + 1).sum::<usize>()
+            + marker.len()
+            + tail.iter().map(|s| s.len() + 1).sum::<usize>(),
+    );
 
-    // Head
-    for line in &lines[..head_end] {
+    for line in head {
         result.push_str(line);
         result.push('\n');
     }
 
-    // Omission marker
     result.push_str(&marker);
 
-    // Tail
-    for (i, line) in lines[tail_start..].iter().enumerate() {
+    for (i, line) in tail.iter().enumerate() {
         result.push_str(line);
-        if i < lines[tail_start..].len() - 1 {
+        if i < tail.len() - 1 {
             result.push('\n');
         }
     }
 
-    let retained = head_end + (total - tail_start);
-
     AciResult {
         output: result,
         original_lines: total,
-        retained_lines: retained,
+        retained_lines: config.head_lines + config.tail_lines,
         omitted_lines: omitted,
         was_truncated: true,
     }

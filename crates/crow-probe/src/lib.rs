@@ -5,6 +5,8 @@
 //! gitignore/filter rules. Outputs candidates with confidence, not
 //! single answers.
 
+pub mod scanner;
 pub mod types;
 
+pub use scanner::*;
 pub use types::*;

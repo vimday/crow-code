@@ -351,8 +351,10 @@ fn hardlink_copy_tree(
                 hardlink_copy_tree(&src_path, &dst_path, config, skip_set)?;
             }
         } else if file_type.is_file() {
-            fs::hard_link(&src_path, &dst_path)
-                .map_err(|e| format!("hardlink {} failed: {}", name, e))?;
+            if let Err(e) = fs::hard_link(&src_path, &dst_path) {
+                fs::copy(&src_path, &dst_path)
+                    .map_err(|ce| format!("hardlink fallback failed: {} (orig: {})", ce, e))?;
+            }
         }
     }
     Ok(())
