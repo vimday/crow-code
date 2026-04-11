@@ -5,7 +5,7 @@ This file is the persistent project context for AI assistants working on this co
 ## Project Identity
 
 - **Name:** Crow Code
-- **Organization:** Corvus Foundry
+- **Organization:** CorvusMatrix
 - **Repo:** `crow-code`
 - **Language:** Rust (pure workspace, no Go/Python/JS)
 - **Binary:** `crow` (built from `crates/crow-cli`)

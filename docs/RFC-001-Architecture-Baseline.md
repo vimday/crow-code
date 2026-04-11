@@ -97,10 +97,10 @@ pub struct EvidenceMatrix {
 ### 6.3 Workspace Probe
 ```rust
 pub struct ProjectProfile {
-    pub primary_lang: LanguageTier,
-    pub workspace_root: WorkspacePath,
+    pub primary_lang: DetectedLanguage,
+    pub workspace_root: PathBuf,               // Absolute OS path, not WorkspacePath
     pub verification_candidates: Vec<VerificationCandidate>,
-    pub ignore_spec: FilterSpec,               // Extracted ignore rules instead of 3rd party objects
+    pub ignore_spec: FilterSpec,
 }
 ```
 

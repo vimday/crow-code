@@ -116,14 +116,30 @@ impl EvidenceMatrix {
         }
     }
 
-    /// True if all compile runs passed and no severe risk flags exist.
+    /// True only when evidence is *sufficient and positive*.
+    ///
+    /// Requirements (all must hold):
+    /// - At least one compile run, all passed
+    /// - Lints clean
+    /// - Test scope is known (not `None`)
+    /// - Intelligence confidence is at least `Medium`
+    /// - A known baseline exists for comparison
+    /// - No severe risk flags (Security, LargeDeletion)
     pub fn is_all_green(&self) -> bool {
-        let all_passed = !self.compile_runs.is_empty()
+        let has_runs = !self.compile_runs.is_empty();
+        let all_passed = has_runs
             && self.compile_runs.iter().all(|r| r.outcome == TestOutcome::Passed);
+        let scope_known = self.test_scope.is_some();
+        let sufficient_intel = self.intelligence_confidence >= Confidence::Medium;
         let no_severe_risks = !self.risk_flags.iter().any(|f| {
             matches!(f.kind, RiskKind::Security | RiskKind::LargeDeletion)
         });
-        all_passed && self.lints_clean && no_severe_risks
+        all_passed
+            && self.lints_clean
+            && scope_known
+            && sufficient_intel
+            && self.has_known_baseline
+            && no_severe_risks
     }
 
     /// Count total failures across all runs.
@@ -245,5 +261,47 @@ mod tests {
         };
         // ConfigChange is not a severe risk, should still be green
         assert!(m.is_all_green());
+    }
+
+    #[test]
+    fn not_green_with_selective_no_baseline() {
+        // Passes all runs, but selective scope + no baseline = insufficient
+        let m = EvidenceMatrix {
+            compile_runs: vec![make_passing_run()],
+            test_scope: Some(TestScope::Selective),
+            has_known_baseline: false,
+            lints_clean: true,
+            intelligence_confidence: Confidence::High,
+            risk_flags: vec![],
+        };
+        assert!(!m.is_all_green());
+    }
+
+    #[test]
+    fn not_green_with_no_intelligence() {
+        // Everything else green, but intelligence confidence is None
+        let m = EvidenceMatrix {
+            compile_runs: vec![make_passing_run()],
+            test_scope: Some(TestScope::Full),
+            has_known_baseline: true,
+            lints_clean: true,
+            intelligence_confidence: Confidence::None,
+            risk_flags: vec![],
+        };
+        assert!(!m.is_all_green());
+    }
+
+    #[test]
+    fn not_green_with_no_scope() {
+        // Passed run but scope is unknown
+        let m = EvidenceMatrix {
+            compile_runs: vec![make_passing_run()],
+            test_scope: None,
+            has_known_baseline: true,
+            lints_clean: true,
+            intelligence_confidence: Confidence::High,
+            risk_flags: vec![],
+        };
+        assert!(!m.is_all_green());
     }
 }

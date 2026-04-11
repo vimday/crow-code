@@ -71,13 +71,26 @@ pub enum Confidence {
 
 // ─── Preconditions ──────────────────────────────────────────────────
 
-/// State the file *must* be in before a patch can apply.
+/// State the file *must* be in before a Modify patch can apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreconditionState {
     /// SHA-256 hex digest of the file content at snapshot time.
     pub content_hash: String,
     /// Optional line-count anchor for sanity checking.
     pub expected_line_count: Option<usize>,
+}
+
+/// Lightweight precondition for non-Modify ops.
+/// Every EditOp variant carries one of these so the apply layer can
+/// reject drift before deleting or overwriting user work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilePrecondition {
+    /// The path must NOT exist (used by Create to prevent silent overwrites).
+    MustNotExist,
+    /// The path must exist with this content hash (used by Delete, Rename source).
+    MustExistWithHash(String),
+    /// The path must exist (hash unchecked — weaker, for best-effort cases).
+    MustExist,
 }
 
 // ─── Diff Hunks ─────────────────────────────────────────────────────
@@ -105,6 +118,8 @@ pub enum ConflictStrategy {
 }
 
 /// A single atomic filesystem mutation.
+/// Every variant carries preconditions so the apply layer can reject
+/// drift before touching user files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditOp {
     Modify {
@@ -115,14 +130,22 @@ pub enum EditOp {
     Create {
         path: WorkspacePath,
         content: String,
+        /// Must be `MustNotExist` unless `on_conflict: Overwrite`.
+        precondition: FilePrecondition,
     },
     Rename {
         from: WorkspacePath,
         to: WorkspacePath,
         on_conflict: ConflictStrategy,
+        /// Asserts the source file matches the snapshot.
+        source_precondition: FilePrecondition,
+        /// Asserts the destination state (typically `MustNotExist`).
+        dest_precondition: FilePrecondition,
     },
     Delete {
         path: WorkspacePath,
+        /// Asserts the file matches the snapshot before deleting.
+        precondition: FilePrecondition,
     },
 }
 
@@ -260,6 +283,8 @@ mod tests {
                     from: WorkspacePath::new("src/old.rs").unwrap(),
                     to: WorkspacePath::new("src/new.rs").unwrap(),
                     on_conflict: ConflictStrategy::Fail,
+                    source_precondition: FilePrecondition::MustExistWithHash("aaa".into()),
+                    dest_precondition: FilePrecondition::MustNotExist,
                 },
                 EditOp::Modify {
                     path: WorkspacePath::new("src/lib.rs").unwrap(),
@@ -276,5 +301,39 @@ mod tests {
             ],
         };
         assert_eq!(plan.operations.len(), 2);
+    }
+
+    // --- FilePrecondition coverage ---
+
+    #[test]
+    fn create_with_must_not_exist() {
+        let op = EditOp::Create {
+            path: WorkspacePath::new("new_file.rs").unwrap(),
+            content: "fn main() {}".into(),
+            precondition: FilePrecondition::MustNotExist,
+        };
+        match &op {
+            EditOp::Create { precondition, .. } => {
+                assert_eq!(*precondition, FilePrecondition::MustNotExist);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn delete_with_hash_precondition() {
+        let op = EditOp::Delete {
+            path: WorkspacePath::new("obsolete.rs").unwrap(),
+            precondition: FilePrecondition::MustExistWithHash("deadbeef".into()),
+        };
+        match &op {
+            EditOp::Delete { precondition, .. } => {
+                assert_eq!(
+                    *precondition,
+                    FilePrecondition::MustExistWithHash("deadbeef".into())
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 }

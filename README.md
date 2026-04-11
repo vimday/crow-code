@@ -2,16 +2,16 @@
 
 > The smartest bird in the codebase.
 
-**Crow Code** is a next-generation AI coding agent built by [Corvus Foundry](https://github.com/corvus-foundry). It is designed from the ground up with evidence-driven verification, zero-pollution guarantees, and time-travel safety — no legacy, no compromises.
+**Crow Code** is a next-generation AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). It is being designed from the ground up with evidence-driven verification, zero-pollution guarantees, and time-travel safety — no legacy, no compromises.
 
 ## Why Crow?
 
 Crows are the most intelligent birds on the planet: they use tools, plan ahead, and solve multi-step problems. This project embodies that philosophy:
 
-- **Evidence over confidence scores.** Every proposed change carries a structured proof bundle — compile results, test run history, lint status, and semantic risk flags — not an opaque 0–100 number.
+- **Evidence over confidence scores.** Every proposed change will carry a structured proof bundle — compile results, test run history, lint status, and semantic risk flags — not an opaque 0–100 number.
 - **Patches are first-class citizens.** The LLM never touches your files directly. All mutations are buffered as atomic `IntentPlan`s anchored to workspace snapshots.
-- **Zero pollution guarantee.** If anything fails, your workspace stays exactly as it was. Period.
-- **Time-travel built in.** Event-sourced state machine with O(1) snapshots. Undo, redo, branch — at the infrastructure level.
+- **Zero pollution guarantee (design goal).** If anything fails, your workspace stays exactly as it was. This is the invariant the runtime is being built to enforce.
+- **Time-travel (planned).** Event-sourced state machine with O(1) snapshots. Undo, redo, branch — at the infrastructure level.
 
 ## Architecture
 

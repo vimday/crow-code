@@ -38,11 +38,41 @@ pub enum ProbeConfidence {
     Validated,
 }
 
+/// A structured command representation that avoids shell-parsing ambiguity.
+/// This is the cross-crate contract consumed by `crow-verifier` and `crow-replay`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerificationCommand {
+    /// The program to execute (e.g. "cargo", "npm", "python").
+    pub program: String,
+    /// Arguments (e.g. ["test", "--workspace"]).
+    pub args: Vec<String>,
+    /// Optional working directory override (relative to workspace root).
+    pub cwd: Option<String>,
+}
+
+impl VerificationCommand {
+    /// Convenience constructor for simple program + args.
+    pub fn new(program: impl Into<String>, args: Vec<&str>) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(String::from).collect(),
+            cwd: None,
+        }
+    }
+
+    /// Format as a human-readable command string (for display only, not execution).
+    pub fn display(&self) -> String {
+        let mut parts = vec![self.program.clone()];
+        parts.extend(self.args.iter().cloned());
+        parts.join(" ")
+    }
+}
+
 /// A candidate verification command discovered by the probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationCandidate {
-    /// The command to run (e.g. "cargo test", "npm test").
-    pub command: String,
+    /// The structured command to run.
+    pub command: VerificationCommand,
     /// What kind of verification this provides.
     pub kind: VerificationKind,
     /// How confident we are this command is correct.
@@ -124,19 +154,19 @@ mod tests {
             workspace_root: PathBuf::from("/home/user/crow-code"),
             verification_candidates: vec![
                 VerificationCandidate {
-                    command: "cargo test".into(),
+                    command: VerificationCommand::new("cargo", vec!["test"]),
                     kind: VerificationKind::Test,
                     confidence: ProbeConfidence::ManifestBacked,
                     evidence_source: "Cargo.toml".into(),
                 },
                 VerificationCandidate {
-                    command: "cargo build".into(),
+                    command: VerificationCommand::new("cargo", vec!["build"]),
                     kind: VerificationKind::Build,
                     confidence: ProbeConfidence::ManifestBacked,
                     evidence_source: "Cargo.toml".into(),
                 },
                 VerificationCandidate {
-                    command: "cargo clippy".into(),
+                    command: VerificationCommand::new("cargo", vec!["clippy"]),
                     kind: VerificationKind::Lint,
                     confidence: ProbeConfidence::Inferred,
                     evidence_source: "Cargo.toml (inferred)".into(),
@@ -149,7 +179,7 @@ mod tests {
         };
         assert_eq!(profile.primary_lang.tier, LanguageTier::Tier1);
         assert_eq!(profile.verification_candidates.len(), 3);
-        assert_eq!(profile.ignore_spec.artifact_dirs, vec!["target"]);
+        assert_eq!(profile.verification_candidates[0].command.display(), "cargo test");
     }
 
     #[test]
@@ -161,7 +191,7 @@ mod tests {
             },
             workspace_root: PathBuf::from("/home/user/web-app"),
             verification_candidates: vec![VerificationCandidate {
-                command: "npm test".into(),
+                command: VerificationCommand::new("npm", vec!["test"]),
                 kind: VerificationKind::Test,
                 confidence: ProbeConfidence::ManifestBacked,
                 evidence_source: "package.json scripts.test".into(),
@@ -186,13 +216,13 @@ mod tests {
     fn multiple_candidates_sorted_by_confidence() {
         let mut candidates = vec![
             VerificationCandidate {
-                command: "make test".into(),
+                command: VerificationCommand::new("make", vec!["test"]),
                 kind: VerificationKind::Test,
                 confidence: ProbeConfidence::Inferred,
                 evidence_source: "Makefile".into(),
             },
             VerificationCandidate {
-                command: "cargo test".into(),
+                command: VerificationCommand::new("cargo", vec!["test"]),
                 kind: VerificationKind::Test,
                 confidence: ProbeConfidence::Validated,
                 evidence_source: "Cargo.toml".into(),
@@ -201,5 +231,16 @@ mod tests {
         candidates.sort_by(|a, b| b.confidence.cmp(&a.confidence));
         assert_eq!(candidates[0].confidence, ProbeConfidence::Validated);
         assert_eq!(candidates[1].confidence, ProbeConfidence::Inferred);
+    }
+
+    #[test]
+    fn command_with_cwd_override() {
+        let cmd = VerificationCommand {
+            program: "python".into(),
+            args: vec!["-m".into(), "pytest".into()],
+            cwd: Some("tests/".into()),
+        };
+        assert_eq!(cmd.display(), "python -m pytest");
+        assert_eq!(cmd.cwd, Some("tests/".into()));
     }
 }
