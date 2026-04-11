@@ -1,5 +1,7 @@
 # 🦅 Crow Code
 
+![Corvus Matrix Logo](./assets/logo.png)
+
 > The smartest bird in the codebase.
 
 **Crow Code** is a next-generation AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). It is being designed from the ground up with evidence-driven verification, zero-pollution guarantees, and time-travel safety — no legacy, no compromises.
