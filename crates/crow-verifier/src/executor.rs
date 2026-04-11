@@ -89,14 +89,17 @@ pub fn execute(
 
         let target = sandbox_root.join(sub_path);
 
-        // Treat target bounds lexically to avoid issues if a legitimate
-        // internal directory hasn't been created yet.
         let canonical_root = sandbox_root
             .canonicalize()
             .unwrap_or_else(|_| sandbox_root.to_path_buf());
 
-        let target_norm = normalize_path(&target);
-        if !target_norm.starts_with(&canonical_root) {
+        let canonical_target = if target.exists() {
+            target.canonicalize().map_err(|e| VerifierError::CommandNotFound(format!("cwd canonicalize failed: {}", e)))?
+        } else {
+            normalize_path(&target)
+        };
+
+        if !canonical_target.starts_with(&canonical_root) {
             return Err(VerifierError::SandboxNotFound(target));
         }
 
@@ -166,7 +169,6 @@ pub fn execute(
 
     // Enforce timeout using try_wait (P1 fix)
     let mut exit_code = None;
-    let mut timed_out = false;
 
     loop {
         match child.try_wait() {
@@ -178,7 +180,6 @@ pub fn execute(
                 if start.elapsed() >= exec_config.timeout {
                     kill_process_tree(&mut child);
                     let _ = child.wait(); // Reap the zombie
-                    timed_out = true;
                     break;
                 }
                 thread::sleep(Duration::from_millis(50));
@@ -209,13 +210,6 @@ pub fn execute(
     } else {
         format!("{}\n--- stderr ---\n{}", raw_stdout, raw_stderr)
     };
-
-    if timed_out {
-        return Err(VerifierError::Timeout {
-            elapsed,
-            limit: exec_config.timeout,
-        });
-    }
 
     // ACI truncation on the safely decoded string
     let aci_result = aci::truncate(&combined, aci_config);
@@ -395,14 +389,10 @@ mod tests {
         let aci = AciConfig::default_config();
 
         let start = Instant::now();
-        let result = execute(&sandbox, &cmd, &exec, &aci);
+        let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
         let elapsed = start.elapsed();
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            VerifierError::Timeout { .. } => {}
-            other => panic!("expected Timeout error, got: {:?}", other),
-        }
+        assert_eq!(result.test_run.outcome, TestOutcome::TimedOut);
         
         // Assert we blocked for roughly the timeout, not 10 seconds
         assert!(elapsed >= Duration::from_millis(200));

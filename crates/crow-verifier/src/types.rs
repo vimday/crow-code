@@ -103,11 +103,6 @@ pub enum VerifierError {
     CommandNotFound(String),
     /// Failed to spawn the child process.
     SpawnFailed(std::io::Error),
-    /// Command exceeded the timeout and was killed.
-    Timeout {
-        elapsed: Duration,
-        limit: Duration,
-    },
     /// ACI configuration is invalid.
     InvalidConfig(String),
 }
@@ -118,9 +113,6 @@ impl fmt::Display for VerifierError {
             Self::SandboxNotFound(p) => write!(f, "sandbox not found: {}", p.display()),
             Self::CommandNotFound(cmd) => write!(f, "command not found: {}", cmd),
             Self::SpawnFailed(e) => write!(f, "spawn failed: {}", e),
-            Self::Timeout { elapsed, limit } => {
-                write!(f, "timeout after {:?} (limit: {:?})", elapsed, limit)
-            }
             Self::InvalidConfig(msg) => write!(f, "invalid config: {}", msg),
         }
     }
@@ -170,11 +162,5 @@ mod tests {
     fn verifier_error_display() {
         let err = VerifierError::CommandNotFound("rustc".into());
         assert_eq!(format!("{}", err), "command not found: rustc");
-
-        let err = VerifierError::Timeout {
-            elapsed: Duration::from_secs(301),
-            limit: Duration::from_secs(300),
-        };
-        assert!(format!("{}", err).contains("timeout"));
     }
 }
