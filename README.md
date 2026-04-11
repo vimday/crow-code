@@ -26,7 +26,7 @@ Crows are the most intelligent birds on the planet: they use tools, plan ahead, 
 │  crow-verifier  (Workspace Exec + ACI Truncation)│  L2: Crucible
 ├──────────────────────────────────────────────────┤
 │  crow-workspace        crow-materialize          │  L1: Runtime
-│  (Event Log + Snapshots) (OS Sandbox / CoW)      │
+│  (Event Log + Snapshots) (Workspace Copy / CoW)  │
 ├──────────────────────────────────────────────────┤
 │  crow-patch    crow-evidence    crow-probe       │  L0: Currencies
 │  (Patch Contract) (Evidence Matrix) (Recon Radar)│
@@ -56,8 +56,8 @@ cargo run -p crow-cli
 |------|-------------|--------|
 | 1 | Workspace genesis (10 crates) | ✅ |
 | 2 | Core data contracts (23 tests) | ✅ |
-| 3 | OS-level physical materialization | 🔲 |
-| 4 | ACI log truncation & bounded exec | 🔲 |
+| 3 | OS-level physical materialization | ✅ |
+| 4 | ACI log truncation & bounded exec | ✅ |
 | 5 | Project probe heuristics | 🔲 |
 
 ## Crate Overview
@@ -68,7 +68,7 @@ cargo run -p crow-cli
 | `crow-evidence` | L0 | Multidimensional verification: `EvidenceMatrix`, `TestRun`, `RiskFlag` |
 | `crow-probe` | L0 | Repository radar: `ProjectProfile`, `VerificationCandidate` |
 | `crow-workspace` | L1 | Event-sourcing log and snapshot state machine |
-| `crow-materialize` | L1 | OS-level CoW/symlink sandbox creation |
+| `crow-materialize` | L1 | OS-level CoW/symlink workspace isolation |
 | `crow-verifier` | L2 | Workspace-isolated command execution, log truncation |
 | `crow-intel` | L3 | Tree-sitter outlines, LSP bridge |
 | `crow-brain` | L4 | Intent compiler, budget governor, MCTS |
