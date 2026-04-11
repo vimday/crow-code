@@ -18,6 +18,7 @@ Crow-Code is an intelligent coding agent architecture designed with extreme defe
 - We do **not** promise to auto-discover all correct build/test hooks (user overrides or heuristics apply).
 - We do **not** guarantee 100% auto-apply rates; safety outweighs automation.
 - We do **not** guarantee optimal filesystem isolation setups (e.g., `clonefile`) on day 1 for all OSs, falling back to safe copies if necessary.
+- We do **not** implement full OS-level process sandboxing (e.g., `bwrap`, `nsjail`, macOS Seatbelt) for Sprint 0. Current execution isolation is constrained strictly to bounding the physical workspace directory, environment variables, time, and bytes. Deep network and system read protections are deferred.
 
 ## 4. System Invariants
 - **No Direct Disk Writes:** The LLM cannot directly modify the user's workspace. All changes are buffered as Intent Plans.
@@ -49,8 +50,8 @@ code review discipline.
 
 ### The Crucible & Runtime
 - `crow-workspace`: Event-sourcing log and VFS snapshot state machine.
-- `crow-materialize`: OS-level isolation (CoW / symlink fallback) to clone environments safely.
-- `crow-verifier`: The sandbox orchestrator that truncates standard outputs (ACI Log Pruning) cleanly.
+- `crow-materialize`: OS-level physical copy isolation (CoW / symlink fallback) to clone environments safely.
+- `crow-verifier`: Workspace-isolated command executor that truncates standard outputs (ACI Log Pruning) cleanly.
 
 ### Intelligence & Control
 - `crow-intel`: Tree-sitter powered codebase intelligence ensuring language-aware validations.
@@ -121,6 +122,6 @@ before moving on.
 
 - **Step 1: Workspace Genesis** — Skeleton crates, `cargo check` green. ✅
 - **Step 2: Core Data Contracts** — Implement types in the three Currency crates (`crow-patch`, `crow-evidence`, `crow-probe`). Verified by unit tests.
-- **Step 3: Materialization Sandbox** — Implement OS-level cloning in `crow-materialize`. Verified by benchmark: clone project with `node_modules` < 100ms.
-- **Step 4: ACI Log Truncation** — Implement truncation in `crow-verifier`. Verified by feeding 100K-line logs and asserting output ≤ 200 lines.
+- **Step 3: Materialization Sandbox** — Implement physical working tree cloning in `crow-materialize`. Verified by benchmark: clone project with `node_modules` < 100ms.
+- **Step 4: ACI Log Truncation** — Implement isolated execution constraint pipelines in `crow-verifier`. Verified by feeding 100K-line logs and asserting output ≤ 200 lines.
 - **Step 5: Project Probe** — Implement detection heuristics in `crow-probe`. Verified by pointing at `crow-code` itself and getting `cargo test` as a candidate.

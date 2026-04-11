@@ -30,7 +30,7 @@ Layer 1 — Runtime
   crow-materialize OS-level sandbox materialization (CoW / symlink)
 
 Layer 2 — Crucible
-  crow-verifier    Sandbox command execution & ACI log truncation
+  crow-verifier    Workspace-isolated command execution & ACI log truncation
 
 Layer 3 — Intelligence
   crow-intel       Tree-sitter outlines, LSP bridge, language-tier confidence
@@ -85,6 +85,6 @@ cargo build -p crow-cli
 
 - **Step 1** ✅ Workspace genesis — 10 crates, `cargo check` green.
 - **Step 2** ✅ Core data contracts — `crow-patch` (12 tests), `crow-evidence` (10 tests), `crow-probe` (7 tests).
-- **Step 3** ✅ `crow-materialize` — OS-level sandbox (20 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
-- **Step 4** 🔄 `crow-verifier` — ACI log truncation + sandbox execution (20 tests). Direct exec (no shell), head+tail truncation, VerificationResult → EvidenceMatrix.
+- **Step 3** ✅ `crow-materialize` — OS-level physical materialization (20 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
+- **Step 4** ✅ `crow-verifier` — Workspace-isolated execution + ACI log truncation (20 tests). Direct exec (no shell), head+tail truncation, VerificationResult → EvidenceMatrix.
 - **Step 5** 🔲 `crow-probe` — Detection heuristics implementation.

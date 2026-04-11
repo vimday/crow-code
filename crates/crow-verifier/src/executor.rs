@@ -1,6 +1,6 @@
-//! Sandbox command executor.
+//! Workspace isolated command executor.
 //!
-//! Runs a `VerificationCommand` inside a sandbox directory, captures
+//! Runs a `VerificationCommand` inside a designated workspace directory, captures
 //! stdout+stderr, applies ACI truncation, and returns a structured
 //! `VerificationResult`.
 //!
@@ -15,6 +15,10 @@
 //! - Output is stream-captured with a hard byte limit to prevent OOM
 //!   and panics on UTF-8 boundaries.
 //! - Execution is strictly bounded by a wall-clock timeout.
+//! 
+//! **Note on Security:** This module enforces limits around workspace mutation
+//! and resource exhaustion, but does NOT employ OS-level virtualization.
+//! Malicious code or aggressive network routines are outside its scope.
 
 use crate::aci;
 use crate::types::{AciConfig, ExecutionConfig, VerificationResult, VerifierError};
@@ -63,9 +67,9 @@ fn normalize_path(path: &Path) -> PathBuf {
     components.iter().collect()
 }
 
-/// Execute a verification command inside a sandbox.
+/// Execute a verification command inside an isolated workspace context.
 ///
-/// The command is run with the sandbox root as the working directory.
+/// The command is run with the provided root as the working directory.
 /// Output is captured, truncated via ACI, and returned as a
 /// `VerificationResult` that can be fed into `EvidenceMatrix`.
 pub fn execute(
