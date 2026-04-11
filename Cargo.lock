@@ -40,6 +40,10 @@ version = "0.1.0"
 [[package]]
 name = "crow-verifier"
 version = "0.1.0"
+dependencies = [
+ "crow-evidence",
+ "crow-probe",
+]
 
 [[package]]
 name = "crow-workspace"

@@ -5,3 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+crow-evidence = { path = "../crow-evidence" }
+crow-probe = { path = "../crow-probe" }
