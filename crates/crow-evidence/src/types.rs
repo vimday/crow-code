@@ -128,12 +128,16 @@ impl EvidenceMatrix {
     pub fn is_all_green(&self) -> bool {
         let has_runs = !self.compile_runs.is_empty();
         let all_passed = has_runs
-            && self.compile_runs.iter().all(|r| r.outcome == TestOutcome::Passed);
+            && self
+                .compile_runs
+                .iter()
+                .all(|r| r.outcome == TestOutcome::Passed);
         let scope_known = self.test_scope.is_some();
         let sufficient_intel = self.intelligence_confidence >= Confidence::Medium;
-        let no_severe_risks = !self.risk_flags.iter().any(|f| {
-            matches!(f.kind, RiskKind::Security | RiskKind::LargeDeletion)
-        });
+        let no_severe_risks = !self
+            .risk_flags
+            .iter()
+            .any(|f| matches!(f.kind, RiskKind::Security | RiskKind::LargeDeletion));
         all_passed
             && self.lints_clean
             && scope_known

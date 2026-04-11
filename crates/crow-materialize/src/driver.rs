@@ -11,7 +11,7 @@
 //! - Source symlinks that resolve within the workspace are preserved.
 //!   Absolute or out-of-bounds symlinks are rejected.
 
-use crate::types::{MaterializeConfig, MaterializationDriver, SandboxHandle};
+use crate::types::{MaterializationDriver, MaterializeConfig, SandboxHandle};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -49,9 +49,11 @@ impl SandboxGuard {
             .unwrap_or(0);
         let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("crow_vfs_{}_{}", id, seq));
-        fs::create_dir_all(&path)
-            .map_err(|e| format!("failed to create sandbox dir: {}", e))?;
-        Ok(Self { path, disarmed: false })
+        fs::create_dir_all(&path).map_err(|e| format!("failed to create sandbox dir: {}", e))?;
+        Ok(Self {
+            path,
+            disarmed: false,
+        })
     }
 
     fn path(&self) -> &Path {
@@ -80,15 +82,22 @@ fn is_artifact_dir(name: &str, config: &MaterializeConfig) -> bool {
     config.artifact_dirs.iter().any(|a| a == name)
 }
 
-/// Check if an entry name matches any skip pattern.
-/// Currently exact basename match only. Glob semantics are not yet
-/// implemented — the field is named `skip_patterns` but behaves as
-/// exact name matches until a glob engine is added.
-fn should_skip(name: &str, config: &MaterializeConfig) -> bool {
-    config.skip_patterns.iter().any(|p| {
+fn build_skip_set(config: &MaterializeConfig) -> Result<globset::GlobSet, String> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for p in &config.skip_patterns {
         let pattern = p.trim_end_matches('/');
-        name == pattern
-    })
+        let glob = globset::Glob::new(pattern)
+            .map_err(|e| format!("invalid glob pattern '{}': {}", pattern, e))?;
+        builder.add(glob);
+    }
+    builder
+        .build()
+        .map_err(|e| format!("failed to build globset: {}", e))
+}
+
+/// Check if an entry name matches any skip pattern.
+fn should_skip(name: &str, skip_set: &globset::GlobSet) -> bool {
+    skip_set.is_match(name)
 }
 
 /// Validate and re-create a symlink in the sandbox.
@@ -100,12 +109,7 @@ fn should_skip(name: &str, config: &MaterializeConfig) -> bool {
 ///   in the source tree. If the resolved path escapes the workspace root,
 ///   the link is rejected.
 /// - Only symlinks that stay within the workspace boundary are recreated.
-#[cfg(unix)]
-fn recreate_symlink(
-    src_path: &Path,
-    dst_path: &Path,
-    workspace_root: &Path,
-) -> Result<(), String> {
+fn recreate_symlink(src_path: &Path, dst_path: &Path, workspace_root: &Path) -> Result<(), String> {
     let target = fs::read_link(src_path)
         .map_err(|e| format!("readlink {} failed: {}", src_path.display(), e))?;
 
@@ -122,18 +126,21 @@ fn recreate_symlink(
     // Canonicalize link_parent first so that symlinked workspace roots
     // don't cause false out-of-bounds rejections (P2 fix).
     let link_parent = src_path.parent().unwrap_or(workspace_root);
-    let canonical_parent = link_parent.canonicalize()
+    let canonical_parent = link_parent
+        .canonicalize()
         .unwrap_or_else(|_| link_parent.to_path_buf());
     let resolved = canonical_parent.join(&target);
 
-    let canonical_root = workspace_root.canonicalize()
+    let canonical_root = workspace_root
+        .canonicalize()
         .unwrap_or_else(|_| workspace_root.to_path_buf());
 
     // Canonicalize to resolve ../ components, then check bounds.
     // If the target doesn't exist yet, normalize both sides lexically
     // to keep the comparison symmetric.
     let canonical = if resolved.exists() {
-        resolved.canonicalize()
+        resolved
+            .canonicalize()
             .map_err(|e| format!("canonicalize {} failed: {}", resolved.display(), e))?
     } else {
         normalize_path(&resolved)
@@ -150,18 +157,26 @@ fn recreate_symlink(
     }
 
     // Safe to recreate: target stays within workspace boundary
-    std::os::unix::fs::symlink(&target, dst_path)
-        .map_err(|e| format!("symlink {} failed: {}", dst_path.display(), e))?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, dst_path)
+            .map_err(|e| format!("symlink {} failed: {}", dst_path.display(), e))?;
+    }
+    #[cfg(windows)]
+    {
+        if src_path.is_dir() {
+            std::os::windows::fs::symlink_dir(&target, dst_path)
+                .map_err(|e| format!("symlink_dir {} failed: {}", dst_path.display(), e))?;
+        } else {
+            std::os::windows::fs::symlink_file(&target, dst_path)
+                .map_err(|e| format!("symlink_file {} failed: {}", dst_path.display(), e))?;
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err("symlink preservation not yet supported on this platform".into());
+    }
     Ok(())
-}
-
-#[cfg(not(unix))]
-fn recreate_symlink(
-    _src_path: &Path,
-    _dst_path: &Path,
-    _workspace_root: &Path,
-) -> Result<(), String> {
-    Err("symlink preservation not yet supported on this platform".into())
 }
 
 /// Best-effort path normalization without filesystem access.
@@ -188,8 +203,9 @@ fn normalize_path(path: &Path) -> PathBuf {
 // ─── SafeCopy Driver ────────────────────────────────────────────────
 
 fn safe_copy(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
+    let skip_set = build_skip_set(config)?;
     let guard = SandboxGuard::new()?;
-    safe_copy_tree(&config.source, guard.path(), config)?;
+    safe_copy_tree(&config.source, guard.path(), config, &skip_set)?;
     Ok(guard.into_handle(MaterializationDriver::SafeCopy))
 }
 
@@ -197,9 +213,10 @@ fn safe_copy_tree(
     source: &Path,
     dest: &Path,
     config: &MaterializeConfig,
+    skip_set: &globset::GlobSet,
 ) -> Result<(), String> {
-    let entries = fs::read_dir(source)
-        .map_err(|e| format!("failed to read {}: {}", source.display(), e))?;
+    let entries =
+        fs::read_dir(source).map_err(|e| format!("failed to read {}: {}", source.display(), e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry error: {}", e))?;
@@ -208,7 +225,7 @@ fn safe_copy_tree(
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
 
-        if should_skip(&name, config) {
+        if should_skip(&name, skip_set) {
             continue;
         }
 
@@ -225,11 +242,10 @@ fn safe_copy_tree(
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
-                safe_copy_tree(&src_path, &dst_path, config)?;
+                safe_copy_tree(&src_path, &dst_path, config, skip_set)?;
             }
         } else if file_type.is_file() {
-            fs::copy(&src_path, &dst_path)
-                .map_err(|e| format!("copy {} failed: {}", name, e))?;
+            fs::copy(&src_path, &dst_path).map_err(|e| format!("copy {} failed: {}", name, e))?;
         }
     }
     Ok(())
@@ -239,8 +255,9 @@ fn safe_copy_tree(
 
 #[cfg(target_os = "macos")]
 fn apfs_clone(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
+    let skip_set = build_skip_set(config)?;
     let guard = SandboxGuard::new()?;
-    apfs_clone_tree(&config.source, guard.path(), config)?;
+    apfs_clone_tree(&config.source, guard.path(), config, &skip_set)?;
     Ok(guard.into_handle(MaterializationDriver::ApfsClone))
 }
 
@@ -249,9 +266,9 @@ fn apfs_clone_tree(
     source: &Path,
     dest: &Path,
     config: &MaterializeConfig,
+    skip_set: &globset::GlobSet,
 ) -> Result<(), String> {
-    let entries = fs::read_dir(source)
-        .map_err(|e| format!("read_dir: {}", e))?;
+    let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {}", e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry: {}", e))?;
@@ -260,7 +277,7 @@ fn apfs_clone_tree(
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
 
-        if should_skip(&name, config) {
+        if should_skip(&name, skip_set) {
             continue;
         }
 
@@ -270,24 +287,19 @@ fn apfs_clone_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                fs::create_dir_all(&dst_path)
-                    .map_err(|e| format!("mkdir: {}", e))?;
+                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
             } else {
-                fs::create_dir_all(&dst_path)
-                    .map_err(|e| format!("mkdir: {}", e))?;
-                apfs_clone_tree(&src_path, &dst_path, config)?;
+                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
+                apfs_clone_tree(&src_path, &dst_path, config, skip_set)?;
             }
         } else if file_type.is_file() {
             let src_c = std::ffi::CString::new(src_path.to_string_lossy().as_bytes())
                 .map_err(|_| "invalid path for clonefile")?;
             let dst_c = std::ffi::CString::new(dst_path.to_string_lossy().as_bytes())
                 .map_err(|_| "invalid path for clonefile")?;
-            let ret = unsafe {
-                libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0)
-            };
+            let ret = unsafe { libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0) };
             if ret != 0 {
-                fs::copy(&src_path, &dst_path)
-                    .map_err(|e| format!("copy fallback: {}", e))?;
+                fs::copy(&src_path, &dst_path).map_err(|e| format!("copy fallback: {}", e))?;
             }
         }
     }
@@ -302,8 +314,9 @@ fn apfs_clone(_config: &MaterializeConfig) -> Result<SandboxHandle, String> {
 // ─── Hardlink Tree Driver ───────────────────────────────────────────
 
 fn hardlink_tree(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
+    let skip_set = build_skip_set(config)?;
     let guard = SandboxGuard::new()?;
-    hardlink_copy_tree(&config.source, guard.path(), config)?;
+    hardlink_copy_tree(&config.source, guard.path(), config, &skip_set)?;
     Ok(guard.into_handle(MaterializationDriver::HardlinkTree))
 }
 
@@ -311,9 +324,9 @@ fn hardlink_copy_tree(
     source: &Path,
     dest: &Path,
     config: &MaterializeConfig,
+    skip_set: &globset::GlobSet,
 ) -> Result<(), String> {
-    let entries = fs::read_dir(source)
-        .map_err(|e| format!("read_dir: {}", e))?;
+    let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {}", e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry: {}", e))?;
@@ -322,7 +335,7 @@ fn hardlink_copy_tree(
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
 
-        if should_skip(&name, config) {
+        if should_skip(&name, skip_set) {
             continue;
         }
 
@@ -332,12 +345,10 @@ fn hardlink_copy_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                fs::create_dir_all(&dst_path)
-                    .map_err(|e| format!("mkdir: {}", e))?;
+                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
             } else {
-                fs::create_dir_all(&dst_path)
-                    .map_err(|e| format!("mkdir: {}", e))?;
-                hardlink_copy_tree(&src_path, &dst_path, config)?;
+                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
+                hardlink_copy_tree(&src_path, &dst_path, config, skip_set)?;
             }
         } else if file_type.is_file() {
             fs::hard_link(&src_path, &dst_path)
@@ -367,18 +378,15 @@ mod tests {
     use std::io::Write;
 
     fn create_test_workspace() -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "crow_test_src_{}",
-            {
-                use std::sync::atomic::{AtomicU64, Ordering};
-                static C: AtomicU64 = AtomicU64::new(0);
-                let id = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos();
-                format!("{}_{}", id, C.fetch_add(1, Ordering::Relaxed))
-            }
-        ));
+        let root = std::env::temp_dir().join(format!("crow_test_src_{}", {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static C: AtomicU64 = AtomicU64::new(0);
+            let id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            format!("{}_{}", id, C.fetch_add(1, Ordering::Relaxed))
+        }));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("node_modules/lodash")).unwrap();
         fs::create_dir_all(root.join(".git/objects")).unwrap();
@@ -426,9 +434,16 @@ mod tests {
         let src_main = fs::read_to_string(workspace.join("src/main.rs")).unwrap();
 
         let handle = safe_copy(&config).unwrap();
-        fs::write(handle.path().join("src/main.rs"), b"fn main() { panic!(); }").unwrap();
+        fs::write(
+            handle.path().join("src/main.rs"),
+            b"fn main() { panic!(); }",
+        )
+        .unwrap();
 
-        assert_eq!(fs::read_to_string(workspace.join("src/main.rs")).unwrap(), src_main);
+        assert_eq!(
+            fs::read_to_string(workspace.join("src/main.rs")).unwrap(),
+            src_main
+        );
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
@@ -540,11 +555,7 @@ mod tests {
     fn out_of_bounds_relative_symlink_is_rejected() {
         let workspace = create_test_workspace();
         // Create a relative symlink that escapes the workspace via ../
-        std::os::unix::fs::symlink(
-            "../../etc/passwd",
-            workspace.join("escape_rel"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink("../../etc/passwd", workspace.join("escape_rel")).unwrap();
 
         let config = default_config(&workspace);
         let result = safe_copy(&config);
@@ -571,7 +582,10 @@ mod tests {
         // Drop without into_handle — simulates a failed materialization
         drop(guard);
 
-        assert!(!path.exists(), "SandboxGuard must clean up on drop without into_handle");
+        assert!(
+            !path.exists(),
+            "SandboxGuard must clean up on drop without into_handle"
+        );
     }
 
     #[test]
@@ -583,7 +597,10 @@ mod tests {
         assert!(path.exists(), "dir should survive into_handle");
 
         drop(handle);
-        assert!(!path.exists(), "dir should be cleaned by SandboxHandle drop");
+        assert!(
+            !path.exists(),
+            "dir should be cleaned by SandboxHandle drop"
+        );
     }
 
     // ─── HardlinkTree opt-in ────────────────────────────────────────
@@ -607,7 +624,10 @@ mod tests {
         fs::remove_file(&sandbox_file).unwrap();
         fs::write(&sandbox_file, b"fn main() { panic!(); }").unwrap();
 
-        assert_eq!(fs::read_to_string(workspace.join("src/main.rs")).unwrap(), src_content);
+        assert_eq!(
+            fs::read_to_string(workspace.join("src/main.rs")).unwrap(),
+            src_content
+        );
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);

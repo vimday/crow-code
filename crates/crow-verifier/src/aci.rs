@@ -107,7 +107,10 @@ mod tests {
     use super::*;
 
     fn numbered_output(n: usize) -> String {
-        (1..=n).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n")
+        (1..=n)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]

@@ -12,9 +12,9 @@
 //!
 //! It does NOT depend on `crow-materialize` — it receives an isolated
 //! path, keeping the coupling minimal.
-//! 
+//!
 //! # Limitations
-//! 
+//!
 //! This crate does NOT provide true OS-level security sandboxing (such as
 //! `bwrap`, `nsjail`, or macOS `seatbelt`). It guarantees that operations
 //! will not pollute the parent workspace and boundaries do not trivially

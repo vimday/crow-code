@@ -15,7 +15,7 @@
 //! - Output is stream-captured with a hard byte limit to prevent OOM
 //!   and panics on UTF-8 boundaries.
 //! - Execution is strictly bounded by a wall-clock timeout.
-//! 
+//!
 //! **Note on Security:** This module enforces limits around workspace mutation
 //! and resource exhaustion, but does NOT employ OS-level virtualization.
 //! Malicious code or aggressive network routines are outside its scope.
@@ -82,7 +82,9 @@ pub fn execute(
     if !sandbox_root.is_dir() {
         return Err(VerifierError::SandboxNotFound(sandbox_root.to_path_buf()));
     }
-    aci_config.validate().map_err(VerifierError::InvalidConfig)?;
+    aci_config
+        .validate()
+        .map_err(VerifierError::InvalidConfig)?;
 
     // Determine working directory with strict boundary checks (P1 fix)
     let cwd = if let Some(ref sub) = command.cwd {
@@ -98,7 +100,9 @@ pub fn execute(
             .unwrap_or_else(|_| sandbox_root.to_path_buf());
 
         let canonical_target = if target.exists() {
-            target.canonicalize().map_err(|e| VerifierError::CommandNotFound(format!("cwd canonicalize failed: {}", e)))?
+            target.canonicalize().map_err(|e| {
+                VerifierError::CommandNotFound(format!("cwd canonicalize failed: {}", e))
+            })?
         } else {
             normalize_path(&target)
         };
@@ -148,23 +152,23 @@ pub fn execute(
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
-    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+    let unified_buf = Arc::new(Mutex::new(Vec::new()));
 
     let max_bytes = exec_config.max_output_bytes;
     let remaining = Arc::new(AtomicUsize::new(max_bytes));
     let emitted = Arc::new(AtomicUsize::new(0));
 
     // Use threads to safely stream output without blocking the child (P2 fix)
-    // Both streams share a single atomic byte budget (P1 fix).
-    let out_clone = Arc::clone(&stdout_buf);
+    // Both streams share a single atomic byte budget (P1 fix), and a
+    // single unified buffer to faithfully interleave stream output (P2 fix).
+    let out_clone = Arc::clone(&unified_buf);
     let rem_clone1 = Arc::clone(&remaining);
     let em_clone1 = Arc::clone(&emitted);
     let out_thread = thread::spawn(move || {
         stream_capture(stdout, out_clone, rem_clone1, em_clone1);
     });
 
-    let err_clone = Arc::clone(&stderr_buf);
+    let err_clone = Arc::clone(&unified_buf);
     let rem_clone2 = Arc::clone(&remaining);
     let em_clone2 = Arc::clone(&emitted);
     let err_thread = thread::spawn(move || {
@@ -201,19 +205,11 @@ pub fn execute(
     let _ = out_thread.join();
     let _ = err_thread.join();
 
-    let out_vec = stdout_buf.lock().unwrap().clone();
-    let err_vec = stderr_buf.lock().unwrap().clone();
-    let raw_bytes = out_vec.len() + err_vec.len();
+    let unified_vec = unified_buf.lock().unwrap().clone();
+    let raw_bytes = unified_vec.len();
 
     // Safe UTF-8 decoding after the byte limit
-    let raw_stdout = String::from_utf8_lossy(&out_vec);
-    let raw_stderr = String::from_utf8_lossy(&err_vec);
-
-    let combined = if raw_stderr.is_empty() {
-        raw_stdout.to_string()
-    } else {
-        format!("{}\n--- stderr ---\n{}", raw_stdout, raw_stderr)
-    };
+    let combined = String::from_utf8_lossy(&unified_vec).to_string();
 
     // ACI truncation on the safely decoded string
     let aci_result = aci::truncate(&combined, aci_config);
@@ -224,8 +220,14 @@ pub fn execute(
         None => TestOutcome::TimedOut,
     };
 
+    let display_cmd = if let Some(ref c) = command.cwd {
+        format!("[cwd={}] {}", c, command.display())
+    } else {
+        command.display()
+    };
+
     let test_run = TestRun {
-        command: command.display(),
+        command: display_cmd,
         outcome,
         passed: 0,
         failed: 0,
@@ -385,7 +387,7 @@ mod tests {
         let sandbox = make_sandbox();
         // A command that sleeps longer than our timeout
         let cmd = VerificationCommand::new("sleep", vec!["10"]);
-        
+
         let exec = ExecutionConfig {
             timeout: Duration::from_millis(200), // very short timeout
             max_output_bytes: 1024,
@@ -397,7 +399,7 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert_eq!(result.test_run.outcome, TestOutcome::TimedOut);
-        
+
         // Assert we blocked for roughly the timeout, not 10 seconds
         assert!(elapsed >= Duration::from_millis(200));
         assert!(elapsed < Duration::from_secs(2));
@@ -408,11 +410,11 @@ mod tests {
     #[test]
     fn execute_streaming_output_cap() {
         let sandbox = make_sandbox();
-        
+
         // Produce a burst of output and then exit
         let shell_cmd = "for i in $(seq 1 1000); do echo \"this is output line $i\"; done";
         let cmd = VerificationCommand::new("sh", vec!["-c", shell_cmd]);
-        
+
         let exec = ExecutionConfig {
             timeout: Duration::from_secs(5),
             max_output_bytes: 100, // strict byte cap
@@ -420,9 +422,9 @@ mod tests {
         let aci = AciConfig::default_config();
 
         let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
-        
+
         let log = result.test_run.truncated_log;
-        
+
         // The raw captured bytes should be strictly <= 100 before utf8 decode
         assert!(result.captured_output_bytes <= 100);
         assert!(result.emitted_byte_count > 100);
@@ -444,11 +446,11 @@ mod tests {
         std::env::set_var("CROW_SUPER_SECRET", "this_should_never_leak");
 
         let result = execute(&sandbox, &cmd, &exec, &aci).unwrap();
-        
+
         let log = result.test_run.truncated_log;
         assert!(!log.contains("CROW_SUPER_SECRET="));
         assert!(!log.contains("this_should_never_leak"));
-        
+
         // Ensure some basics like PATH are kept
         assert!(log.contains("PATH="));
 
@@ -458,20 +460,23 @@ mod tests {
     #[test]
     fn execute_cwd_bounds_enforcement() {
         let sandbox = make_sandbox();
-        
+
         // Attempt to supply an absolute path cwd
         let cmd_abs = VerificationCommand {
             program: "pwd".to_string(),
             args: vec![],
             cwd: Some("/etc".to_string()),
         };
-        
+
         let exec = ExecutionConfig::default_config();
         let aci = AciConfig::default_config();
 
         let result = execute(&sandbox, &cmd_abs, &exec, &aci);
-        assert!(matches!(result, Err(VerifierError::SandboxNotFound(_))), "should reject absolute cwd");
-        
+        assert!(
+            matches!(result, Err(VerifierError::SandboxNotFound(_))),
+            "should reject absolute cwd"
+        );
+
         // Attempt traversal escape
         let cmd_esc = VerificationCommand {
             program: "pwd".to_string(),
@@ -479,8 +484,11 @@ mod tests {
             cwd: Some("../../etc".to_string()),
         };
         let result_esc = execute(&sandbox, &cmd_esc, &exec, &aci);
-        assert!(matches!(result_esc, Err(VerifierError::SandboxNotFound(_))), "should reject traversal bounds escape");
-        
+        assert!(
+            matches!(result_esc, Err(VerifierError::SandboxNotFound(_))),
+            "should reject traversal bounds escape"
+        );
+
         let _ = fs::remove_dir_all(&sandbox);
     }
 }

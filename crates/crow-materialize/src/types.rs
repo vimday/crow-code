@@ -157,7 +157,10 @@ impl fmt::Display for MaterializeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SourceNotFound(p) => write!(f, "source not found: {}", p.display()),
-            Self::AllDriversFailed { attempted, last_error } => {
+            Self::AllDriversFailed {
+                attempted,
+                last_error,
+            } => {
                 write!(f, "all drivers failed ({:?}): {}", attempted, last_error)
             }
             Self::Io(e) => write!(f, "IO error: {}", e),
@@ -223,8 +226,14 @@ mod tests {
         let prefs = MaterializationDriver::platform_preference(true);
         assert!(prefs.contains(&MaterializationDriver::HardlinkTree));
         // HardlinkTree should come before SafeCopy
-        let hl_pos = prefs.iter().position(|d| *d == MaterializationDriver::HardlinkTree).unwrap();
-        let sc_pos = prefs.iter().position(|d| *d == MaterializationDriver::SafeCopy).unwrap();
+        let hl_pos = prefs
+            .iter()
+            .position(|d| *d == MaterializationDriver::HardlinkTree)
+            .unwrap();
+        let sc_pos = prefs
+            .iter()
+            .position(|d| *d == MaterializationDriver::SafeCopy)
+            .unwrap();
         assert!(hl_pos < sc_pos);
     }
 

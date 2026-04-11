@@ -179,7 +179,10 @@ mod tests {
         };
         assert_eq!(profile.primary_lang.tier, LanguageTier::Tier1);
         assert_eq!(profile.verification_candidates.len(), 3);
-        assert_eq!(profile.verification_candidates[0].command.display(), "cargo test");
+        assert_eq!(
+            profile.verification_candidates[0].command.display(),
+            "cargo test"
+        );
     }
 
     #[test]

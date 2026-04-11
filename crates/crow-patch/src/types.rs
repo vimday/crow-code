@@ -13,15 +13,26 @@ impl WorkspacePath {
     /// Create a new workspace path, rejecting absolute or traversal paths.
     pub fn new(raw: impl Into<String>) -> Result<Self, PathError> {
         let s: String = raw.into();
-        if s.is_empty() {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
             return Err(PathError::Empty);
         }
-        if s.starts_with('/') || s.starts_with('\\') {
-            return Err(PathError::Absolute);
+
+        let path = std::path::Path::new(trimmed);
+        for comp in path.components() {
+            match comp {
+                std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                    return Err(PathError::Absolute);
+                }
+                std::path::Component::ParentDir => {
+                    return Err(PathError::Traversal);
+                }
+                std::path::Component::CurDir | std::path::Component::Normal(_) => {
+                    // Safe components
+                }
+            }
         }
-        if s.contains("..") {
-            return Err(PathError::Traversal);
-        }
+
         Ok(Self(s))
     }
 
@@ -205,7 +216,10 @@ mod tests {
     fn to_absolute_joins_correctly() {
         let root = PathBuf::from("/home/user/project");
         let p = WorkspacePath::new("src/lib.rs").unwrap();
-        assert_eq!(p.to_absolute(&root), PathBuf::from("/home/user/project/src/lib.rs"));
+        assert_eq!(
+            p.to_absolute(&root),
+            PathBuf::from("/home/user/project/src/lib.rs")
+        );
     }
 
     // --- DiffHunk construction ---
