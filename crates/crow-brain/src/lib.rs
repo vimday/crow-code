@@ -3,3 +3,6 @@
 //! Single-track Proposal Engine for simple tasks; multi-track MCTS
 //! search policy for high-risk refactors. All governed by a strict
 //! compute/time budget.
+
+pub mod compiler;
+pub use compiler::{CompilerError, IntentCompiler, LlmClient};
