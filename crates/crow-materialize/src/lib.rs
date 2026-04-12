@@ -6,10 +6,10 @@
 //! # Invariants
 //!
 //! - The source workspace is **never modified**. This is the hardest rule.
-//! - Build artifact directories are handled with a hybrid strategy:
-//!   read-only dependency dirs (`node_modules`, `.venv`) are **symlinked**
-//!   back to source; write-heavy build output dirs (`target`) are created
-//!   as **empty directories** and redirected via env vars (e.g. `CARGO_TARGET_DIR`).
+//! - Build artifact directories (`node_modules`, `target/`, `.venv`) are
+//!   created as **empty directories** — never copied or symlinked from source.
+//!   Dependency resolution is delegated to the verifier via environment variable
+//!   injection (e.g. `CARGO_TARGET_DIR`, `NODE_PATH`).
 //! - Cleanup is automatic on [`SandboxHandle`] drop.
 
 pub mod driver;

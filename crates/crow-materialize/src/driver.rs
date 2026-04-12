@@ -82,36 +82,14 @@ fn is_artifact_dir(name: &str, config: &MaterializeConfig) -> bool {
     config.artifact_dirs.iter().any(|a| a == name)
 }
 
-/// Dirs whose contents are read-only at runtime and can be safely
-/// symlinked into the sandbox (e.g. node_modules, .venv).
-/// Write-heavy build output dirs (target) must NOT be symlinked
-/// because concurrent builds would conflict on lock files.
-const SYMLINKABLE_ARTIFACT_DIRS: &[&str] = &["node_modules", ".venv", "vendor"];
-
-/// Handle an artifact directory: symlink it if it's read-only deps,
-/// otherwise create an empty dir (build outputs like `target/` are
-/// redirected via CARGO_TARGET_DIR in the verifier).
-fn handle_artifact_dir(src_path: &Path, dst_path: &Path, name: &str) -> Result<(), String> {
-    if SYMLINKABLE_ARTIFACT_DIRS.iter().any(|d| *d == name) && src_path.exists() {
-        // Symlink back to source so package managers find installed deps
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(src_path, dst_path)
-                .map_err(|e| format!("symlink {} failed: {}", dst_path.display(), e))?;
-        }
-        #[cfg(not(unix))]
-        {
-            // Fallback: create empty dir on non-Unix
-            fs::create_dir_all(dst_path)
-                .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
-        }
-    } else {
-        // Build output dir — create empty; the verifier injects
-        // CARGO_TARGET_DIR to redirect compilation elsewhere.
-        fs::create_dir_all(dst_path)
-            .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
-    }
-    Ok(())
+/// Create an artifact directory as an empty placeholder in the sandbox.
+///
+/// Artifact dirs are **never** copied or symlinked from source because
+/// any write-through would violate the "source workspace is never modified"
+/// invariant. Dependency resolution is delegated to the verifier layer
+/// via environment variable injection (e.g. `CARGO_TARGET_DIR`, `NODE_PATH`).
+fn create_empty_artifact_dir(dst_path: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst_path).map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))
 }
 
 fn build_skip_set(config: &MaterializeConfig) -> Result<globset::GlobSet, String> {
@@ -280,7 +258,7 @@ fn safe_copy_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                handle_artifact_dir(&src_path, &dst_path, &name)?;
+                create_empty_artifact_dir(&dst_path)?;
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
@@ -337,7 +315,7 @@ fn apfs_clone_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                handle_artifact_dir(&src_path, &dst_path, &name)?;
+                create_empty_artifact_dir(&dst_path)?;
             } else {
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
                 apfs_clone_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
@@ -403,7 +381,7 @@ fn hardlink_copy_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                handle_artifact_dir(&src_path, &dst_path, &name)?;
+                create_empty_artifact_dir(&dst_path)?;
             } else {
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
                 hardlink_copy_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
@@ -510,46 +488,60 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
     }
 
-    // ─── artifact_dirs handling ──────────────────────────────────────
+    // ─── artifact_dirs are always empty, never symlinked ─────────────
 
     #[test]
-    fn node_modules_is_symlinked_back_to_source() {
+    fn artifact_dirs_are_empty_not_symlinked() {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
 
         let handle = safe_copy(&config).unwrap();
-        let nm_path = handle.path().join("node_modules");
 
-        assert!(nm_path.exists());
-        // node_modules is in SYMLINKABLE_ARTIFACT_DIRS — should be a symlink
-        assert!(
-            nm_path.symlink_metadata().unwrap().file_type().is_symlink(),
-            "node_modules should be symlinked, not copied"
-        );
-        // Should contain the same content as source
-        assert!(nm_path.join("lodash/index.js").exists());
+        for dir_name in &["node_modules", "target"] {
+            let dir_path = handle.path().join(dir_name);
+            assert!(dir_path.exists(), "{} should exist", dir_name);
+            assert!(
+                !dir_path
+                    .symlink_metadata()
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "{} must NOT be a symlink",
+                dir_name
+            );
+            let entries: Vec<_> = fs::read_dir(&dir_path).unwrap().collect();
+            assert!(
+                entries.is_empty(),
+                "{} must be empty in sandbox, found {} entries",
+                dir_name,
+                entries.len()
+            );
+        }
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
     }
 
     #[test]
-    fn target_dir_is_empty_not_symlinked() {
+    fn writing_to_sandbox_artifact_dir_does_not_pollute_source() {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
 
         let handle = safe_copy(&config).unwrap();
-        let target_path = handle.path().join("target");
 
-        assert!(target_path.exists());
-        // target is write-heavy — should NOT be symlinked
-        assert!(!target_path
-            .symlink_metadata()
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        let entries: Vec<_> = fs::read_dir(&target_path).unwrap().collect();
-        assert!(entries.is_empty(), "target dir must be empty in sandbox");
+        // Write into sandbox's node_modules — must NOT appear in source
+        fs::write(handle.path().join("node_modules/injected.json"), b"{}").unwrap();
+        assert!(
+            !workspace.join("node_modules/injected.json").exists(),
+            "write inside sandbox node_modules must not pollute source"
+        );
+
+        // Write into sandbox's target — must NOT appear in source
+        fs::write(handle.path().join("target/injected.o"), b"\x00").unwrap();
+        assert!(
+            !workspace.join("target/injected.o").exists(),
+            "write inside sandbox target must not pollute source"
+        );
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
