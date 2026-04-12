@@ -87,7 +87,7 @@ fn is_artifact_dir(name: &str, config: &MaterializeConfig) -> bool {
 /// Artifact dirs are **never** copied or symlinked from source because
 /// any write-through would violate the "source workspace is never modified"
 /// invariant. Dependency resolution is delegated to the verifier layer
-/// via environment variable injection (e.g. `CARGO_TARGET_DIR`, `NODE_PATH`).
+/// via environment variable injection (e.g. `CARGO_TARGET_DIR`, and planned `NODE_PATH`).
 fn create_empty_artifact_dir(dst_path: &Path) -> Result<(), String> {
     fs::create_dir_all(dst_path).map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))
 }

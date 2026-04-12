@@ -9,7 +9,7 @@
 //! - Build artifact directories (`node_modules`, `target/`, `.venv`) are
 //!   created as **empty directories** — never copied or symlinked from source.
 //!   Dependency resolution is delegated to the verifier via environment variable
-//!   injection (e.g. `CARGO_TARGET_DIR`, `NODE_PATH`).
+//!   injection (e.g. `CARGO_TARGET_DIR`, and planned `NODE_PATH`).
 //! - Cleanup is automatic on [`SandboxHandle`] drop.
 
 pub mod driver;
