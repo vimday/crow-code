@@ -134,6 +134,13 @@ pub fn execute(
         }
     }
 
+    // Inject a shared compilation cache so that sandbox builds don't
+    // rebuild all 500+ deps from scratch when target/ is an empty dir.
+    // This is critical for staying within the executor timeout budget.
+    let shared_target = std::env::temp_dir().join("crow_shared_target");
+    let _ = std::fs::create_dir_all(&shared_target);
+    cmd.env("CARGO_TARGET_DIR", &shared_target);
+
     // Capture output
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());

@@ -1,13 +1,25 @@
 //! Core data types for the patch contract.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // ─── Primitives ─────────────────────────────────────────────────────
 
 /// A workspace-relative path. Never an absolute OS path.
 /// Guarantees: no leading `/`, no `..` traversal, UTF-8 clean.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct WorkspacePath(String);
+
+// Custom deserializer that validates through new()
+impl<'de> Deserialize<'de> for WorkspacePath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        WorkspacePath::new(s).map_err(serde::de::Error::custom)
+    }
+}
 
 impl WorkspacePath {
     /// Create a new workspace path, rejecting absolute or traversal paths.
@@ -68,11 +80,11 @@ impl std::error::Error for PathError {}
 // ─── Snapshot & Confidence ──────────────────────────────────────────
 
 /// Opaque identifier for a workspace snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SnapshotId(pub String);
 
 /// Confidence level attached to an intent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Confidence {
     High,
     Medium,
@@ -83,7 +95,7 @@ pub enum Confidence {
 // ─── Preconditions ──────────────────────────────────────────────────
 
 /// State the file *must* be in before a Modify patch can apply.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreconditionState {
     /// SHA-256 hex digest of the file content at snapshot time.
     pub content_hash: String,
@@ -94,7 +106,7 @@ pub struct PreconditionState {
 /// Lightweight precondition for non-Modify ops.
 /// Every EditOp variant carries one of these so the apply layer can
 /// reject drift before deleting or overwriting user work.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilePrecondition {
     /// The path must NOT exist (used by Create to prevent silent overwrites).
     MustNotExist,
@@ -107,7 +119,7 @@ pub enum FilePrecondition {
 // ─── Diff Hunks ─────────────────────────────────────────────────────
 
 /// A single contiguous change region within a file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffHunk {
     /// 1-based start line in the original file.
     pub original_start: usize,
@@ -120,7 +132,7 @@ pub struct DiffHunk {
 // ─── Edit Operations ────────────────────────────────────────────────
 
 /// Strategy for handling conflicts on rename/create.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConflictStrategy {
     /// Fail if the target already exists.
     Fail,
@@ -131,7 +143,7 @@ pub enum ConflictStrategy {
 /// A single atomic filesystem mutation.
 /// Every variant carries preconditions so the apply layer can reject
 /// drift before touching user files.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditOp {
     Modify {
         path: WorkspacePath,
@@ -164,7 +176,7 @@ pub enum EditOp {
 
 /// The top-level container: a complete set of intended changes anchored
 /// to a specific workspace snapshot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentPlan {
     /// The snapshot this plan was derived from. The materializer MUST
     /// reject application if the current workspace state diverges.

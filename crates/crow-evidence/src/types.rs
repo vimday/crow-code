@@ -1,11 +1,27 @@
 //! Core data types for the evidence contract.
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+/// Serde helper for `std::time::Duration` — serializes as milliseconds.
+mod serde_duration {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u64(d.as_millis() as u64)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+        let ms = u64::deserialize(d)?;
+        Ok(Duration::from_millis(ms))
+    }
+}
 
 // ─── Confidence ─────────────────────────────────────────────────────
 
 /// Confidence tier for intelligence-derived conclusions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Confidence {
     /// No signal at all (e.g. language not recognized).
     None,
@@ -20,7 +36,7 @@ pub enum Confidence {
 // ─── Test Runs ──────────────────────────────────────────────────────
 
 /// Outcome of a single test execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TestOutcome {
     Passed,
     Failed,
@@ -29,7 +45,7 @@ pub enum TestOutcome {
 }
 
 /// A structured record of a single test/build run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestRun {
     /// The command that was executed (e.g. "cargo test").
     pub command: String,
@@ -42,13 +58,14 @@ pub struct TestRun {
     /// Number of individual test cases that were skipped.
     pub skipped: usize,
     /// Wall-clock duration of the run.
+    #[serde(with = "serde_duration")]
     pub duration: Duration,
     /// Truncated log (ACI-pruned). Head + tail only.
     pub truncated_log: String,
 }
 
 /// Whether this was a selective or full test suite run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TestScope {
     /// Only affected tests were run.
     Selective,
@@ -59,7 +76,7 @@ pub enum TestScope {
 // ─── Risk Flags ─────────────────────────────────────────────────────
 
 /// Semantic risk annotation attached to a patch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RiskFlag {
     /// Machine-readable risk category.
     pub kind: RiskKind,
@@ -67,7 +84,7 @@ pub struct RiskFlag {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RiskKind {
     /// Touches authentication, authorization, or crypto code.
     Security,
@@ -87,7 +104,7 @@ pub enum RiskKind {
 
 /// The multidimensional evidence bundle that replaces a single 0-100 score.
 /// Every field traces back to a concrete command, log, or parser output.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceMatrix {
     /// All verification runs performed (may be empty if no verifier was available).
     pub compile_runs: Vec<TestRun>,

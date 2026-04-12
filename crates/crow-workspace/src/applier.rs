@@ -127,17 +127,16 @@ fn verify_file_precondition(
 /// Hunks must be sorted by `original_start` ascending. Each hunk
 /// specifies a 1-based start line, lines to remove, and lines to insert.
 ///
-/// The original file's trailing-newline state is preserved: if the
-/// original ended with `\n`, the result will too; if it did not, the
-/// result will not.
+/// Preserves the original file's line-ending style (LF vs CRLF) and
+/// trailing-newline state. Uses elastic matching (trim_end comparison)
+/// so trailing whitespace differences from LLM output do not falsely
+/// reject otherwise-valid patches.
 fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<String, ApplyError> {
     if hunks.is_empty() {
         return Ok(original.to_string());
     }
 
     // ── Structural validation ──────────────────────────────────
-    // Model output is untrusted; reject malformed hunk sequences
-    // before any mutation rather than panicking on bad arithmetic.
     for (i, hunk) in hunks.iter().enumerate() {
         if hunk.original_start == 0 {
             return Err(ApplyError::HunkConflict {
@@ -163,12 +162,17 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
         }
     }
 
+    // ── Detect line ending style and trailing newline ───────────
+    let line_ending = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let trailing_newline = original.ends_with('\n');
     let mut lines: Vec<String> = original.lines().map(String::from).collect();
     let mut offset: isize = 0;
 
     for hunk in hunks {
-        // Guard against negative offset underflow producing a huge usize
         let adjusted = hunk.original_start as isize - 1 + offset;
         if adjusted < 0 || adjusted as usize > lines.len() {
             return Err(ApplyError::HunkConflict {
@@ -183,7 +187,8 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
         }
         let start = adjusted as usize;
 
-        // Verify that the lines to remove actually match the file content
+        // Elastic matching: trim trailing whitespace so LLM typos
+        // (extra spaces) don't falsely reject valid patches.
         for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
             let actual_idx = start + i;
             if actual_idx >= lines.len() {
@@ -197,7 +202,7 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                     ),
                 });
             }
-            if lines[actual_idx] != *expected_line {
+            if lines[actual_idx].trim_end() != expected_line.trim_end() {
                 return Err(ApplyError::HunkConflict {
                     path: file_path.into(),
                     line: hunk.original_start + i,
@@ -209,19 +214,20 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
             }
         }
 
+        // O(N) batch replacement via splice
         let remove_count = hunk.remove_lines.len();
-        lines.drain(start..start + remove_count);
-
-        for (i, new_line) in hunk.insert_lines.iter().enumerate() {
-            lines.insert(start + i, new_line.clone());
-        }
+        lines.splice(
+            start..start + remove_count,
+            hunk.insert_lines.iter().cloned(),
+        );
 
         offset += hunk.insert_lines.len() as isize - remove_count as isize;
     }
 
-    let mut result = lines.join("\n");
+    // Reconstruct with the original line-ending style
+    let mut result = lines.join(line_ending);
     if trailing_newline {
-        result.push('\n');
+        result.push_str(line_ending);
     }
     Ok(result)
 }
@@ -337,7 +343,7 @@ fn unlink_if_hardlinked(is_hardlinked: bool, path: &Path) -> Result<(), ApplyErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crow_patch::{DiffHunk, FilePrecondition};
+    use crow_patch::{DiffHunk, EditOp, FilePrecondition, IntentPlan, WorkspacePath};
     use std::fs;
     use tempfile::TempDir;
 
@@ -486,5 +492,52 @@ mod tests {
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.ends_with('\n'));
         assert!(result.contains("replaced"));
+    }
+
+    #[test]
+    fn apply_hunks_preserves_crlf_line_endings() {
+        let original = "line 1\r\nline 2\r\nline 3\r\n";
+        let hunks = vec![DiffHunk {
+            original_start: 2,
+            remove_lines: vec!["line 2".into()],
+            insert_lines: vec!["replaced".into()],
+        }];
+        let result = apply_hunks(original, &hunks, "test.rs").unwrap();
+        // Must preserve CRLF endings
+        assert!(result.contains("\r\n"), "expected CRLF, got: {:?}", result);
+        assert!(!result.contains("line 2"));
+        assert!(result.contains("replaced\r\n"));
+    }
+
+    #[test]
+    fn apply_hunks_elastic_trailing_whitespace() {
+        // File has trailing spaces, LLM output doesn't — should still match
+        let original = "fn foo()   \nfn bar()\n";
+        let hunks = vec![DiffHunk {
+            original_start: 1,
+            remove_lines: vec!["fn foo()".into()], // no trailing spaces
+            insert_lines: vec!["fn baz()".into()],
+        }];
+        let result = apply_hunks(original, &hunks, "test.rs").unwrap();
+        assert!(result.contains("fn baz()"));
+        assert!(!result.contains("fn foo()"));
+    }
+
+    #[test]
+    fn serde_roundtrip_intent_plan() {
+        let plan = IntentPlan {
+            base_snapshot_id: crow_patch::SnapshotId("snap-1".into()),
+            rationale: "test".into(),
+            is_partial: false,
+            confidence: crow_patch::Confidence::High,
+            operations: vec![EditOp::Create {
+                path: WorkspacePath::new("src/new.rs").unwrap(),
+                content: "fn main() {}".into(),
+                precondition: FilePrecondition::MustNotExist,
+            }],
+        };
+        let json = serde_json::to_string(&plan).unwrap();
+        let restored: IntentPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(plan, restored);
     }
 }

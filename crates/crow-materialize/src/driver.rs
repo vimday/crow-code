@@ -82,6 +82,38 @@ fn is_artifact_dir(name: &str, config: &MaterializeConfig) -> bool {
     config.artifact_dirs.iter().any(|a| a == name)
 }
 
+/// Dirs whose contents are read-only at runtime and can be safely
+/// symlinked into the sandbox (e.g. node_modules, .venv).
+/// Write-heavy build output dirs (target) must NOT be symlinked
+/// because concurrent builds would conflict on lock files.
+const SYMLINKABLE_ARTIFACT_DIRS: &[&str] = &["node_modules", ".venv", "vendor"];
+
+/// Handle an artifact directory: symlink it if it's read-only deps,
+/// otherwise create an empty dir (build outputs like `target/` are
+/// redirected via CARGO_TARGET_DIR in the verifier).
+fn handle_artifact_dir(src_path: &Path, dst_path: &Path, name: &str) -> Result<(), String> {
+    if SYMLINKABLE_ARTIFACT_DIRS.iter().any(|d| *d == name) && src_path.exists() {
+        // Symlink back to source so package managers find installed deps
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(src_path, dst_path)
+                .map_err(|e| format!("symlink {} failed: {}", dst_path.display(), e))?;
+        }
+        #[cfg(not(unix))]
+        {
+            // Fallback: create empty dir on non-Unix
+            fs::create_dir_all(dst_path)
+                .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
+        }
+    } else {
+        // Build output dir — create empty; the verifier injects
+        // CARGO_TARGET_DIR to redirect compilation elsewhere.
+        fs::create_dir_all(dst_path)
+            .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
+    }
+    Ok(())
+}
+
 fn build_skip_set(config: &MaterializeConfig) -> Result<globset::GlobSet, String> {
     let mut builder = globset::GlobSetBuilder::new();
     for p in &config.skip_patterns {
@@ -248,8 +280,7 @@ fn safe_copy_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                fs::create_dir_all(&dst_path)
-                    .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
+                handle_artifact_dir(&src_path, &dst_path, &name)?;
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
@@ -306,7 +337,7 @@ fn apfs_clone_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
+                handle_artifact_dir(&src_path, &dst_path, &name)?;
             } else {
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
                 apfs_clone_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
@@ -372,7 +403,7 @@ fn hardlink_copy_tree(
             recreate_symlink(&src_path, &dst_path, &config.source)?;
         } else if file_type.is_dir() {
             if is_artifact_dir(&name, config) {
-                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
+                handle_artifact_dir(&src_path, &dst_path, &name)?;
             } else {
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
                 hardlink_copy_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
@@ -418,6 +449,7 @@ mod tests {
         }));
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("node_modules/lodash")).unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
         fs::create_dir_all(root.join(".git/objects")).unwrap();
 
         let mut f = fs::File::create(root.join("src/main.rs")).unwrap();
@@ -439,7 +471,7 @@ mod tests {
     fn default_config(source: &Path) -> MaterializeConfig {
         MaterializeConfig {
             source: source.to_path_buf(),
-            artifact_dirs: vec!["node_modules".into()],
+            artifact_dirs: vec!["node_modules".into(), "target".into()],
             skip_patterns: vec![".git".into()],
             allow_hardlinks: false,
         }
@@ -448,7 +480,7 @@ mod tests {
     fn hardlink_config(source: &Path) -> MaterializeConfig {
         MaterializeConfig {
             source: source.to_path_buf(),
-            artifact_dirs: vec!["node_modules".into()],
+            artifact_dirs: vec!["node_modules".into(), "target".into()],
             skip_patterns: vec![".git".into()],
             allow_hardlinks: true,
         }
@@ -478,10 +510,10 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
     }
 
-    // ─── artifact_dirs are empty dirs ───────────────────────────────
+    // ─── artifact_dirs handling ──────────────────────────────────────
 
     #[test]
-    fn artifact_dirs_are_empty_not_symlinked() {
+    fn node_modules_is_symlinked_back_to_source() {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
 
@@ -489,23 +521,35 @@ mod tests {
         let nm_path = handle.path().join("node_modules");
 
         assert!(nm_path.exists());
-        assert!(!nm_path.symlink_metadata().unwrap().file_type().is_symlink());
-        let entries: Vec<_> = fs::read_dir(&nm_path).unwrap().collect();
-        assert!(entries.is_empty(), "artifact dir must be empty in sandbox");
+        // node_modules is in SYMLINKABLE_ARTIFACT_DIRS — should be a symlink
+        assert!(
+            nm_path.symlink_metadata().unwrap().file_type().is_symlink(),
+            "node_modules should be symlinked, not copied"
+        );
+        // Should contain the same content as source
+        assert!(nm_path.join("lodash/index.js").exists());
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
     }
 
     #[test]
-    fn writing_to_sandbox_artifact_dir_does_not_pollute_source() {
+    fn target_dir_is_empty_not_symlinked() {
         let workspace = create_test_workspace();
         let config = default_config(&workspace);
 
         let handle = safe_copy(&config).unwrap();
-        fs::write(handle.path().join("node_modules/new.json"), b"{}").unwrap();
+        let target_path = handle.path().join("target");
 
-        assert!(!workspace.join("node_modules/new.json").exists());
+        assert!(target_path.exists());
+        // target is write-heavy — should NOT be symlinked
+        assert!(!target_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let entries: Vec<_> = fs::read_dir(&target_path).unwrap().collect();
+        assert!(entries.is_empty(), "target dir must be empty in sandbox");
 
         drop(handle);
         let _ = fs::remove_dir_all(&workspace);
