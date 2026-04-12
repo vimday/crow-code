@@ -8,3 +8,6 @@ license.workspace = true
 tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
 tree-sitter-typescript = "0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"

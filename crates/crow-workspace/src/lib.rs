@@ -4,3 +4,6 @@
 //! Supports checkpointing, compaction, and deterministic replay.
 
 pub mod applier;
+pub mod hydrator;
+
+pub use hydrator::{PlanHydrator, HydrationError};

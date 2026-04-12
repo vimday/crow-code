@@ -22,6 +22,8 @@ impl ReqwestLlmClient {
 
         let client = Client::builder()
             .default_headers(headers)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
             .build()
             .map_err(|e| e.to_string())?;
 
