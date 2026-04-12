@@ -4,5 +4,8 @@
 //! search policy for high-risk refactors. All governed by a strict
 //! compute/time budget.
 
+pub mod client;
 pub mod compiler;
+
+pub use client::ReqwestLlmClient;
 pub use compiler::{CompilerError, IntentCompiler, LlmClient};

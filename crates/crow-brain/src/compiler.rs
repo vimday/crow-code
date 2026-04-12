@@ -144,7 +144,9 @@ mod tests {
         let bad_json = r#"{ "invalid": yes }"#.into();
         
         let client = Box::new(MockLlm {
-            responses: Arc::new(Mutex::new(vec![valid_plan_json(), bad_json])),
+            // First response is bad_json, forcing the loop to catch Err and retry
+            // The second response is valid_plan_json, so the loop succeeds.
+            responses: Arc::new(Mutex::new(vec![bad_json, valid_plan_json()])),
         });
         let compiler = IntentCompiler::new(client);
 

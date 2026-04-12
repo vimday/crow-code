@@ -179,13 +179,17 @@ name = "crow-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "crow-brain",
+ "crow-intel",
  "crow-materialize",
  "crow-patch",
  "crow-probe",
  "crow-verifier",
  "crow-workspace",
  "predicates",
+ "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
