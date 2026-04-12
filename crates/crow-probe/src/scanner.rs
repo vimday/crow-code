@@ -35,8 +35,9 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
     // 2. Node.js / TS — independent check, not mutually exclusive
     if root.join("package.json").exists() {
         let is_ts = root.join("tsconfig.json").exists();
-        // Only promote primary_lang if nothing higher-tier was detected
-        if primary_lang.tier > LanguageTier::Tier2 {
+        // Only promote primary_lang if nothing higher-tier was detected.
+        // Tier ordering: Tier3 < Tier2 < Tier1, so "< Tier2" means unknown/Tier3.
+        if primary_lang.tier < LanguageTier::Tier2 {
             primary_lang = DetectedLanguage {
                 name: if is_ts {
                     "typescript".into()
@@ -85,4 +86,80 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
             artifact_dirs,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn node_only_repo_detects_javascript() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), "{}").unwrap();
+
+        let profile = scan_workspace(dir.path()).unwrap();
+        assert_eq!(profile.primary_lang.name, "javascript");
+        assert_eq!(profile.primary_lang.tier, LanguageTier::Tier2);
+        assert_eq!(profile.verification_candidates.len(), 1);
+        assert!(profile
+            .ignore_spec
+            .artifact_dirs
+            .contains(&"node_modules".to_string()));
+    }
+
+    #[test]
+    fn ts_only_repo_detects_typescript() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), "{}").unwrap();
+        fs::write(dir.path().join("tsconfig.json"), "{}").unwrap();
+
+        let profile = scan_workspace(dir.path()).unwrap();
+        assert_eq!(profile.primary_lang.name, "typescript");
+        assert_eq!(profile.primary_lang.tier, LanguageTier::Tier2);
+    }
+
+    #[test]
+    fn polyglot_rust_plus_node_keeps_rust_primary() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("package.json"), "{}").unwrap();
+
+        let profile = scan_workspace(dir.path()).unwrap();
+        // Rust is Tier1 — must NOT be downgraded to JS/Tier2
+        assert_eq!(profile.primary_lang.name, "rust");
+        assert_eq!(profile.primary_lang.tier, LanguageTier::Tier1);
+        // But both candidates must be emitted
+        assert_eq!(profile.verification_candidates.len(), 2);
+        let programs: Vec<&str> = profile
+            .verification_candidates
+            .iter()
+            .map(|c| c.command.program.as_str())
+            .collect();
+        assert!(programs.contains(&"cargo"));
+        assert!(programs.contains(&"npm"));
+        // Both artifact dirs must be present
+        assert!(profile
+            .ignore_spec
+            .artifact_dirs
+            .contains(&"target".to_string()));
+        assert!(profile
+            .ignore_spec
+            .artifact_dirs
+            .contains(&"node_modules".to_string()));
+    }
+
+    #[test]
+    fn empty_repo_returns_unknown() {
+        let dir = TempDir::new().unwrap();
+        let profile = scan_workspace(dir.path()).unwrap();
+        assert_eq!(profile.primary_lang.name, "unknown");
+        assert_eq!(profile.primary_lang.tier, LanguageTier::Tier3);
+        assert!(profile.verification_candidates.is_empty());
+    }
 }

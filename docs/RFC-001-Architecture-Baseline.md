@@ -121,7 +121,7 @@ adds real types and tests to exactly one layer, verified by `cargo test`
 before moving on.
 
 - **Step 1: Workspace Genesis** — Skeleton crates, `cargo check` green. ✅
-- **Step 2: Core Data Contracts** — Implement types in the three Currency crates (`crow-patch`, `crow-evidence`, `crow-probe`). Verified by unit tests.
-- **Step 3: Materialization Sandbox** — Implement physical working tree cloning in `crow-materialize`. Verified by benchmark: clone project with `node_modules` < 100ms.
-- **Step 4: ACI Log Truncation** — Implement isolated execution constraint pipelines in `crow-verifier`. Verified by feeding 100K-line logs and asserting output ≤ 200 lines.
-- **Step 5: Project Probe** — Implement detection heuristics in `crow-probe`. Verified by pointing at `crow-code` itself and getting `cargo test` as a candidate.
+- **Step 2: Core Data Contracts** — Implement types in the three Currency crates (`crow-patch`, `crow-evidence`, `crow-probe`). ✅
+- **Step 3: Workspace-Isolation Materialization** — Implement physical working tree cloning in `crow-materialize`. APFS clonefile, SafeCopy, HardlinkTree (opt-in). ✅
+- **Step 4: ACI Log Truncation** — Implement isolated execution constraint pipelines in `crow-verifier`. Verified by feeding 100K-line logs and asserting output ≤ 200 lines. ✅
+- **Step 5: Probe + Applier + God Pipeline** — Implement detection heuristics in `crow-probe`, physical patch applier in `crow-workspace`, end-to-end integration pipeline in `crow-cli`. ✅

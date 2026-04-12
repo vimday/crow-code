@@ -101,6 +101,9 @@ version = "0.1.0"
 [[package]]
 name = "crow-probe"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "crow-replay"
