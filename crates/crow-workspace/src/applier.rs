@@ -123,21 +123,35 @@ fn verify_file_precondition(
 
 // ─── Hunk Application ──────────────────────────────────────────────
 
-/// Apply a sequence of non-overlapping hunks to a file's lines.
-/// Hunks must be sorted by `original_start` ascending. Each hunk
-/// specifies a 1-based start line, lines to remove, and lines to insert.
+/// Apply a sequence of hunks using a conservative fuzzy matcher.
 ///
-/// Preserves the original file's line-ending style (LF vs CRLF) and
-/// trailing-newline state. Uses elastic matching (trim_end comparison)
-/// so trailing whitespace differences from LLM output do not falsely
-/// reject otherwise-valid patches.
+/// Key properties:
+/// - Hunks are applied from bottom to top, so lower-file edits never
+///   perturb the anchoring of earlier hunks.
+/// - Matching is elastic with respect to trailing whitespace only.
+/// - Each hunk may drift within a small bounded window (±10 lines).
+/// - Multiple matches inside that window are treated as ambiguous and
+///   rejected rather than guessed.
+/// - The original line-ending style (LF vs CRLF) and trailing-newline
+///   state are preserved.
 fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<String, ApplyError> {
     if hunks.is_empty() {
         return Ok(original.to_string());
     }
 
+    let line_ending = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let trailing_newline = original.ends_with('\n') || original.is_empty();
+    let mut lines: Vec<String> = original.lines().map(String::from).collect();
+
+    let mut sorted_hunks = hunks.to_vec();
+    sorted_hunks.sort_by(|a, b| b.original_start.cmp(&a.original_start));
+
     // ── Structural validation ──────────────────────────────────
-    for (i, hunk) in hunks.iter().enumerate() {
+    for (i, hunk) in sorted_hunks.iter().enumerate() {
         if hunk.original_start == 0 {
             return Err(ApplyError::HunkConflict {
                 path: file_path.into(),
@@ -146,87 +160,92 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
             });
         }
         if i > 0 {
-            let prev = &hunks[i - 1];
-            let prev_end = prev.original_start + prev.remove_lines.len();
-            if hunk.original_start < prev_end {
+            let bottom_hunk = &sorted_hunks[i - 1];
+            let top_end = hunk.original_start + hunk.remove_lines.len();
+            if top_end > bottom_hunk.original_start {
                 return Err(ApplyError::HunkConflict {
                     path: file_path.into(),
                     line: hunk.original_start,
                     reason: format!(
-                        "hunks must be sorted ascending and non-overlapping; \
-                         hunk at line {} overlaps previous hunk ending at line {}",
-                        hunk.original_start, prev_end
+                        "hunks must be non-overlapping; hunk at {} overlaps hunk at {}",
+                        hunk.original_start, bottom_hunk.original_start
                     ),
                 });
             }
         }
     }
 
-    // ── Detect line ending style and trailing newline ───────────
-    let line_ending = if original.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    let trailing_newline = original.ends_with('\n');
-    let mut lines: Vec<String> = original.lines().map(String::from).collect();
-    let mut offset: isize = 0;
+    let max_drift: isize = 10;
 
-    for hunk in hunks {
-        let adjusted = hunk.original_start as isize - 1 + offset;
-        if adjusted < 0 || adjusted as usize > lines.len() {
-            return Err(ApplyError::HunkConflict {
-                path: file_path.into(),
-                line: hunk.original_start,
-                reason: format!(
-                    "adjusted start {} is out of bounds (file has {} lines after prior edits)",
-                    adjusted,
-                    lines.len()
-                ),
-            });
-        }
-        let start = adjusted as usize;
+    for hunk in sorted_hunks {
+        let expected_idx = (hunk.original_start as isize - 1).max(0);
+        let target_len = hunk.remove_lines.len();
+        let mut match_indices = Vec::new();
 
-        // Elastic matching: trim trailing whitespace so LLM typos
-        // (extra spaces) don't falsely reject valid patches.
-        for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
-            let actual_idx = start + i;
-            if actual_idx >= lines.len() {
-                return Err(ApplyError::HunkConflict {
-                    path: file_path.into(),
-                    line: hunk.original_start + i,
-                    reason: format!(
-                        "expected line '{}' but file only has {} lines",
-                        expected_line,
-                        lines.len()
-                    ),
-                });
-            }
-            if lines[actual_idx].trim_end() != expected_line.trim_end() {
-                return Err(ApplyError::HunkConflict {
-                    path: file_path.into(),
-                    line: hunk.original_start + i,
-                    reason: format!(
-                        "expected '{}', found '{}'",
-                        expected_line, lines[actual_idx]
-                    ),
-                });
+        if target_len == 0 {
+            let safe_idx = expected_idx.clamp(0, lines.len() as isize) as usize;
+            match_indices.push(safe_idx);
+        } else {
+            for drift in -max_drift..=max_drift {
+                let probe_idx = expected_idx + drift;
+                if probe_idx < 0 || (probe_idx as usize) + target_len > lines.len() {
+                    continue;
+                }
+
+                let probe_idx = probe_idx as usize;
+                let mut is_match = true;
+                for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
+                    if lines[probe_idx + i].trim_end() != expected_line.trim_end() {
+                        is_match = false;
+                        break;
+                    }
+                }
+
+                if is_match {
+                    match_indices.push(probe_idx);
+                }
             }
         }
 
-        // O(N) batch replacement via splice
-        let remove_count = hunk.remove_lines.len();
-        lines.splice(
-            start..start + remove_count,
-            hunk.insert_lines.iter().cloned(),
-        );
-
-        offset += hunk.insert_lines.len() as isize - remove_count as isize;
+        match match_indices.len() {
+            1 => {
+                let start_idx = match_indices[0];
+                lines.splice(
+                    start_idx..start_idx + target_len,
+                    hunk.insert_lines.iter().cloned(),
+                );
+            }
+            0 => {
+                let context = hunk
+                    .remove_lines
+                    .first()
+                    .map(|s| s.trim_end())
+                    .unwrap_or("<empty>");
+                return Err(ApplyError::HunkConflict {
+                    path: file_path.into(),
+                    line: hunk.original_start,
+                    reason: format!(
+                        "context not found within ±{} lines ('{}').",
+                        max_drift, context
+                    ),
+                });
+            }
+            _ => {
+                return Err(ApplyError::HunkConflict {
+                    path: file_path.into(),
+                    line: hunk.original_start,
+                    reason: format!(
+                        "ambiguous match: found {} identical contexts within ±{} lines. Refusing to guess.",
+                        match_indices.len(),
+                        max_drift
+                    ),
+                });
+            }
+        }
     }
 
-    // Reconstruct with the original line-ending style
     let mut result = lines.join(line_ending);
-    if trailing_newline {
+    if trailing_newline && !result.is_empty() {
         result.push_str(line_ending);
     }
     Ok(result)
@@ -521,6 +540,35 @@ mod tests {
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("fn baz()"));
         assert!(!result.contains("fn foo()"));
+    }
+
+    #[test]
+    fn apply_hunks_finds_context_with_small_line_drift() {
+        let original = "line 1\nline 2\nline 3\nline 4\nunique target\nline 6\n";
+        let hunks = vec![DiffHunk {
+            original_start: 3, // true line is 5, but within ±10 drift
+            remove_lines: vec!["unique target".into()],
+            insert_lines: vec!["patched target".into()],
+        }];
+
+        let result = apply_hunks(original, &hunks, "test.rs").unwrap();
+        assert!(result.contains("patched target"));
+        assert!(!result.contains("unique target"));
+    }
+
+    #[test]
+    fn apply_hunks_rejects_ambiguous_drift_matches() {
+        let original = "line 1\nrepeated target\nline 3\nline 4\nrepeated target\nline 6\n";
+        let hunks = vec![DiffHunk {
+            original_start: 3,
+            remove_lines: vec!["repeated target".into()],
+            insert_lines: vec!["patched target".into()],
+        }];
+
+        let result = apply_hunks(original, &hunks, "test.rs");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("ambiguous match"), "got: {}", msg);
     }
 
     #[test]

@@ -24,6 +24,8 @@ use crate::aci;
 use crate::types::{AciConfig, ExecutionConfig, VerificationResult, VerifierError};
 use crow_evidence::{TestOutcome, TestRun};
 use crow_probe::VerificationCommand;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -134,12 +136,14 @@ pub fn execute(
         }
     }
 
-    // Inject a shared compilation cache so that sandbox builds don't
-    // rebuild all 500+ deps from scratch when target/ is an empty dir.
-    // This is critical for staying within the executor timeout budget.
-    let shared_target = std::env::temp_dir().join("crow_shared_target");
-    let _ = std::fs::create_dir_all(&shared_target);
-    cmd.env("CARGO_TARGET_DIR", &shared_target);
+    // Isolate build output per sandbox to avoid Cargo file-lock
+    // contention once multiple verification sandboxes run concurrently.
+    let mut hasher = DefaultHasher::new();
+    sandbox_root.hash(&mut hasher);
+    let sandbox_hash = format!("{:016x}", hasher.finish());
+    let isolated_target = std::env::temp_dir().join(format!("crow_target_{}", sandbox_hash));
+    let _ = std::fs::create_dir_all(&isolated_target);
+    cmd.env("CARGO_TARGET_DIR", &isolated_target);
 
     // Capture output
     cmd.stdout(std::process::Stdio::piped());
@@ -497,5 +501,34 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn execute_uses_isolated_target_dir_per_sandbox() {
+        let sandbox_a = make_sandbox();
+        let sandbox_b = make_sandbox();
+        let cmd = VerificationCommand::new("env", vec![]);
+        let exec = ExecutionConfig::default_config();
+        let aci = AciConfig::default_config();
+
+        let result_a = execute(&sandbox_a, &cmd, &exec, &aci).unwrap();
+        let result_b = execute(&sandbox_b, &cmd, &exec, &aci).unwrap();
+
+        let extract_target = |log: &str| {
+            log.lines()
+                .find(|line| line.starts_with("CARGO_TARGET_DIR="))
+                .map(str::to_string)
+                .expect("expected CARGO_TARGET_DIR in env output")
+        };
+
+        let target_a = extract_target(&result_a.test_run.truncated_log);
+        let target_b = extract_target(&result_b.test_run.truncated_log);
+
+        assert_ne!(target_a, target_b);
+        assert!(target_a.contains("crow_target_"));
+        assert!(target_b.contains("crow_target_"));
+
+        let _ = fs::remove_dir_all(&sandbox_a);
+        let _ = fs::remove_dir_all(&sandbox_b);
     }
 }
