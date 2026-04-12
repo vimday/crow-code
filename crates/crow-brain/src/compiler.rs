@@ -198,4 +198,62 @@ mod tests {
             _ => panic!("Expected max retries error"),
         }
     }
+
+    // ─── extract_json_block tests ───────────────────────────────────
+
+    #[test]
+    fn extract_json_block_strips_markdown_fence() {
+        let input = "```json\n{\"key\": \"value\"}\n```";
+        assert_eq!(extract_json_block(input), r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn extract_json_block_strips_generic_fence() {
+        let input = "```\n{\"key\": \"value\"}\n```";
+        assert_eq!(extract_json_block(input), r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn extract_json_block_handles_leading_whitespace() {
+        let input = "\n\n   {\"key\": \"value\"}   \n\n";
+        assert_eq!(extract_json_block(input), r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn extract_json_block_passes_raw_json_through() {
+        let input = r#"{"key": "value"}"#;
+        assert_eq!(extract_json_block(input), input);
+    }
+
+    // ─── Provider-realism test ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn compiler_handles_provider_leading_newline_in_content() {
+        // Simulates what OpenRouter/DeepInfra actually returns:
+        // content field starts with "\n" before the JSON 
+        let with_newline = format!("\n{}", valid_plan_json());
+
+        let client = Box::new(MockLlm {
+            responses: Arc::new(Mutex::new(vec![with_newline])),
+        });
+        let compiler = IntentCompiler::new(client);
+
+        let plan = compiler.compile("create something").await
+            .expect("Leading newline in content should not break parsing");
+        assert_eq!(plan.rationale, "mock");
+    }
+
+    #[tokio::test]
+    async fn compiler_handles_markdown_wrapped_response() {
+        let wrapped = format!("```json\n{}\n```", valid_plan_json());
+
+        let client = Box::new(MockLlm {
+            responses: Arc::new(Mutex::new(vec![wrapped])),
+        });
+        let compiler = IntentCompiler::new(client);
+
+        let plan = compiler.compile("create something").await
+            .expect("Markdown-wrapped JSON should be extracted and parsed");
+        assert_eq!(plan.rationale, "mock");
+    }
 }
