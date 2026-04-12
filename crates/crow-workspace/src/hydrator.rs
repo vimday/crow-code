@@ -47,7 +47,7 @@ impl PlanHydrator {
                         })?;
                     *precondition = FilePrecondition::MustExistWithHash(hash);
                 }
-                EditOp::Rename { from, to: _, on_conflict, source_precondition, dest_precondition } => {
+                EditOp::Rename { from, to, on_conflict, source_precondition, dest_precondition } => {
                     let absolute_source = workspace_root.join(from.as_str());
                     let (hash, _) = Self::compute_file_state(&absolute_source)
                         .map_err(|e| HydrationError::IoError { 
@@ -58,6 +58,20 @@ impl PlanHydrator {
 
                     if *on_conflict == ConflictStrategy::Fail {
                         *dest_precondition = FilePrecondition::MustNotExist;
+                    } else if *on_conflict == ConflictStrategy::Overwrite {
+                        let absolute_dest = workspace_root.join(to.as_str());
+                        if absolute_dest.exists() {
+                            // If it exists, hydrate its exact hash so we don't blindly overwrite
+                            // a file that changed between compilation and application.
+                            let (hash, _) = Self::compute_file_state(&absolute_dest)
+                                .map_err(|e| HydrationError::IoError { 
+                                    path: to.as_str().to_string(), 
+                                    reason: e 
+                                })?;
+                            *dest_precondition = FilePrecondition::MustExistWithHash(hash);
+                        } else {
+                            *dest_precondition = FilePrecondition::MustNotExist;
+                        }
                     }
                 }
                 EditOp::Create { precondition, .. } => {

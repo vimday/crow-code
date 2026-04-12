@@ -10,8 +10,12 @@ use std::env;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    if args.len() >= 3 && args[1] == "compile" {
-        return run_compile_only(&args[2..]).await;
+    if args.len() >= 2 {
+        if args[1] == "compile" {
+            return run_compile_only(&args[2..]).await;
+        } else if args[1] == "dry-run" {
+            return run_dry_run(&args[2..]).await;
+        }
     }
 
     println!("🦅 crow-code Sprint 1 God Pipeline initializing...\n");
@@ -135,4 +139,81 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
             Err("Failed to compile IntentPlan".into())
         }
     }
+}
+
+async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use crow_workspace::PlanHydrator;
+
+    println!("🦅 crow-code Sprint 2 Dry-Run mode initializing...\n");
+    let current_dir = env::current_dir()?;
+
+    let prompt = args.join(" ");
+    let api_key = env::var("OPENAI_API_KEY")
+        .or_else(|_| env::var("CROW_API_KEY"))
+        .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
+        
+    let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string());
+
+    println!("[1/6] Radaring Workspace: {}", current_dir.display());
+    let profile = scan_workspace(&current_dir)?;
+    let candidate = match profile.verification_candidates.first() {
+        Some(c) => c,
+        None => return Err("No verification candidates found. Cannot dry-run without a verifier.".into()),
+    };
+
+    println!("\n[2/6] Gathering Repomap Context via tree-sitter...");
+    let walker = RepoWalker::new();
+    let repo_map = walker.build_repo_map(&current_dir)?;
+    println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
+
+    println!("\n[3/6] Compiling IntentPlan via crow-brain (Model: {})...", model);
+    let full_prompt = format!(
+        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+        repo_map.map_text, prompt
+    );
+
+    let client = Box::new(ReqwestLlmClient::new(api_key, model, None)?);
+    let compiler = IntentCompiler::new(client);
+    let compiled_plan = compiler.compile(&full_prompt).await.map_err(|e| format!("Compilation failed: {:?}", e))?;
+
+    println!("\n[4/6] Hydrating IntentPlan (resolving real workspace preconditions)...");
+    let hydrated_plan = PlanHydrator::hydrate(&compiled_plan, &current_dir)
+        .map_err(|e| format!("Hydration failed: {:?}", e))?;
+
+    println!("    💧 Hydrated Plan:\n{}", serde_json::to_string_pretty(&hydrated_plan)?);
+
+    println!("\n[5/6] Materializing O(1) Sandbox and Applying Plan...");
+    let config = MaterializeConfig {
+        source: current_dir.clone(),
+        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+        allow_hardlinks: false,
+    };
+    let sandbox = materialize(&config)?;
+    
+    apply_plan_to_sandbox(&hydrated_plan, &sandbox)?;
+    println!("    💉 Sandbox injection successful!");
+
+    println!("\n[6/6] Verifying Sandbox with '{}'...", candidate.command.display());
+    let exec_config = ExecutionConfig {
+        timeout: std::time::Duration::from_secs(60),
+        max_output_bytes: 5 * 1024 * 1024,
+    };
+
+    let result = crow_verifier::executor::execute(
+        sandbox.path(),
+        &candidate.command,
+        &exec_config,
+        &AciConfig::compact(),
+    )?;
+
+    println!("\n[✓] Dry-Run Sequence Completed");
+    println!("--- Subprocess Verifier Outcome ---");
+    println!("Outcome: {:?}", result.test_run.outcome);
+    println!("Evidence:\n{}", result.test_run.truncated_log);
+    
+    // Explicit drop just to clarify this is where the sandbox evaporates
+    drop(sandbox);
+    
+    Ok(())
 }
