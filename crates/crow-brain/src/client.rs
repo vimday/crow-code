@@ -3,13 +3,39 @@ use async_trait::async_trait;
 use reqwest::{Client, header};
 use serde_json::json;
 
+// ─── Provider Capabilities ──────────────────────────────────────────
+
+/// Declares what a given LLM provider endpoint supports.
+/// Avoids string-based heuristics like `url.contains("openai.com")`.
+#[derive(Debug, Clone)]
+pub struct ProviderCaps {
+    /// Whether the provider supports `response_format: { "type": "json_object" }`.
+    pub supports_json_mode: bool,
+}
+
+impl ProviderCaps {
+    /// Infer capabilities from the base URL.
+    /// Known providers get explicit caps; unknown default to conservative.
+    pub fn infer(base_url: &str) -> Self {
+        Self {
+            supports_json_mode: base_url.contains("openai.com"),
+        }
+    }
+
+    /// Explicitly declare capabilities (overrides inference).
+    pub fn new(supports_json_mode: bool) -> Self {
+        Self { supports_json_mode }
+    }
+}
+
+// ─── Client ─────────────────────────────────────────────────────────
+
 pub struct ReqwestLlmClient {
     client: Client,
-    #[allow(dead_code)]
-    api_key: String,
     model: String,
     base_url: String,
     max_tokens: u32,
+    caps: ProviderCaps,
 }
 
 impl ReqwestLlmClient {
@@ -28,17 +54,25 @@ impl ReqwestLlmClient {
             .build()
             .map_err(|e| e.to_string())?;
 
+        let resolved_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let caps = ProviderCaps::infer(&resolved_url);
+
         Ok(Self {
             client,
-            api_key,
             model,
-            base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            base_url: resolved_url,
             max_tokens: 2048,
+            caps,
         })
     }
 
     pub fn with_max_tokens(mut self, max: u32) -> Self {
         self.max_tokens = max;
+        self
+    }
+
+    pub fn with_caps(mut self, caps: ProviderCaps) -> Self {
+        self.caps = caps;
         self
     }
 }
@@ -63,8 +97,7 @@ impl LlmClient for ReqwestLlmClient {
             ]
         });
 
-        // Only inject response_format for providers known to support it
-        if self.base_url.contains("openai.com") {
+        if self.caps.supports_json_mode {
             body["response_format"] = json!({ "type": "json_object" });
         }
 

@@ -53,7 +53,7 @@ impl WorkspacePath {
     }
 
     /// Convert to a full OS path given a workspace root.
-    pub fn to_absolute(&self, root: &PathBuf) -> PathBuf {
+    pub fn to_absolute(&self, root: &std::path::Path) -> PathBuf {
         root.join(&self.0)
     }
 }

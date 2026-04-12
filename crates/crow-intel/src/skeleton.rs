@@ -26,11 +26,17 @@ impl SupportedLanguage {
     }
 }
 
-pub struct ASTProcessor {}
+pub struct ASTProcessor;
+
+impl Default for ASTProcessor {
+    fn default() -> Self {
+        Self
+    }
+}
 
 impl ASTProcessor {
     pub fn new() -> Self {
-        Self {}
+        Self
     }
 
     /// Takes source code and its file path, returns the LOD 1 Skeletal representation.
@@ -74,20 +80,19 @@ impl ASTProcessor {
         Ok(result)
     }
 
-    fn collect_body_spans<'a>(node: Node<'a>, spans: &mut Vec<(usize, usize)>) {
+    fn collect_body_spans(node: Node<'_>, spans: &mut Vec<(usize, usize)>) {
         let kind = node.kind();
         
         // Check if this node is a block that implements a function body
         let is_target_block = match kind {
             "block" => {
                 // Rust: parent is function_item
-                node.parent().map_or(false, |p| p.kind() == "function_item")
+                node.parent().is_some_and(|p| p.kind() == "function_item")
             }
             "statement_block" => {
                 // TS/JS: parent is function_declaration, method_definition, arrow_function, etc.
-                node.parent().map_or(false, |p| {
-                    let pk = p.kind();
-                    pk == "function_declaration" || pk == "method_definition" || pk == "arrow_function"
+                node.parent().is_some_and(|p| {
+                    matches!(p.kind(), "function_declaration" | "method_definition" | "arrow_function")
                 })
             }
             _ => false,

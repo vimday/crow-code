@@ -1,5 +1,8 @@
-use crow_brain::{IntentCompiler, ReqwestLlmClient};
-use crow_intel::RepoWalker;
+mod config;
+mod diff;
+
+use config::CliConfig;
+use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::{Confidence, EditOp, FilePrecondition, IntentPlan, WorkspacePath};
 use crow_probe::scan_workspace;
@@ -18,6 +21,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    run_god_pipeline().await
+}
+
+// ─── Sprint 1: God Pipeline (synthetic self-test) ───────────────────
+
+async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
     println!("🦅 crow-code Sprint 1 God Pipeline initializing...\n");
 
     let current_dir = env::current_dir()?;
@@ -102,34 +111,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    println!("🦅 crow-code Sprint 2 Compile-Only mode initializing...\n");
-    let current_dir = env::current_dir()?;
+// ─── Compile-Only command ───────────────────────────────────────────
 
+async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    println!("🦅 crow-code Compile-Only mode initializing...\n");
+
+    let cfg = CliConfig::from_env()?;
     let prompt = args.join(" ");
-    let api_key = env::var("OPENAI_API_KEY")
-        .or_else(|_| env::var("CROW_API_KEY"))
-        .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
-        
-    let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string());
-    let base_url = env::var("LLM_BASE_URL").ok();
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
-    let map_budget: usize = env::var("CROW_MAP_BUDGET").ok()
-        .and_then(|v| v.parse().ok()).unwrap_or(500 * 1024);
-    let walker = RepoWalker::new().with_max_bytes(map_budget);
-    let repo_map = walker.build_repo_map(&current_dir)?;
+    let repo_map = cfg.build_repo_map()?;
     println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
 
-    println!("\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...", model);
-    let full_prompt = format!(
-        "Context:\n{}\n\nTask:\n{}",
-        repo_map.map_text, prompt
-    );
+    println!("\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...", cfg.model);
+    let full_prompt = format!("Context:\n{}\n\nTask:\n{}", repo_map.map_text, prompt);
 
-    let max_tokens: u32 = env::var("LLM_MAX_TOKENS").ok()
-        .and_then(|v| v.parse().ok()).unwrap_or(2048);
-    let client = Box::new(ReqwestLlmClient::new(api_key, model, base_url)?.with_max_tokens(max_tokens));
+    let client = Box::new(cfg.build_llm_client()?);
     let compiler = IntentCompiler::new(client);
 
     match compiler.compile(&full_prompt).await {
@@ -146,67 +143,59 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
     }
 }
 
+// ─── Dry-Run command ────────────────────────────────────────────────
+
 async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     use crow_workspace::PlanHydrator;
 
-    println!("🦅 crow-code Sprint 2 Dry-Run mode initializing...\n");
-    let current_dir = env::current_dir()?;
+    println!("🦅 crow-code Dry-Run mode initializing...\n");
 
+    let cfg = CliConfig::from_env()?;
     let prompt = args.join(" ");
-    let api_key = env::var("OPENAI_API_KEY")
-        .or_else(|_| env::var("CROW_API_KEY"))
-        .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
-        
-    let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string());
-    let base_url = env::var("LLM_BASE_URL").ok();
 
-    println!("[1/6] Radaring Workspace: {}", current_dir.display());
-    let profile = scan_workspace(&current_dir)?;
+    println!("[1/6] Radaring Workspace: {}", cfg.workspace.display());
+    let profile = scan_workspace(&cfg.workspace)?;
     let candidate = match profile.verification_candidates.first() {
         Some(c) => c,
         None => return Err("No verification candidates found. Cannot dry-run without a verifier.".into()),
     };
 
     println!("\n[2/6] Gathering Repomap Context via tree-sitter...");
-    let map_budget: usize = env::var("CROW_MAP_BUDGET").ok()
-        .and_then(|v| v.parse().ok()).unwrap_or(500 * 1024);
-    let walker = RepoWalker::new().with_max_bytes(map_budget);
-    let repo_map = walker.build_repo_map(&current_dir)?;
+    let repo_map = cfg.build_repo_map()?;
     println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
 
-    println!("\n[3/6] Compiling IntentPlan via crow-brain (Model: {})...", model);
+    println!("\n[3/6] Compiling IntentPlan via crow-brain (Model: {})...", cfg.model);
     let full_prompt = format!(
         "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
         repo_map.map_text, prompt
     );
 
-    let max_tokens: u32 = env::var("LLM_MAX_TOKENS").ok()
-        .and_then(|v| v.parse().ok()).unwrap_or(2048);
-    let client = Box::new(ReqwestLlmClient::new(api_key, model, base_url)?.with_max_tokens(max_tokens));
+    let client = Box::new(cfg.build_llm_client()?);
     let compiler = IntentCompiler::new(client);
-    let compiled_plan = compiler.compile(&full_prompt).await.map_err(|e| format!("Compilation failed: {:?}", e))?;
+    let compiled_plan = compiler.compile(&full_prompt).await
+        .map_err(|e| format!("Compilation failed: {:?}", e))?;
 
     println!("\n[4/6] Hydrating IntentPlan (resolving real workspace preconditions)...");
-    let hydrated_plan = PlanHydrator::hydrate(&compiled_plan, &current_dir)
+    let hydrated_plan = PlanHydrator::hydrate(&compiled_plan, &cfg.workspace)
         .map_err(|e| format!("Hydration failed: {:?}", e))?;
 
     println!("    💧 Hydrated Plan:\n{}", serde_json::to_string_pretty(&hydrated_plan)?);
 
     println!("\n[5/6] Materializing O(1) Sandbox and Applying Plan...");
-    let config = MaterializeConfig {
-        source: current_dir.clone(),
+    let mat_config = MaterializeConfig {
+        source: cfg.workspace.clone(),
         artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
     };
-    let sandbox = materialize(&config)?;
-    
+    let sandbox = materialize(&mat_config)?;
+
     apply_plan_to_sandbox(&hydrated_plan, &sandbox)?;
     println!("    💉 Sandbox injection successful!");
 
-    // ── Diff output: compare source workspace to post-apply sandbox ──
+    // ── Diff output ──
     println!("\n--- Sandbox Diff (source → patched) ---");
-    print_diff(&current_dir, sandbox.path(), &hydrated_plan);
+    diff::render_plan_diff(&cfg.workspace, sandbox.path(), &hydrated_plan);
 
     println!("\n[6/6] Verifying Sandbox with '{}'...", candidate.command.display());
     let exec_config = ExecutionConfig {
@@ -227,64 +216,6 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     println!("╚══════════════════════════════════════╝");
     println!("Evidence:\n{}", result.test_run.truncated_log);
 
-    // Explicit drop just to clarify this is where the sandbox evaporates
     drop(sandbox);
-    
     Ok(())
-}
-
-/// Print a minimal unified diff for each file touched by the plan.
-fn print_diff(source_root: &std::path::Path, sandbox_root: &std::path::Path, plan: &IntentPlan) {
-    for op in &plan.operations {
-        match op {
-            EditOp::Create { path, .. } => {
-                let sandbox_file = sandbox_root.join(path.as_str());
-                if let Ok(content) = std::fs::read_to_string(&sandbox_file) {
-                    println!("diff --crow a/{f} b/{f}", f = path.as_str());
-                    println!("--- /dev/null");
-                    println!("+++ b/{}", path.as_str());
-                    for line in content.lines() {
-                        println!("+{}", line);
-                    }
-                }
-            }
-            EditOp::Modify { path, .. } => {
-                let source_file = source_root.join(path.as_str());
-                let sandbox_file = sandbox_root.join(path.as_str());
-                let old = std::fs::read_to_string(&source_file).unwrap_or_default();
-                let new = std::fs::read_to_string(&sandbox_file).unwrap_or_default();
-                if old != new {
-                    println!("diff --crow a/{f} b/{f}", f = path.as_str());
-                    println!("--- a/{}", path.as_str());
-                    println!("+++ b/{}", path.as_str());
-                    // Simple line-level diff
-                    let old_lines: Vec<&str> = old.lines().collect();
-                    let new_lines: Vec<&str> = new.lines().collect();
-                    for line in &old_lines {
-                        if !new_lines.contains(line) {
-                            println!("-{}", line);
-                        }
-                    }
-                    for line in &new_lines {
-                        if !old_lines.contains(line) {
-                            println!("+{}", line);
-                        }
-                    }
-                }
-            }
-            EditOp::Delete { path, .. } => {
-                println!("diff --crow a/{f} /dev/null", f = path.as_str());
-                println!("--- a/{}", path.as_str());
-                println!("+++ /dev/null");
-                if let Ok(content) = std::fs::read_to_string(source_root.join(path.as_str())) {
-                    for line in content.lines() {
-                        println!("-{}", line);
-                    }
-                }
-            }
-            EditOp::Rename { from, to, .. } => {
-                println!("rename {} => {}", from.as_str(), to.as_str());
-            }
-        }
-    }
 }

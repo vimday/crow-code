@@ -41,29 +41,7 @@ impl IntentCompiler {
     /// schema, it catches the parsing error and prompts the LLM to fix it,
     /// up to `max_retries` times.
     pub async fn compile(&self, base_task: &str) -> Result<IntentPlan, CompilerError> {
-        let schema_guide = r#"
-Expected JSON Schema for IntentPlan:
-{
-  "base_snapshot_id": "string",
-  "rationale": "string",
-  "is_partial": boolean,
-  "confidence": "High" | "Medium" | "Low" | "None",
-  "operations": [
-    {
-      "Create": { "path": "string", "content": "string", "precondition": "MustNotExist" }
-    },
-    {
-      "Modify": {
-        "path": "string",
-        "preconditions": { "content_hash": "string", "expected_line_count": null },
-        "hunks": [
-          { "original_start": 1, "remove_lines": ["old string"], "insert_lines": ["new string"] }
-        ]
-      }
-    }
-  ]
-}
-"#;
+        let schema_guide = crate::schema::intent_plan_schema();
 
         let base_prompt = format!(
             "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the IntentPlan schema.",
@@ -99,15 +77,13 @@ Expected JSON Schema for IntentPlan:
 /// Helper to strip ```json ... ``` wrappers from LLM output.
 fn extract_json_block(text: &str) -> &str {
     let trimmed = text.trim();
-    if trimmed.starts_with("```json") {
-        let after_fence = &trimmed["```json".len()..];
+    if let Some(after_fence) = trimmed.strip_prefix("```json") {
         if let Some(end) = after_fence.rfind("```") {
             return after_fence[..end].trim();
         }
     }
     // Fallback: strip generic markdown block if no language specifier
-    if trimmed.starts_with("```") {
-        let after_fence = &trimmed["```".len()..];
+    if let Some(after_fence) = trimmed.strip_prefix("```") {
         if let Some(end) = after_fence.rfind("```") {
             return after_fence[..end].trim();
         }

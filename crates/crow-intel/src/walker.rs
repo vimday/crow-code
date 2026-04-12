@@ -11,6 +11,12 @@ pub struct RepoWalker {
     max_bytes: usize,
 }
 
+impl Default for RepoWalker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RepoWalker {
     pub fn new() -> Self {
         Self {

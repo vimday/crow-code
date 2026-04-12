@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod compiler;
+pub mod schema;
 
 pub use client::ReqwestLlmClient;
 pub use compiler::{CompilerError, IntentCompiler, LlmClient};
