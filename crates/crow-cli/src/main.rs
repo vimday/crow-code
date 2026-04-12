@@ -112,9 +112,12 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
         .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
         
     let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string());
+    let base_url = env::var("LLM_BASE_URL").ok();
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
-    let walker = RepoWalker::new();
+    let map_budget: usize = env::var("CROW_MAP_BUDGET").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(500 * 1024);
+    let walker = RepoWalker::new().with_max_bytes(map_budget);
     let repo_map = walker.build_repo_map(&current_dir)?;
     println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
 
@@ -124,7 +127,9 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
         repo_map.map_text, prompt
     );
 
-    let client = Box::new(ReqwestLlmClient::new(api_key, model, None)?);
+    let max_tokens: u32 = env::var("LLM_MAX_TOKENS").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(2048);
+    let client = Box::new(ReqwestLlmClient::new(api_key, model, base_url)?.with_max_tokens(max_tokens));
     let compiler = IntentCompiler::new(client);
 
     match compiler.compile(&full_prompt).await {
@@ -153,6 +158,7 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
         
     let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string());
+    let base_url = env::var("LLM_BASE_URL").ok();
 
     println!("[1/6] Radaring Workspace: {}", current_dir.display());
     let profile = scan_workspace(&current_dir)?;
@@ -162,7 +168,9 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     };
 
     println!("\n[2/6] Gathering Repomap Context via tree-sitter...");
-    let walker = RepoWalker::new();
+    let map_budget: usize = env::var("CROW_MAP_BUDGET").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(500 * 1024);
+    let walker = RepoWalker::new().with_max_bytes(map_budget);
     let repo_map = walker.build_repo_map(&current_dir)?;
     println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
 
@@ -172,7 +180,9 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         repo_map.map_text, prompt
     );
 
-    let client = Box::new(ReqwestLlmClient::new(api_key, model, None)?);
+    let max_tokens: u32 = env::var("LLM_MAX_TOKENS").ok()
+        .and_then(|v| v.parse().ok()).unwrap_or(2048);
+    let client = Box::new(ReqwestLlmClient::new(api_key, model, base_url)?.with_max_tokens(max_tokens));
     let compiler = IntentCompiler::new(client);
     let compiled_plan = compiler.compile(&full_prompt).await.map_err(|e| format!("Compilation failed: {:?}", e))?;
 

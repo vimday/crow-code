@@ -9,6 +9,7 @@ pub struct ReqwestLlmClient {
     api_key: String,
     model: String,
     base_url: String,
+    max_tokens: u32,
 }
 
 impl ReqwestLlmClient {
@@ -32,7 +33,13 @@ impl ReqwestLlmClient {
             api_key,
             model,
             base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            max_tokens: 2048,
         })
+    }
+
+    pub fn with_max_tokens(mut self, max: u32) -> Self {
+        self.max_tokens = max;
+        self
     }
 }
 
@@ -41,21 +48,25 @@ impl LlmClient for ReqwestLlmClient {
     async fn generate(&self, prompt: &str) -> Result<String, String> {
         let url = format!("{}/chat/completions", self.base_url);
         
-        let body = json!({
+        let mut body = json!({
             "model": self.model,
+            "max_tokens": self.max_tokens,
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are the Intelligence Compiler. You must strictly output JSON matching the requested schema."
+                    "content": "You are the Intelligence Compiler. You must output ONLY valid JSON matching the requested schema. No markdown, no explanation, just pure JSON."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
-            ],
-            // Enforce explicit JSON mode for OpenAI
-            "response_format": { "type": "json_object" }
+            ]
         });
+
+        // Only inject response_format for providers known to support it
+        if self.base_url.contains("openai.com") {
+            body["response_format"] = json!({ "type": "json_object" });
+        }
 
         let resp = self.client
             .post(&url)
@@ -64,17 +75,20 @@ impl LlmClient for ReqwestLlmClient {
             .await
             .map_err(|e| format!("HTTP request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, text));
+        let status = resp.status();
+        let raw_text = resp.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+
+        if !status.is_success() {
+            return Err(format!("API error {}: {}", status, raw_text));
         }
 
-        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let trimmed = raw_text.trim();
+        let data: serde_json::Value = serde_json::from_str(trimmed)
+            .map_err(|e| format!("Failed to parse API response as JSON: {} — raw: {}", e, &trimmed[..trimmed.len().min(500)]))?;
         
         let content = data["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| "Missing or invalid response content".to_string())?;
+            .ok_or_else(|| format!("Missing content in response: {}", &trimmed[..trimmed.len().min(500)]))?;
 
         Ok(content.to_string())
     }
