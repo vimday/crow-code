@@ -1,5 +1,5 @@
 use crow_materialize::{materialize, MaterializeConfig};
-use crow_patch::{EditOp, FilePrecondition, IntentPlan, WorkspacePath, Confidence};
+use crow_patch::{Confidence, EditOp, FilePrecondition, IntentPlan, WorkspacePath};
 use crow_probe::scan_workspace;
 use crow_verifier::{types::AciConfig, ExecutionConfig};
 use crow_workspace::applier::apply_plan_to_sandbox;

@@ -8,3 +8,6 @@ license.workspace = true
 crow-materialize = { version = "0.1.0", path = "../crow-materialize" }
 crow-patch = { version = "0.1.0", path = "../crow-patch" }
 thiserror = "2.0.18"
+
+[dev-dependencies]
+tempfile = "3.27.0"
