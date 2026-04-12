@@ -1,4 +1,4 @@
-use crow_patch::{EditOp, FilePrecondition, IntentPlan, ConflictStrategy};
+use crow_patch::{ConflictStrategy, EditOp, FilePrecondition, IntentPlan};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -11,7 +11,9 @@ pub enum HydrationError {
 impl std::fmt::Display for HydrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HydrationError::IoError { path, reason } => write!(f, "Failed to hydrate {}: {}", path, reason),
+            HydrationError::IoError { path, reason } => {
+                write!(f, "Failed to hydrate {}: {}", path, reason)
+            }
         }
     }
 }
@@ -24,36 +26,49 @@ pub struct PlanHydrator;
 impl PlanHydrator {
     pub fn hydrate(plan: &IntentPlan, workspace_root: &Path) -> Result<IntentPlan, HydrationError> {
         let mut hydrated = plan.clone();
-        
+
         for op in &mut hydrated.operations {
             match op {
-                EditOp::Modify { path, preconditions, .. } => {
+                EditOp::Modify {
+                    path,
+                    preconditions,
+                    ..
+                } => {
                     let absolute_path = workspace_root.join(path.as_str());
-                    let (hash, lines) = Self::compute_file_state(&absolute_path)
-                        .map_err(|e| HydrationError::IoError { 
-                            path: path.as_str().to_string(), 
-                            reason: e 
-                        })?;
-                    
+                    let (hash, lines) = Self::compute_file_state(&absolute_path).map_err(|e| {
+                        HydrationError::IoError {
+                            path: path.as_str().to_string(),
+                            reason: e,
+                        }
+                    })?;
+
                     preconditions.content_hash = hash;
                     preconditions.expected_line_count = Some(lines);
                 }
                 EditOp::Delete { path, precondition } => {
                     let absolute_path = workspace_root.join(path.as_str());
-                    let (hash, _) = Self::compute_file_state(&absolute_path)
-                        .map_err(|e| HydrationError::IoError { 
-                            path: path.as_str().to_string(), 
-                            reason: e 
-                        })?;
+                    let (hash, _) = Self::compute_file_state(&absolute_path).map_err(|e| {
+                        HydrationError::IoError {
+                            path: path.as_str().to_string(),
+                            reason: e,
+                        }
+                    })?;
                     *precondition = FilePrecondition::MustExistWithHash(hash);
                 }
-                EditOp::Rename { from, to, on_conflict, source_precondition, dest_precondition } => {
+                EditOp::Rename {
+                    from,
+                    to,
+                    on_conflict,
+                    source_precondition,
+                    dest_precondition,
+                } => {
                     let absolute_source = workspace_root.join(from.as_str());
-                    let (hash, _) = Self::compute_file_state(&absolute_source)
-                        .map_err(|e| HydrationError::IoError { 
-                            path: from.as_str().to_string(), 
-                            reason: e 
-                        })?;
+                    let (hash, _) = Self::compute_file_state(&absolute_source).map_err(|e| {
+                        HydrationError::IoError {
+                            path: from.as_str().to_string(),
+                            reason: e,
+                        }
+                    })?;
                     *source_precondition = FilePrecondition::MustExistWithHash(hash);
 
                     if *on_conflict == ConflictStrategy::Fail {
@@ -63,10 +78,12 @@ impl PlanHydrator {
                         if absolute_dest.exists() {
                             // If it exists, hydrate its exact hash so we don't blindly overwrite
                             // a file that changed between compilation and application.
-                            let (hash, _) = Self::compute_file_state(&absolute_dest)
-                                .map_err(|e| HydrationError::IoError { 
-                                    path: to.as_str().to_string(), 
-                                    reason: e 
+                            let (hash, _) =
+                                Self::compute_file_state(&absolute_dest).map_err(|e| {
+                                    HydrationError::IoError {
+                                        path: to.as_str().to_string(),
+                                        reason: e,
+                                    }
                                 })?;
                             *dest_precondition = FilePrecondition::MustExistWithHash(hash);
                         } else {
@@ -88,11 +105,11 @@ impl PlanHydrator {
 
     fn compute_file_state(path: &Path) -> Result<(String, usize), String> {
         let content = fs::read(path).map_err(|e| e.to_string())?;
-        
+
         let mut hasher = Sha256::new();
         hasher.update(&content);
         let hash = hex::encode(hasher.finalize());
-        
+
         let lines = std::str::from_utf8(&content).unwrap_or("").lines().count();
 
         Ok((hash, lines))
@@ -102,7 +119,7 @@ impl PlanHydrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crow_patch::{WorkspacePath, Confidence, SnapshotId, PreconditionState};
+    use crow_patch::{Confidence, PreconditionState, SnapshotId, WorkspacePath};
     use tempfile::tempdir;
 
     fn make_plan(ops: Vec<EditOp>) -> IntentPlan {
@@ -177,7 +194,12 @@ mod tests {
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
 
-        if let EditOp::Rename { source_precondition, dest_precondition, .. } = &hydrated.operations[0] {
+        if let EditOp::Rename {
+            source_precondition,
+            dest_precondition,
+            ..
+        } = &hydrated.operations[0]
+        {
             // Source must be hydrated with real hash
             match source_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
@@ -200,13 +222,18 @@ mod tests {
             from: WorkspacePath::new("src.txt").unwrap(),
             to: WorkspacePath::new("dst.txt").unwrap(),
             on_conflict: ConflictStrategy::Overwrite,
-            source_precondition: FilePrecondition::MustExist,    // hallucinated
-            dest_precondition: FilePrecondition::MustNotExist,   // hallucinated — wrong!
+            source_precondition: FilePrecondition::MustExist, // hallucinated
+            dest_precondition: FilePrecondition::MustNotExist, // hallucinated — wrong!
         }]);
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
 
-        if let EditOp::Rename { source_precondition, dest_precondition, .. } = &hydrated.operations[0] {
+        if let EditOp::Rename {
+            source_precondition,
+            dest_precondition,
+            ..
+        } = &hydrated.operations[0]
+        {
             match source_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
                 other => panic!("Expected source hash, got {:?}", other),
@@ -237,7 +264,10 @@ mod tests {
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
 
-        if let EditOp::Rename { dest_precondition, .. } = &hydrated.operations[0] {
+        if let EditOp::Rename {
+            dest_precondition, ..
+        } = &hydrated.operations[0]
+        {
             assert_eq!(*dest_precondition, FilePrecondition::MustNotExist);
         } else {
             panic!("Expected Rename op");

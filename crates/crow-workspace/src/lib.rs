@@ -6,4 +6,4 @@
 pub mod applier;
 pub mod hydrator;
 
-pub use hydrator::{PlanHydrator, HydrationError};
+pub use hydrator::{HydrationError, PlanHydrator};

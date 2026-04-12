@@ -150,8 +150,37 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
     let mut sorted_hunks = hunks.to_vec();
     sorted_hunks.sort_by(|a, b| b.original_start.cmp(&a.original_start));
 
+    // Convert strings back into physical line arrays for precise manipulation
+    #[derive(Clone)]
+    struct ProcessedHunk<'a> {
+        original_start: usize,
+        remove_lines: Vec<&'a str>,
+        insert_lines: Vec<&'a str>,
+    }
+
+    let p_hunks: Vec<ProcessedHunk> = sorted_hunks
+        .iter()
+        .map(|h| {
+            ProcessedHunk {
+                original_start: h.original_start,
+                // Splitting by \n properly preserves empty internal lines.
+                // If the block is completely empty, it drops no lines.
+                remove_lines: if h.remove_block.is_empty() {
+                    vec![]
+                } else {
+                    h.remove_block.lines().collect()
+                },
+                insert_lines: if h.insert_block.is_empty() {
+                    vec![]
+                } else {
+                    h.insert_block.lines().collect()
+                },
+            }
+        })
+        .collect();
+
     // ── Structural validation ──────────────────────────────────
-    for (i, hunk) in sorted_hunks.iter().enumerate() {
+    for (i, hunk) in p_hunks.iter().enumerate() {
         if hunk.original_start == 0 {
             return Err(ApplyError::HunkConflict {
                 path: file_path.into(),
@@ -160,7 +189,7 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
             });
         }
         if i > 0 {
-            let bottom_hunk = &sorted_hunks[i - 1];
+            let bottom_hunk = &p_hunks[i - 1];
             let top_end = hunk.original_start + hunk.remove_lines.len();
             if top_end > bottom_hunk.original_start {
                 return Err(ApplyError::HunkConflict {
@@ -177,7 +206,7 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
 
     let max_drift: isize = 10;
 
-    for hunk in sorted_hunks {
+    for hunk in p_hunks {
         let expected_idx = (hunk.original_start as isize - 1).max(0);
         let target_len = hunk.remove_lines.len();
         let mut match_indices = Vec::new();
@@ -212,15 +241,11 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                 let start_idx = match_indices[0];
                 lines.splice(
                     start_idx..start_idx + target_len,
-                    hunk.insert_lines.iter().cloned(),
+                    hunk.insert_lines.iter().map(|s| s.to_string()),
                 );
             }
             0 => {
-                let context = hunk
-                    .remove_lines
-                    .first()
-                    .map(|s| s.trim_end())
-                    .unwrap_or("<empty>");
+                let context = hunk.remove_lines.first().copied().unwrap_or("<empty>");
                 return Err(ApplyError::HunkConflict {
                     path: file_path.into(),
                     line: hunk.original_start,
@@ -380,8 +405,8 @@ mod tests {
         let original = "line 1\nline 2\nline 3\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
-            remove_lines: vec![],
-            insert_lines: vec!["inserted".into()],
+            remove_block: "".into(),
+            insert_block: "inserted\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("inserted"));
@@ -395,8 +420,8 @@ mod tests {
         let original = "line 1\nline 2\nline 3\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
-            remove_lines: vec!["line 2".into()],
-            insert_lines: vec![],
+            remove_block: "line 2\n".into(),
+            insert_block: "".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(!result.contains("line 2"));
@@ -409,8 +434,8 @@ mod tests {
         let original = "fn old() {}\nfn keep() {}\n";
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["fn old() {}".into()],
-            insert_lines: vec!["fn new() {}".into()],
+            remove_block: "fn old() {}\n".into(),
+            insert_block: "fn new() {}\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("fn new() {}"));
@@ -423,8 +448,8 @@ mod tests {
         let original = "line 1\nline 2\n";
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["WRONG CONTEXT".into()],
-            insert_lines: vec!["new".into()],
+            remove_block: "WRONG CONTEXT\n".into(),
+            insert_block: "new\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
@@ -457,8 +482,8 @@ mod tests {
         let original = "line 1\nline 2\n";
         let hunks = vec![DiffHunk {
             original_start: 0,
-            remove_lines: vec![],
-            insert_lines: vec!["bad".into()],
+            remove_block: "".into(),
+            insert_block: "bad\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
@@ -472,13 +497,13 @@ mod tests {
         let hunks = vec![
             DiffHunk {
                 original_start: 1,
-                remove_lines: vec!["a".into(), "b".into()],
-                insert_lines: vec!["x".into()],
+                remove_block: "a\nb\n".into(),
+                insert_block: "x\n".into(),
             },
             DiffHunk {
                 original_start: 2, // overlaps: previous hunk covers lines 1-2
-                remove_lines: vec!["c".into()],
-                insert_lines: vec!["y".into()],
+                remove_block: "c\n".into(),
+                insert_block: "y\n".into(),
             },
         ];
         let result = apply_hunks(original, &hunks, "test.rs");
@@ -492,8 +517,8 @@ mod tests {
         let original = "line 1\nline 2"; // no trailing newline
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["line 1".into()],
-            insert_lines: vec!["replaced".into()],
+            remove_block: "line 1\n".into(),
+            insert_block: "replaced\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(!result.ends_with('\n'));
@@ -505,8 +530,8 @@ mod tests {
         let original = "line 1\nline 2\n"; // has trailing newline
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["line 1".into()],
-            insert_lines: vec!["replaced".into()],
+            remove_block: "line 1\n".into(),
+            insert_block: "replaced\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.ends_with('\n'));
@@ -518,8 +543,8 @@ mod tests {
         let original = "line 1\r\nline 2\r\nline 3\r\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
-            remove_lines: vec!["line 2".into()],
-            insert_lines: vec!["replaced".into()],
+            remove_block: "line 2\n".into(),
+            insert_block: "replaced\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         // Must preserve CRLF endings
@@ -534,8 +559,8 @@ mod tests {
         let original = "fn foo()   \nfn bar()\n";
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["fn foo()".into()], // no trailing spaces
-            insert_lines: vec!["fn baz()".into()],
+            remove_block: "fn foo()\n".into(), // no trailing spaces
+            insert_block: "fn baz()\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("fn baz()"));
@@ -547,8 +572,8 @@ mod tests {
         let original = "line 1\nline 2\nline 3\nline 4\nunique target\nline 6\n";
         let hunks = vec![DiffHunk {
             original_start: 3, // true line is 5, but within ±10 drift
-            remove_lines: vec!["unique target".into()],
-            insert_lines: vec!["patched target".into()],
+            remove_block: "unique target\n".into(),
+            insert_block: "patched target\n".into(),
         }];
 
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
@@ -561,8 +586,8 @@ mod tests {
         let original = "line 1\nrepeated target\nline 3\nline 4\nrepeated target\nline 6\n";
         let hunks = vec![DiffHunk {
             original_start: 3,
-            remove_lines: vec!["repeated target".into()],
-            insert_lines: vec!["patched target".into()],
+            remove_block: "repeated target\n".into(),
+            insert_block: "patched target\n".into(),
         }];
 
         let result = apply_hunks(original, &hunks, "test.rs");

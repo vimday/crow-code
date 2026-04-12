@@ -1,6 +1,6 @@
 use crate::LlmClient;
 use async_trait::async_trait;
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde_json::json;
 
 // ─── Provider Capabilities ──────────────────────────────────────────
@@ -81,7 +81,7 @@ impl ReqwestLlmClient {
 impl LlmClient for ReqwestLlmClient {
     async fn generate(&self, prompt: &str) -> Result<String, String> {
         let url = format!("{}/chat/completions", self.base_url);
-        
+
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -101,7 +101,8 @@ impl LlmClient for ReqwestLlmClient {
             body["response_format"] = json!({ "type": "json_object" });
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -109,19 +110,32 @@ impl LlmClient for ReqwestLlmClient {
             .map_err(|e| format!("HTTP request failed: {}", e))?;
 
         let status = resp.status();
-        let raw_text = resp.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+        let raw_text = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
 
         if !status.is_success() {
             return Err(format!("API error {}: {}", status, raw_text));
         }
 
         let trimmed = raw_text.trim();
-        let data: serde_json::Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Failed to parse API response as JSON: {} — raw: {}", e, &trimmed[..trimmed.len().min(500)]))?;
-        
+        let data: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+            format!(
+                "Failed to parse API response as JSON: {} — raw: {}",
+                e,
+                &trimmed[..trimmed.len().min(500)]
+            )
+        })?;
+
         let content = data["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| format!("Missing content in response: {}", &trimmed[..trimmed.len().min(500)]))?;
+            .ok_or_else(|| {
+                format!(
+                    "Missing content in response: {}",
+                    &trimmed[..trimmed.len().min(500)]
+                )
+            })?;
 
         Ok(content.to_string())
     }

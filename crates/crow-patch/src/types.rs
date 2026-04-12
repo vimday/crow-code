@@ -123,10 +123,25 @@ pub enum FilePrecondition {
 pub struct DiffHunk {
     /// 1-based start line in the original file.
     pub original_start: usize,
-    /// Lines to remove (empty = pure insertion).
-    pub remove_lines: Vec<String>,
-    /// Lines to insert (empty = pure deletion).
-    pub insert_lines: Vec<String>,
+    /// Lines to remove, as a single multi-line string (empty = pure insertion).
+    pub remove_block: String,
+    /// Lines to insert, as a single multi-line string (empty = pure deletion).
+    pub insert_block: String,
+}
+
+// ─── Agent Action ───────────────────────────────────────────────────
+
+/// An action the agent can take. Wraps either an intent plan or a read request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action")]
+pub enum AgentAction {
+    #[serde(rename = "read_files")]
+    ReadFiles {
+        paths: Vec<WorkspacePath>,
+        rationale: String,
+    },
+    #[serde(rename = "submit_plan")]
+    SubmitPlan { plan: IntentPlan },
 }
 
 // ─── Edit Operations ────────────────────────────────────────────────
@@ -240,21 +255,21 @@ mod tests {
     fn pure_insertion_hunk() {
         let h = DiffHunk {
             original_start: 10,
-            remove_lines: vec![],
-            insert_lines: vec!["// new comment".into()],
+            remove_block: "".into(),
+            insert_block: "// new comment\n".into(),
         };
-        assert!(h.remove_lines.is_empty());
-        assert_eq!(h.insert_lines.len(), 1);
+        assert!(h.remove_block.is_empty());
+        assert!(!h.insert_block.is_empty());
     }
 
     #[test]
     fn pure_deletion_hunk() {
         let h = DiffHunk {
             original_start: 5,
-            remove_lines: vec!["old line".into()],
-            insert_lines: vec![],
+            remove_block: "old line\n".into(),
+            insert_block: "".into(),
         };
-        assert!(h.insert_lines.is_empty());
+        assert!(h.insert_block.is_empty());
     }
 
     // --- IntentPlan construction ---
@@ -274,8 +289,8 @@ mod tests {
                 },
                 hunks: vec![DiffHunk {
                     original_start: 3,
-                    remove_lines: vec!["teh".into()],
-                    insert_lines: vec!["the".into()],
+                    remove_block: "teh\n".into(),
+                    insert_block: "the\n".into(),
                 }],
             }],
         };
@@ -320,8 +335,8 @@ mod tests {
                     },
                     hunks: vec![DiffHunk {
                         original_start: 1,
-                        remove_lines: vec!["mod old;".into()],
-                        insert_lines: vec!["mod new;".into()],
+                        remove_block: "mod old;\n".into(),
+                        insert_block: "mod new;\n".into(),
                     }],
                 },
             ],

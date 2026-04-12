@@ -1,5 +1,5 @@
 use std::path::Path;
-use tree_sitter::{Language, Parser, Node};
+use tree_sitter::{Language, Node, Parser};
 
 pub enum SupportedLanguage {
     Rust,
@@ -43,14 +43,16 @@ impl ASTProcessor {
     /// If the language is unsupported, it currently just returns the original source.
     pub fn generate_skeleton(&self, source: &str, path: &Path) -> Result<String, String> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        
+
         let lang = match SupportedLanguage::from_extension(ext) {
             Some(l) => l,
             None => return Ok(source.to_string()),
         };
 
         let mut parser = Parser::new();
-        parser.set_language(&lang.tree_sitter_lang()).map_err(|e| e.to_string())?;
+        parser
+            .set_language(&lang.tree_sitter_lang())
+            .map_err(|e| e.to_string())?;
 
         let tree = parser.parse(source, None).ok_or("Failed to parse AST")?;
         let root = tree.root_node();
@@ -82,7 +84,7 @@ impl ASTProcessor {
 
     fn collect_body_spans(node: Node<'_>, spans: &mut Vec<(usize, usize)>) {
         let kind = node.kind();
-        
+
         // Check if this node is a block that implements a function body
         let is_target_block = match kind {
             "block" => {
@@ -92,7 +94,10 @@ impl ASTProcessor {
             "statement_block" => {
                 // TS/JS: parent is function_declaration, method_definition, arrow_function, etc.
                 node.parent().is_some_and(|p| {
-                    matches!(p.kind(), "function_declaration" | "method_definition" | "arrow_function")
+                    matches!(
+                        p.kind(),
+                        "function_declaration" | "method_definition" | "arrow_function"
+                    )
                 })
             }
             _ => false,

@@ -1,6 +1,5 @@
-use crow_patch::IntentPlan;
-use serde_json::Error as SerdeError;
 use async_trait::async_trait;
+use serde_json::Error as SerdeError;
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -36,28 +35,34 @@ impl IntentCompiler {
         self
     }
 
-    /// Compiles a task directive into a strict `IntentPlan`.
-    /// Employs a self-healing loop: if the LLM output violates the `IntentPlan`
-    /// schema, it catches the parsing error and prompts the LLM to fix it,
-    /// up to `max_retries` times.
-    pub async fn compile(&self, base_task: &str) -> Result<IntentPlan, CompilerError> {
+    /// Compiles a task directive into a strict `AgentAction`.
+    /// Employs a self-healing loop: if the LLM output violates the schema,
+    /// it catches the parsing error and prompts the LLM to fix it.
+    pub async fn compile_action(
+        &self,
+        base_task: &str,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
 
         let base_prompt = format!(
-            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the IntentPlan schema.",
+            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the AgentAction schema.",
             base_task, schema_guide
         );
-        
+
         let mut current_prompt = base_prompt.clone();
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
-            let response = self.client.generate(&current_prompt).await.map_err(CompilerError::PromptFailed)?;
-            
+            let response = self
+                .client
+                .generate(&current_prompt)
+                .await
+                .map_err(CompilerError::PromptFailed)?;
+
             // Try to parse the json directly (using a liberal extraction if the model wrapped it in markdown)
             let cleaned_json = extract_json_block(&response);
 
-            match serde_json::from_str::<IntentPlan>(cleaned_json) {
+            match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
                 Ok(plan) => return Ok(plan),
                 Err(e) => {
                     // Self-healing: capture the exact Serde error but retain original task
@@ -114,18 +119,22 @@ mod tests {
 
     fn valid_plan_json() -> String {
         r#"{
-            "base_snapshot_id": "snap-1",
-            "rationale": "mock",
-            "is_partial": false,
-            "confidence": "High",
-            "operations": [{
-                "Create": {
-                    "path": "test.txt",
-                    "content": "hello",
-                    "precondition": "MustNotExist"
-                }
-            }]
-        }"#.into()
+            "action": "submit_plan",
+            "plan": {
+                "base_snapshot_id": "snap-1",
+                "rationale": "mock",
+                "is_partial": false,
+                "confidence": "High",
+                "operations": [{
+                    "Create": {
+                        "path": "test.txt",
+                        "content": "hello",
+                        "precondition": "MustNotExist"
+                    }
+                }]
+            }
+        }"#
+        .into()
     }
 
     #[tokio::test]
@@ -135,15 +144,22 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("do something").await.expect("compile should succeed");
-        assert_eq!(plan.rationale, "mock");
+        let action = compiler
+            .compile_action("do something")
+            .await
+            .expect("compile should succeed");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 
     #[tokio::test]
     async fn compiler_self_heals_on_serde_error() {
         // First response misses a comma or is junk
         let bad_json = r#"{ "invalid": yes }"#.into();
-        
+
         let client = Box::new(MockLlm {
             // First response is bad_json, forcing the loop to catch Err and retry
             // The second response is valid_plan_json, so the loop succeeds.
@@ -151,22 +167,32 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("fix bug").await.expect("compile should heal and succeed");
-        assert_eq!(plan.rationale, "mock");
+        let action = compiler
+            .compile_action("fix bug")
+            .await
+            .expect("compile should heal and succeed");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 
     #[tokio::test]
     async fn compiler_fails_after_max_retries() {
         let bad_json = String::from(r#"{ "still_bad": true }"#);
-        
+
         let client = Box::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![
-                bad_json.clone(), bad_json.clone(), bad_json.clone(), bad_json.clone()
+                bad_json.clone(),
+                bad_json.clone(),
+                bad_json.clone(),
+                bad_json.clone(),
             ])),
         });
         let compiler = IntentCompiler::new(client).with_max_retries(2);
 
-        let err = compiler.compile("do things").await.unwrap_err();
+        let err = compiler.compile_action("do things").await.unwrap_err();
         match err {
             CompilerError::MaxRetriesExceeded(errors) => {
                 assert_eq!(errors.len(), 3); // initial + 2 retries
@@ -206,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn compiler_handles_provider_leading_newline_in_content() {
         // Simulates what OpenRouter/DeepInfra actually returns:
-        // content field starts with "\n" before the JSON 
+        // content field starts with "\n" before the JSON
         let with_newline = format!("\n{}", valid_plan_json());
 
         let client = Box::new(MockLlm {
@@ -214,9 +240,15 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("create something").await
+        let action = compiler
+            .compile_action("create something")
+            .await
             .expect("Leading newline in content should not break parsing");
-        assert_eq!(plan.rationale, "mock");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 
     #[tokio::test]
@@ -228,8 +260,14 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("create something").await
+        let action = compiler
+            .compile_action("create something")
+            .await
             .expect("Markdown-wrapped JSON should be extracted and parsed");
-        assert_eq!(plan.rationale, "mock");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 }

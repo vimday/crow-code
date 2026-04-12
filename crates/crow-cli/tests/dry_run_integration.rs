@@ -3,12 +3,11 @@
 //! instead of calling the real LLM. This proves the physical loop
 //! is wired correctly end-to-end without requiring network access.
 
-use crow_probe::types::VerificationCommand;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::{
-    Confidence, EditOp, FilePrecondition, IntentPlan, PreconditionState,
-    SnapshotId, WorkspacePath,
+    Confidence, EditOp, FilePrecondition, IntentPlan, PreconditionState, SnapshotId, WorkspacePath,
 };
+use crow_probe::types::VerificationCommand;
 use crow_verifier::{types::AciConfig, ExecutionConfig};
 use crow_workspace::applier::apply_plan_to_sandbox;
 use crow_workspace::PlanHydrator;
@@ -67,16 +66,7 @@ fn synthetic_create_plan_passes_verification() {
         }],
     };
 
-    // ── 2. Hydrate ──
-    let hydrated = PlanHydrator::hydrate(&plan, workspace.path())
-        .expect("Hydration of a Create op should not fail");
-
-    // Create precondition should still be MustNotExist after hydration
-    if let EditOp::Create { precondition, .. } = &hydrated.operations[0] {
-        assert_eq!(*precondition, FilePrecondition::MustNotExist);
-    }
-
-    // ── 3. Materialize sandbox ──
+    // ── 2. Materialize sandbox (Freeze Time) ──
     let config = MaterializeConfig {
         source: workspace.path().to_path_buf(),
         artifact_dirs: vec!["target".into()],
@@ -85,12 +75,24 @@ fn synthetic_create_plan_passes_verification() {
     };
     let sandbox = materialize(&config).expect("Materialization should succeed");
 
+    // ── 3. Hydrate against sandbox ──
+    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path())
+        .expect("Hydration of a Create op should not fail");
+
+    // Create precondition should still be MustNotExist after hydration
+    if let EditOp::Create { precondition, .. } = &hydrated.operations[0] {
+        assert_eq!(*precondition, FilePrecondition::MustNotExist);
+    }
+
     // ── 4. Apply ──
     apply_plan_to_sandbox(&hydrated, &sandbox).expect("Apply should succeed");
 
     // Verify the file exists in the sandbox
     let marker_in_sandbox = sandbox.path().join("MARKER.txt");
-    assert!(marker_in_sandbox.exists(), "MARKER.txt should exist in sandbox");
+    assert!(
+        marker_in_sandbox.exists(),
+        "MARKER.txt should exist in sandbox"
+    );
     assert_eq!(
         fs::read_to_string(&marker_in_sandbox).unwrap(),
         "Created by integration test.\n"
@@ -144,15 +146,23 @@ fn synthetic_modify_plan_hydrates_and_applies() {
             },
             hunks: vec![crow_patch::DiffHunk {
                 original_start: 2,
-                remove_lines: vec!["    \"hello\"".into()],
-                insert_lines: vec!["    \"world\"".into()],
+                remove_block: "    \"hello\"\n".into(),
+                insert_block: "    \"world\"\n".into(),
             }],
         }],
     };
 
-    // ── 2. Hydrate: hash and line count must be replaced ──
-    let hydrated = PlanHydrator::hydrate(&plan, workspace.path())
-        .expect("Hydration should succeed");
+    // ── 2. Materialize sandbox (Freeze Time) ──
+    let config = MaterializeConfig {
+        source: workspace.path().to_path_buf(),
+        artifact_dirs: vec!["target".into()],
+        skip_patterns: vec![],
+        allow_hardlinks: false,
+    };
+    let sandbox = materialize(&config).unwrap();
+
+    // ── 3. Hydrate against sandbox ──
+    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path()).expect("Hydration should succeed");
 
     if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
         assert_ne!(preconditions.content_hash, "will-be-replaced-by-hydrator");
@@ -161,28 +171,31 @@ fn synthetic_modify_plan_hydrates_and_applies() {
         panic!("Expected Modify op");
     }
 
-    // ── 3. Materialize + Apply ──
-    let config = MaterializeConfig {
-        source: workspace.path().to_path_buf(),
-        artifact_dirs: vec!["target".into()],
-        skip_patterns: vec![],
-        allow_hardlinks: false,
-    };
-    let sandbox = materialize(&config).unwrap();
+    // ── 4. Apply ──
     apply_plan_to_sandbox(&hydrated, &sandbox).expect("Apply should succeed");
 
     // Verify the modification happened in the sandbox
     let modified = fs::read_to_string(sandbox.path().join("src/lib.rs")).unwrap();
-    assert!(modified.contains("\"world\""), "Sandbox should have the patched text");
+    assert!(
+        modified.contains("\"world\""),
+        "Sandbox should have the patched text"
+    );
     // The function body should return "world" now, not "hello".
     // Note: "hello" still appears in the test assertion line — that's expected.
-    let fn_body: String = modified.lines()
+    let fn_body: String = modified
+        .lines()
         .take_while(|l| !l.contains("#[cfg(test)]"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!fn_body.contains("\"hello\""), "Function body should no longer contain the old return value");
+    assert!(
+        !fn_body.contains("\"hello\""),
+        "Function body should no longer contain the old return value"
+    );
 
     // Verify original workspace is untouched (zero pollution)
     let original = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
-    assert!(original.contains("\"hello\""), "Original workspace must remain untouched");
+    assert!(
+        original.contains("\"hello\""),
+        "Original workspace must remain untouched"
+    );
 }
