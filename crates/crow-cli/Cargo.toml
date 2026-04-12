@@ -14,3 +14,8 @@ crow-patch = { version = "0.1.0", path = "../crow-patch" }
 crow-probe = { version = "0.1.0", path = "../crow-probe" }
 crow-verifier = { version = "0.1.0", path = "../crow-verifier" }
 crow-workspace = { version = "0.1.0", path = "../crow-workspace" }
+
+[dev-dependencies]
+assert_cmd = "2.2.0"
+predicates = "3.1.4"
+tempfile = "3.27.0"

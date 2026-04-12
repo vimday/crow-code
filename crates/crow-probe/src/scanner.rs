@@ -162,4 +162,37 @@ mod tests {
         assert_eq!(profile.primary_lang.tier, LanguageTier::Tier3);
         assert!(profile.verification_candidates.is_empty());
     }
+
+    #[test]
+    fn gitignore_negation_rules_are_filtered_out() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".gitignore"),
+            "target/\n# keep this file\n!important.rs\n*.log\n",
+        )
+        .unwrap();
+
+        let profile = scan_workspace(dir.path()).unwrap();
+        let patterns = &profile.ignore_spec.ignore_patterns;
+        // Positive patterns should be included
+        assert!(patterns.contains(&"target/".to_string()));
+        assert!(patterns.contains(&"*.log".to_string()));
+        // Negation rules must NOT leak through — globset can't represent them
+        assert!(
+            !patterns.iter().any(|p| p.starts_with('!')),
+            "negation rules should be filtered: {:?}",
+            patterns
+        );
+        // Comments must also be excluded
+        assert!(
+            !patterns.iter().any(|p| p.starts_with('#')),
+            "comments should be filtered: {:?}",
+            patterns
+        );
+    }
 }
