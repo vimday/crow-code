@@ -41,11 +41,36 @@ impl IntentCompiler {
     /// schema, it catches the parsing error and prompts the LLM to fix it,
     /// up to `max_retries` times.
     pub async fn compile(&self, base_task: &str) -> Result<IntentPlan, CompilerError> {
-        let mut current_prompt = format!(
-            "Task:\n{}\n\nOutput ONLY a valid JSON object matching the IntentPlan schema.",
-            base_task
+        let schema_guide = r#"
+Expected JSON Schema for IntentPlan:
+{
+  "base_snapshot_id": "string",
+  "rationale": "string",
+  "is_partial": boolean,
+  "confidence": "High" | "Medium" | "Low" | "None",
+  "operations": [
+    {
+      "Create": { "path": "string", "content": "string", "precondition": "MustNotExist" }
+    },
+    {
+      "Modify": {
+        "path": "string",
+        "preconditions": { "content_hash": "string", "expected_line_count": null },
+        "hunks": [
+          { "original_start": 1, "remove_lines": ["old string"], "insert_lines": ["new string"] }
+        ]
+      }
+    }
+  ]
+}
+"#;
+
+        let base_prompt = format!(
+            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the IntentPlan schema.",
+            base_task, schema_guide
         );
         
+        let mut current_prompt = base_prompt.clone();
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
@@ -57,10 +82,10 @@ impl IntentCompiler {
             match serde_json::from_str::<IntentPlan>(cleaned_json) {
                 Ok(plan) => return Ok(plan),
                 Err(e) => {
-                    // Self-healing: capture the exact Serde error
+                    // Self-healing: capture the exact Serde error but retain original task
                     current_prompt = format!(
-                        "Your previous JSON output was invalid.\n\nError:\n{}\n\nPrevious Output:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
-                        e, cleaned_json
+                        "{}\n\n[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPrevious Output:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
+                        base_prompt, e, cleaned_json
                     );
                     errors.push(e);
                 }

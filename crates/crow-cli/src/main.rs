@@ -105,7 +105,7 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
     let prompt = args.join(" ");
     let api_key = env::var("OPENAI_API_KEY")
         .or_else(|_| env::var("CROW_API_KEY"))
-        .unwrap_or_else(|_| "DUMMY_KEY".to_string());
+        .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
         
     let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string());
 

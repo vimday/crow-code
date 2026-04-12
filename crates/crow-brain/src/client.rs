@@ -5,6 +5,7 @@ use serde_json::json;
 
 pub struct ReqwestLlmClient {
     client: Client,
+    #[allow(dead_code)]
     api_key: String,
     model: String,
     base_url: String,
@@ -50,8 +51,8 @@ impl LlmClient for ReqwestLlmClient {
                     "content": prompt
                 }
             ],
-            // For OpenAI compatible endpoints supporting explicit JSON mode:
-            // "response_format": { "type": "json_object" }
+            // Enforce explicit JSON mode for OpenAI
+            "response_format": { "type": "json_object" }
         });
 
         let resp = self.client
