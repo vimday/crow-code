@@ -50,7 +50,7 @@ code review discipline.
 
 ### The Crucible & Runtime
 - `crow-workspace`: Event-sourcing log and VFS snapshot state machine.
-- `crow-materialize`: OS-level physical copy isolation (CoW / symlink fallback) to clone environments safely.
+- `crow-materialize`: Workspace-isolation physical copy engine (CoW / safe-copy fallback) to clone environments safely.
 - `crow-verifier`: Workspace-isolated command executor that truncates standard outputs (ACI Log Pruning) cleanly.
 
 ### Intelligence & Control

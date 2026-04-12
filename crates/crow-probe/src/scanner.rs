@@ -2,8 +2,12 @@ use crate::types::*;
 use std::fs;
 use std::path::Path;
 
-/// Heuristically scans a workspace root to discover the primary language,
+/// Heuristically scans a workspace root to discover languages,
 /// artifacts, and candidate verification commands.
+///
+/// Polyglot repos (e.g. Cargo.toml + package.json) emit candidates
+/// for every detected toolchain. The primary language is set to the
+/// highest-tier detection, with Rust > Node/TS > unknown.
 pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
     let mut candidates = Vec::new();
     let mut artifact_dirs = Vec::new();
@@ -27,17 +31,21 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
             evidence_source: "Cargo.toml".into(),
         });
     }
-    // 2. Node.js / TS
-    else if root.join("package.json").exists() {
+
+    // 2. Node.js / TS — independent check, not mutually exclusive
+    if root.join("package.json").exists() {
         let is_ts = root.join("tsconfig.json").exists();
-        primary_lang = DetectedLanguage {
-            name: if is_ts {
-                "typescript".into()
-            } else {
-                "javascript".into()
-            },
-            tier: LanguageTier::Tier2,
-        };
+        // Only promote primary_lang if nothing higher-tier was detected
+        if primary_lang.tier > LanguageTier::Tier2 {
+            primary_lang = DetectedLanguage {
+                name: if is_ts {
+                    "typescript".into()
+                } else {
+                    "javascript".into()
+                },
+                tier: LanguageTier::Tier2,
+            };
+        }
         artifact_dirs.push("node_modules".into());
         artifact_dirs.push("dist".into());
         candidates.push(VerificationCandidate {
@@ -48,13 +56,19 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
         });
     }
 
-    // 3. Extract .gitignore
+    // 3. Extract .gitignore (filter out negation rules and comments
+    //    that globset cannot represent — logs a silent skip for now)
     if let Ok(content) = fs::read_to_string(root.join(".gitignore")) {
         for line in content
             .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
         {
+            // Skip negation/re-inclusion rules (e.g. "!keep.rs")
+            // that have no equivalent in globset semantics.
+            if line.starts_with('!') {
+                continue;
+            }
             ignore_patterns.push(line.to_string());
         }
     }

@@ -135,12 +135,53 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
         return Ok(original.to_string());
     }
 
+    // ── Structural validation ──────────────────────────────────
+    // Model output is untrusted; reject malformed hunk sequences
+    // before any mutation rather than panicking on bad arithmetic.
+    for (i, hunk) in hunks.iter().enumerate() {
+        if hunk.original_start == 0 {
+            return Err(ApplyError::HunkConflict {
+                path: file_path.into(),
+                line: 0,
+                reason: "original_start must be 1-based, got 0".into(),
+            });
+        }
+        if i > 0 {
+            let prev = &hunks[i - 1];
+            let prev_end = prev.original_start + prev.remove_lines.len();
+            if hunk.original_start < prev_end {
+                return Err(ApplyError::HunkConflict {
+                    path: file_path.into(),
+                    line: hunk.original_start,
+                    reason: format!(
+                        "hunks must be sorted ascending and non-overlapping; \
+                         hunk at line {} overlaps previous hunk ending at line {}",
+                        hunk.original_start, prev_end
+                    ),
+                });
+            }
+        }
+    }
+
     let trailing_newline = original.ends_with('\n');
     let mut lines: Vec<String> = original.lines().map(String::from).collect();
     let mut offset: isize = 0;
 
     for hunk in hunks {
-        let start = (hunk.original_start as isize - 1 + offset) as usize;
+        // Guard against negative offset underflow producing a huge usize
+        let adjusted = hunk.original_start as isize - 1 + offset;
+        if adjusted < 0 || adjusted as usize > lines.len() {
+            return Err(ApplyError::HunkConflict {
+                path: file_path.into(),
+                line: hunk.original_start,
+                reason: format!(
+                    "adjusted start {} is out of bounds (file has {} lines after prior edits)",
+                    adjusted,
+                    lines.len()
+                ),
+            });
+        }
+        let start = adjusted as usize;
 
         // Verify that the lines to remove actually match the file content
         for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
@@ -384,5 +425,66 @@ mod tests {
         let abs = dir.path().join("ghost.rs");
         let err = verify_file_precondition(&abs, &FilePrecondition::MustExist);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn apply_hunks_rejects_zero_based_start() {
+        let original = "line 1\nline 2\n";
+        let hunks = vec![DiffHunk {
+            original_start: 0,
+            remove_lines: vec![],
+            insert_lines: vec!["bad".into()],
+        }];
+        let result = apply_hunks(original, &hunks, "test.rs");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("1-based"), "got: {}", msg);
+    }
+
+    #[test]
+    fn apply_hunks_rejects_overlapping() {
+        let original = "a\nb\nc\nd\n";
+        let hunks = vec![
+            DiffHunk {
+                original_start: 1,
+                remove_lines: vec!["a".into(), "b".into()],
+                insert_lines: vec!["x".into()],
+            },
+            DiffHunk {
+                original_start: 2, // overlaps: previous hunk covers lines 1-2
+                remove_lines: vec!["c".into()],
+                insert_lines: vec!["y".into()],
+            },
+        ];
+        let result = apply_hunks(original, &hunks, "test.rs");
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("overlaps"), "got: {}", msg);
+    }
+
+    #[test]
+    fn apply_hunks_preserves_no_trailing_newline() {
+        let original = "line 1\nline 2"; // no trailing newline
+        let hunks = vec![DiffHunk {
+            original_start: 1,
+            remove_lines: vec!["line 1".into()],
+            insert_lines: vec!["replaced".into()],
+        }];
+        let result = apply_hunks(original, &hunks, "test.rs").unwrap();
+        assert!(!result.ends_with('\n'));
+        assert!(result.contains("replaced"));
+    }
+
+    #[test]
+    fn apply_hunks_preserves_trailing_newline() {
+        let original = "line 1\nline 2\n"; // has trailing newline
+        let hunks = vec![DiffHunk {
+            original_start: 1,
+            remove_lines: vec!["line 1".into()],
+            insert_lines: vec!["replaced".into()],
+        }];
+        let result = apply_hunks(original, &hunks, "test.rs").unwrap();
+        assert!(result.ends_with('\n'));
+        assert!(result.contains("replaced"));
     }
 }

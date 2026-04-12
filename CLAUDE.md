@@ -27,7 +27,7 @@ Layer 0 — Currencies (zero inter-deps, zero external deps)
 
 Layer 1 — Runtime
   crow-workspace   Event-sourcing log & snapshot state machine
-  crow-materialize OS-level sandbox materialization (CoW / symlink)
+  crow-materialize Workspace-isolation materialization (CoW / copy)
 
 Layer 2 — Crucible
   crow-verifier    Workspace-isolated command execution & ACI log truncation
@@ -85,6 +85,6 @@ cargo build -p crow-cli
 
 - **Step 1** ✅ Workspace genesis — 10 crates, `cargo check` green.
 - **Step 2** ✅ Core data contracts — `crow-patch` (12 tests), `crow-evidence` (10 tests), `crow-probe` (7 tests).
-- **Step 3** ✅ `crow-materialize` — OS-level physical materialization (20 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
+- **Step 3** ✅ `crow-materialize` — Workspace-isolation physical materialization (20 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
 - **Step 4** ✅ `crow-verifier` — Workspace-isolated execution + ACI log truncation (20 tests). Direct exec (no shell), head+tail truncation, VerificationResult → EvidenceMatrix.
-- **Step 5** 🔲 `crow-probe` — Detection heuristics implementation.
+- **Step 5** ✅ `crow-probe` scanner, `crow-workspace` applier, `crow-cli` God Pipeline.

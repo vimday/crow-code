@@ -58,9 +58,9 @@ cargo run -p crow-cli
 |------|-------------|--------|
 | 1 | Workspace genesis (10 crates) | ✅ |
 | 2 | Core data contracts (23 tests) | ✅ |
-| 3 | OS-level physical materialization | ✅ |
+| 3 | Workspace-isolation materialization | ✅ |
 | 4 | ACI log truncation & bounded exec | ✅ |
-| 5 | Project probe heuristics | 🔲 |
+| 5 | Probe + Applier + God Pipeline | ✅ |
 
 ## Crate Overview
 
@@ -70,7 +70,7 @@ cargo run -p crow-cli
 | `crow-evidence` | L0 | Multidimensional verification: `EvidenceMatrix`, `TestRun`, `RiskFlag` |
 | `crow-probe` | L0 | Repository radar: `ProjectProfile`, `VerificationCandidate` |
 | `crow-workspace` | L1 | Event-sourcing log and snapshot state machine |
-| `crow-materialize` | L1 | OS-level CoW/symlink workspace isolation |
+| `crow-materialize` | L1 | Workspace-isolation CoW/copy materialization |
 | `crow-verifier` | L2 | Workspace-isolated command execution, log truncation |
 | `crow-intel` | L3 | Tree-sitter outlines, LSP bridge |
 | `crow-brain` | L4 | Intent compiler, budget governor, MCTS |

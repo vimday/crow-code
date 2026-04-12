@@ -17,10 +17,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         profile.primary_lang.name, profile.primary_lang.tier
     );
 
-    let candidate = profile
-        .verification_candidates
-        .first()
-        .expect("No verification candidates found!");
+    let candidate = match profile.verification_candidates.first() {
+        Some(c) => c,
+        None => {
+            println!("    ⚠️  No verification candidates found for this workspace.");
+            println!("    Outcome: NoVerifierAvailable");
+            println!("\n[✓] Probe complete. No verification surface discovered.");
+            return Ok(());
+        }
+    };
     println!(
         "    ⚔️  Target Candidate: {} [confidence: {:?}]",
         candidate.command.display(),
