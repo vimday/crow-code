@@ -105,37 +105,142 @@ mod tests {
     use crow_patch::{WorkspacePath, Confidence, SnapshotId, PreconditionState};
     use tempfile::tempdir;
 
-    #[test]
-    fn hydrates_modify_op_correctly() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test.rs");
-        let content = "line 1\nline 2\nline3\n";
-        fs::write(&file_path, content).unwrap();
-
-        let plan = IntentPlan {
+    fn make_plan(ops: Vec<EditOp>) -> IntentPlan {
+        IntentPlan {
             base_snapshot_id: SnapshotId("snap1".into()),
             rationale: "test".into(),
             is_partial: false,
             confidence: Confidence::High,
-            operations: vec![
-                EditOp::Modify {
-                    path: WorkspacePath::new("test.rs").unwrap(),
-                    preconditions: PreconditionState {
-                        content_hash: "hallucinated".into(),
-                        expected_line_count: None,
-                    },
-                    hunks: vec![],
-                }
-            ],
-        };
+            operations: ops,
+        }
+    }
+
+    #[test]
+    fn hydrates_modify_op_correctly() {
+        let dir = tempdir().unwrap();
+        let content = "line 1\nline 2\nline3\n";
+        fs::write(dir.path().join("test.rs"), content).unwrap();
+
+        let plan = make_plan(vec![EditOp::Modify {
+            path: WorkspacePath::new("test.rs").unwrap(),
+            preconditions: PreconditionState {
+                content_hash: "hallucinated".into(),
+                expected_line_count: None,
+            },
+            hunks: vec![],
+        }]);
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).expect("Hydration must succeed");
 
         if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
             assert_ne!(preconditions.content_hash, "hallucinated");
-            assert_eq!(preconditions.expected_line_count, Some(3)); // 3 lines
+            assert_eq!(preconditions.expected_line_count, Some(3));
         } else {
             panic!("Expected Modify op");
+        }
+    }
+
+    #[test]
+    fn hydrates_delete_op_with_real_hash() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("to_delete.txt"), "goodbye").unwrap();
+
+        let plan = make_plan(vec![EditOp::Delete {
+            path: WorkspacePath::new("to_delete.txt").unwrap(),
+            precondition: FilePrecondition::MustExist, // model guessed weak precondition
+        }]);
+
+        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+
+        if let EditOp::Delete { precondition, .. } = &hydrated.operations[0] {
+            match precondition {
+                FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
+                other => panic!("Expected MustExistWithHash, got {:?}", other),
+            }
+        } else {
+            panic!("Expected Delete op");
+        }
+    }
+
+    #[test]
+    fn hydrates_rename_fail_sets_dest_must_not_exist() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("old.txt"), "content").unwrap();
+
+        let plan = make_plan(vec![EditOp::Rename {
+            from: WorkspacePath::new("old.txt").unwrap(),
+            to: WorkspacePath::new("new.txt").unwrap(),
+            on_conflict: ConflictStrategy::Fail,
+            source_precondition: FilePrecondition::MustExist, // model guessed
+            dest_precondition: FilePrecondition::MustExist,   // model guessed wrong
+        }]);
+
+        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+
+        if let EditOp::Rename { source_precondition, dest_precondition, .. } = &hydrated.operations[0] {
+            // Source must be hydrated with real hash
+            match source_precondition {
+                FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
+                other => panic!("Expected source MustExistWithHash, got {:?}", other),
+            }
+            // Dest must be MustNotExist since on_conflict is Fail
+            assert_eq!(*dest_precondition, FilePrecondition::MustNotExist);
+        } else {
+            panic!("Expected Rename op");
+        }
+    }
+
+    #[test]
+    fn hydrates_rename_overwrite_dest_exists_gets_hash() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("src.txt"), "source content").unwrap();
+        fs::write(dir.path().join("dst.txt"), "dest will be overwritten").unwrap();
+
+        let plan = make_plan(vec![EditOp::Rename {
+            from: WorkspacePath::new("src.txt").unwrap(),
+            to: WorkspacePath::new("dst.txt").unwrap(),
+            on_conflict: ConflictStrategy::Overwrite,
+            source_precondition: FilePrecondition::MustExist,    // hallucinated
+            dest_precondition: FilePrecondition::MustNotExist,   // hallucinated — wrong!
+        }]);
+
+        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+
+        if let EditOp::Rename { source_precondition, dest_precondition, .. } = &hydrated.operations[0] {
+            match source_precondition {
+                FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
+                other => panic!("Expected source hash, got {:?}", other),
+            }
+            // Dest exists, so system must have hydrated its hash
+            match dest_precondition {
+                FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
+                other => panic!("Expected dest hash for existing file, got {:?}", other),
+            }
+        } else {
+            panic!("Expected Rename op");
+        }
+    }
+
+    #[test]
+    fn hydrates_rename_overwrite_dest_absent_gets_must_not_exist() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("src.txt"), "source content").unwrap();
+        // dst.txt intentionally does NOT exist
+
+        let plan = make_plan(vec![EditOp::Rename {
+            from: WorkspacePath::new("src.txt").unwrap(),
+            to: WorkspacePath::new("dst.txt").unwrap(),
+            on_conflict: ConflictStrategy::Overwrite,
+            source_precondition: FilePrecondition::MustExist,
+            dest_precondition: FilePrecondition::MustExist, // hallucinated — wrong!
+        }]);
+
+        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+
+        if let EditOp::Rename { dest_precondition, .. } = &hydrated.operations[0] {
+            assert_eq!(*dest_precondition, FilePrecondition::MustNotExist);
+        } else {
+            panic!("Expected Rename op");
         }
     }
 }

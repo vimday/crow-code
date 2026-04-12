@@ -23,3 +23,8 @@ serde_json = "1.0"
 assert_cmd = "2.2.0"
 predicates = "3.1.4"
 tempfile = "3.27.0"
+crow-materialize = { path = "../crow-materialize" }
+crow-patch = { path = "../crow-patch" }
+crow-probe = { path = "../crow-probe" }
+crow-verifier = { path = "../crow-verifier" }
+crow-workspace = { path = "../crow-workspace" }

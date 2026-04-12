@@ -194,6 +194,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     apply_plan_to_sandbox(&hydrated_plan, &sandbox)?;
     println!("    💉 Sandbox injection successful!");
 
+    // ── Diff output: compare source workspace to post-apply sandbox ──
+    println!("\n--- Sandbox Diff (source → patched) ---");
+    print_diff(&current_dir, sandbox.path(), &hydrated_plan);
+
     println!("\n[6/6] Verifying Sandbox with '{}'...", candidate.command.display());
     let exec_config = ExecutionConfig {
         timeout: std::time::Duration::from_secs(60),
@@ -207,13 +211,70 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         &AciConfig::compact(),
     )?;
 
-    println!("\n[✓] Dry-Run Sequence Completed");
-    println!("--- Subprocess Verifier Outcome ---");
-    println!("Outcome: {:?}", result.test_run.outcome);
+    let outcome = &result.test_run.outcome;
+    println!("\n╔══════════════════════════════════════╗");
+    println!("║  Dry-Run Verdict: {:?}", outcome);
+    println!("╚══════════════════════════════════════╝");
     println!("Evidence:\n{}", result.test_run.truncated_log);
-    
+
     // Explicit drop just to clarify this is where the sandbox evaporates
     drop(sandbox);
     
     Ok(())
+}
+
+/// Print a minimal unified diff for each file touched by the plan.
+fn print_diff(source_root: &std::path::Path, sandbox_root: &std::path::Path, plan: &IntentPlan) {
+    for op in &plan.operations {
+        match op {
+            EditOp::Create { path, .. } => {
+                let sandbox_file = sandbox_root.join(path.as_str());
+                if let Ok(content) = std::fs::read_to_string(&sandbox_file) {
+                    println!("diff --crow a/{f} b/{f}", f = path.as_str());
+                    println!("--- /dev/null");
+                    println!("+++ b/{}", path.as_str());
+                    for line in content.lines() {
+                        println!("+{}", line);
+                    }
+                }
+            }
+            EditOp::Modify { path, .. } => {
+                let source_file = source_root.join(path.as_str());
+                let sandbox_file = sandbox_root.join(path.as_str());
+                let old = std::fs::read_to_string(&source_file).unwrap_or_default();
+                let new = std::fs::read_to_string(&sandbox_file).unwrap_or_default();
+                if old != new {
+                    println!("diff --crow a/{f} b/{f}", f = path.as_str());
+                    println!("--- a/{}", path.as_str());
+                    println!("+++ b/{}", path.as_str());
+                    // Simple line-level diff
+                    let old_lines: Vec<&str> = old.lines().collect();
+                    let new_lines: Vec<&str> = new.lines().collect();
+                    for line in &old_lines {
+                        if !new_lines.contains(line) {
+                            println!("-{}", line);
+                        }
+                    }
+                    for line in &new_lines {
+                        if !old_lines.contains(line) {
+                            println!("+{}", line);
+                        }
+                    }
+                }
+            }
+            EditOp::Delete { path, .. } => {
+                println!("diff --crow a/{f} /dev/null", f = path.as_str());
+                println!("--- a/{}", path.as_str());
+                println!("+++ /dev/null");
+                if let Ok(content) = std::fs::read_to_string(source_root.join(path.as_str())) {
+                    for line in content.lines() {
+                        println!("-{}", line);
+                    }
+                }
+            }
+            EditOp::Rename { from, to, .. } => {
+                println!("rename {} => {}", from.as_str(), to.as_str());
+            }
+        }
+    }
 }
