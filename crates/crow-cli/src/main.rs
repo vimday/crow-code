@@ -32,7 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         source: current_dir.clone(),
         artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: true,
+        // SAFETY: allow_hardlinks MUST be false for any flow that
+        // executes arbitrary repo commands via the verifier. The
+        // unlink-before-write discipline only protects crow-controlled
+        // writes in the applier, not subprocess mutations from build
+        // scripts, tests, or codegen tools.
+        allow_hardlinks: false,
     };
 
     let sandbox = materialize(&config).map_err(|e| format!("Materialization failed: {}", e))?;

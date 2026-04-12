@@ -41,20 +41,11 @@ impl ApplyError {
 // ─── SHA-256 Helper ─────────────────────────────────────────────────
 
 /// Compute a hex-encoded SHA-256 digest of the given bytes.
-/// Uses a minimal hand-rolled SHA-256 to avoid pulling in a crypto crate
-/// at Sprint 1. This will be replaced by `ring` or `sha2` later.
 fn sha256_hex(data: &[u8]) -> String {
-    // Placeholder: use a simple checksum that matches the contract shape.
-    // This is a *functional* SHA-256 via std — Rust's stdlib doesn't include
-    // one, so for now we use a content-length + first/last byte fingerprint
-    // that satisfies the type contract while we defer the real dep.
-    //
-    // TODO(Sprint 2): Replace with `sha2::Sha256` crate.
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    data.hash(&mut h);
-    format!("{:016x}{:016x}", h.finish(), data.len())
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(data);
+    // Encode as lowercase hex (64 chars for SHA-256)
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 // ─── Precondition Verification ──────────────────────────────────────
@@ -135,88 +126,23 @@ fn verify_file_precondition(
 /// Apply a sequence of non-overlapping hunks to a file's lines.
 /// Hunks must be sorted by `original_start` ascending. Each hunk
 /// specifies a 1-based start line, lines to remove, and lines to insert.
+///
+/// The original file's trailing-newline state is preserved: if the
+/// original ended with `\n`, the result will too; if it did not, the
+/// result will not.
 fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<String, ApplyError> {
-    let mut lines: Vec<&str> = original.lines().collect();
-    // Track offset caused by previous hunks (insertions grow, deletions shrink)
-    let offset: isize = 0;
+    if hunks.is_empty() {
+        return Ok(original.to_string());
+    }
+
+    let trailing_newline = original.ends_with('\n');
+    let mut lines: Vec<String> = original.lines().map(String::from).collect();
+    let mut offset: isize = 0;
 
     for hunk in hunks {
-        // Convert 1-based to 0-based, adjusted by accumulated offset
         let start = (hunk.original_start as isize - 1 + offset) as usize;
 
         // Verify that the lines to remove actually match the file content
-        for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
-            let actual_idx = start + i;
-            if actual_idx >= lines.len() {
-                return Err(ApplyError::HunkConflict {
-                    path: file_path.into(),
-                    line: hunk.original_start + i,
-                    reason: format!(
-                        "expected line '{}' but file only has {} lines",
-                        expected_line,
-                        lines.len()
-                    ),
-                });
-            }
-            if lines[actual_idx] != expected_line.as_str() {
-                return Err(ApplyError::HunkConflict {
-                    path: file_path.into(),
-                    line: hunk.original_start + i,
-                    reason: format!(
-                        "expected '{}', found '{}'",
-                        expected_line, lines[actual_idx]
-                    ),
-                });
-            }
-        }
-
-        // Remove the old lines
-        let remove_count = hunk.remove_lines.len();
-        lines.drain(start..start + remove_count);
-
-        // Insert the new lines at the same position
-        // We need owned strings for insertion, but our Vec holds &str.
-        // Re-collect as owned for simplicity.
-        let insert_count = hunk.insert_lines.len();
-        // We'll work with owned strings from here
-        let mut owned: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-        for (i, new_line) in hunk.insert_lines.iter().enumerate() {
-            owned.insert(start + i, new_line.clone());
-        }
-
-        // This is not ideal for large files but correct. The Vec<&str>
-        // approach breaks down after the first mutation. Convert once and
-        // continue with owned data for subsequent hunks.
-        // Rebuild lines from owned for remaining hunks
-        let result_so_far = owned.join("\n");
-        let remaining_hunks =
-            &hunks[hunks.iter().position(|h| std::ptr::eq(h, hunk)).unwrap() + 1..];
-        if remaining_hunks.is_empty() {
-            // Last hunk — return the result
-            return Ok(result_so_far + "\n");
-        }
-        // For remaining hunks, recurse with the updated content and adjusted hunks
-        let new_offset = offset + insert_count as isize - remove_count as isize;
-        return apply_hunks_owned(&result_so_far, remaining_hunks, file_path, new_offset);
-    }
-
-    // No hunks at all — return original unchanged
-    Ok(original.to_string())
-}
-
-/// Internal: apply remaining hunks on already-owned string data.
-fn apply_hunks_owned(
-    content: &str,
-    hunks: &[DiffHunk],
-    file_path: &str,
-    mut offset: isize,
-) -> Result<String, ApplyError> {
-    let mut lines: Vec<String> = content.lines().map(String::from).collect();
-
-    for hunk in hunks {
-        let start = (hunk.original_start as isize - 1 + offset) as usize;
-
-        // Verify context
         for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
             let actual_idx = start + i;
             if actual_idx >= lines.len() {
@@ -252,7 +178,11 @@ fn apply_hunks_owned(
         offset += hunk.insert_lines.len() as isize - remove_count as isize;
     }
 
-    Ok(lines.join("\n") + "\n")
+    let mut result = lines.join("\n");
+    if trailing_newline {
+        result.push('\n');
+    }
+    Ok(result)
 }
 
 // ─── Core Applier ───────────────────────────────────────────────────
@@ -297,6 +227,9 @@ pub fn apply_plan_to_sandbox(plan: &IntentPlan, sandbox: &SandboxHandle) -> Resu
                 if let Some(parent) = abs_path.parent() {
                     fs::create_dir_all(parent).map_err(|e| ApplyError::io(parent, e))?;
                 }
+                // [CRITICAL]: Even Create can overwrite if precondition
+                // is not MustNotExist. Break inode bridge before writing.
+                unlink_if_hardlinked(is_hardlinked, &abs_path)?;
                 fs::write(&abs_path, content).map_err(|e| ApplyError::io(&abs_path, e))?;
             }
             EditOp::Rename {

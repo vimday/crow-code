@@ -95,9 +95,12 @@ fn build_skip_set(config: &MaterializeConfig) -> Result<globset::GlobSet, String
         .map_err(|e| format!("failed to build globset: {}", e))
 }
 
-/// Check if an entry name matches any skip pattern.
-fn should_skip(name: &str, skip_set: &globset::GlobSet) -> bool {
-    skip_set.is_match(name)
+/// Check if an entry matches any skip pattern.
+/// Matches against both the basename (for simple patterns like ".git")
+/// and the relative path from the workspace root (for path-contextual
+/// patterns like "**/dist" or "src/generated/**").
+fn should_skip(basename: &str, rel_path: &std::path::Path, skip_set: &globset::GlobSet) -> bool {
+    skip_set.is_match(basename) || skip_set.is_match(rel_path)
 }
 
 /// Validate and re-create a symlink in the sandbox.
@@ -205,7 +208,13 @@ fn normalize_path(path: &Path) -> PathBuf {
 fn safe_copy(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
     let skip_set = build_skip_set(config)?;
     let guard = SandboxGuard::new()?;
-    safe_copy_tree(&config.source, guard.path(), config, &skip_set)?;
+    safe_copy_tree(
+        &config.source,
+        guard.path(),
+        config,
+        &skip_set,
+        Path::new(""),
+    )?;
     Ok(guard.into_handle(MaterializationDriver::SafeCopy))
 }
 
@@ -214,6 +223,7 @@ fn safe_copy_tree(
     dest: &Path,
     config: &MaterializeConfig,
     skip_set: &globset::GlobSet,
+    rel_prefix: &Path,
 ) -> Result<(), String> {
     let entries =
         fs::read_dir(source).map_err(|e| format!("failed to read {}: {}", source.display(), e))?;
@@ -224,8 +234,9 @@ fn safe_copy_tree(
         let name = file_name.to_string_lossy();
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
+        let rel_path = rel_prefix.join(&*name);
 
-        if should_skip(&name, skip_set) {
+        if should_skip(&name, &rel_path, skip_set) {
             continue;
         }
 
@@ -242,7 +253,7 @@ fn safe_copy_tree(
             } else {
                 fs::create_dir_all(&dst_path)
                     .map_err(|e| format!("mkdir {} failed: {}", dst_path.display(), e))?;
-                safe_copy_tree(&src_path, &dst_path, config, skip_set)?;
+                safe_copy_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
             }
         } else if file_type.is_file() {
             fs::copy(&src_path, &dst_path).map_err(|e| format!("copy {} failed: {}", name, e))?;
@@ -257,7 +268,13 @@ fn safe_copy_tree(
 fn apfs_clone(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
     let skip_set = build_skip_set(config)?;
     let guard = SandboxGuard::new()?;
-    apfs_clone_tree(&config.source, guard.path(), config, &skip_set)?;
+    apfs_clone_tree(
+        &config.source,
+        guard.path(),
+        config,
+        &skip_set,
+        Path::new(""),
+    )?;
     Ok(guard.into_handle(MaterializationDriver::ApfsClone))
 }
 
@@ -267,6 +284,7 @@ fn apfs_clone_tree(
     dest: &Path,
     config: &MaterializeConfig,
     skip_set: &globset::GlobSet,
+    rel_prefix: &Path,
 ) -> Result<(), String> {
     let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {}", e))?;
 
@@ -276,8 +294,9 @@ fn apfs_clone_tree(
         let name = file_name.to_string_lossy();
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
+        let rel_path = rel_prefix.join(&*name);
 
-        if should_skip(&name, skip_set) {
+        if should_skip(&name, &rel_path, skip_set) {
             continue;
         }
 
@@ -290,7 +309,7 @@ fn apfs_clone_tree(
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
             } else {
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
-                apfs_clone_tree(&src_path, &dst_path, config, skip_set)?;
+                apfs_clone_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
             }
         } else if file_type.is_file() {
             let src_c = std::ffi::CString::new(src_path.to_string_lossy().as_bytes())
@@ -316,7 +335,13 @@ fn apfs_clone(_config: &MaterializeConfig) -> Result<SandboxHandle, String> {
 fn hardlink_tree(config: &MaterializeConfig) -> Result<SandboxHandle, String> {
     let skip_set = build_skip_set(config)?;
     let guard = SandboxGuard::new()?;
-    hardlink_copy_tree(&config.source, guard.path(), config, &skip_set)?;
+    hardlink_copy_tree(
+        &config.source,
+        guard.path(),
+        config,
+        &skip_set,
+        Path::new(""),
+    )?;
     Ok(guard.into_handle(MaterializationDriver::HardlinkTree))
 }
 
@@ -325,6 +350,7 @@ fn hardlink_copy_tree(
     dest: &Path,
     config: &MaterializeConfig,
     skip_set: &globset::GlobSet,
+    rel_prefix: &Path,
 ) -> Result<(), String> {
     let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {}", e))?;
 
@@ -334,8 +360,9 @@ fn hardlink_copy_tree(
         let name = file_name.to_string_lossy();
         let src_path = entry.path();
         let dst_path = dest.join(&*name);
+        let rel_path = rel_prefix.join(&*name);
 
-        if should_skip(&name, skip_set) {
+        if should_skip(&name, &rel_path, skip_set) {
             continue;
         }
 
@@ -348,7 +375,7 @@ fn hardlink_copy_tree(
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
             } else {
                 fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
-                hardlink_copy_tree(&src_path, &dst_path, config, skip_set)?;
+                hardlink_copy_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
             }
         } else if file_type.is_file() {
             if let Err(e) = fs::hard_link(&src_path, &dst_path) {
