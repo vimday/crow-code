@@ -22,21 +22,54 @@ pub struct CliConfig {
 
 impl CliConfig {
     /// Resolve configuration from environment.
-    /// Fails fast with a clear message if required variables are missing.
+    /// Fails fast with a clear message if required variables are missing
+    /// or if configuration values are invalid.
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("CROW_API_KEY"))
             .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
 
-        let json_mode = env::var("LLM_JSON_MODE")
-            .ok()
-            .map(|v| matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"));
+        // Strict parsing: only recognized values are accepted.
+        let json_mode = match env::var("LLM_JSON_MODE") {
+            Ok(v) => {
+                let parsed = match v.to_lowercase().as_str() {
+                    "on" | "true" | "1" | "yes" => true,
+                    "off" | "false" | "0" | "no" => false,
+                    other => {
+                        return Err(format!(
+                            "Invalid LLM_JSON_MODE='{}'. Expected: on|off|true|false|1|0|yes|no",
+                            other
+                        )
+                        .into())
+                    }
+                };
+                Some(parsed)
+            }
+            Err(_) => None,
+        };
+
+        let base_url = env::var("LLM_BASE_URL").ok();
+
+        // When a custom base URL is set, require an explicit model to avoid
+        // accidentally sending "gpt-4-turbo" to a non-OpenAI endpoint.
+        let model = match (&base_url, env::var("LLM_MODEL")) {
+            (_, Ok(m)) => m,
+            (None, Err(_)) => "gpt-4-turbo".to_string(),
+            (Some(url), Err(_)) => {
+                return Err(format!(
+                    "LLM_BASE_URL is set to '{}' but LLM_MODEL is not specified. \
+                     Please set LLM_MODEL explicitly when using a custom provider.",
+                    url
+                )
+                .into())
+            }
+        };
 
         Ok(Self {
             workspace: env::current_dir()?,
             api_key,
-            model: env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-4-turbo".to_string()),
-            base_url: env::var("LLM_BASE_URL").ok(),
+            model,
+            base_url,
             max_tokens: env::var("LLM_MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok())
