@@ -1,6 +1,6 @@
 # Crow-Code Source Dump
-# Generated: 2026-04-13T14:39:14Z
-# Commit: 48d41c9
+# Generated: 2026-04-13T15:00:47Z
+# Commit: e0852fc
 
 ════════════════════════════════════════════════════════════════
 FILE: Cargo.toml
@@ -89,6 +89,43 @@ impl ProviderCaps {
     }
 }
 
+// ─── Unified LLM Configuration ─────────────────────────────────────
+
+/// All parameters needed to construct an LLM client.
+/// Centralises API key, model, URL, timeouts, and capability flags
+/// so they are no longer scattered across multiple call sites.
+#[derive(Debug, Clone)]
+pub struct LlmConfig {
+    /// Bearer token. `None` for local/unauthenticated providers.
+    pub api_key: Option<String>,
+    /// Model identifier (e.g. `gpt-4-turbo`, `claude-3.5-sonnet`).
+    pub model: String,
+    /// Base URL for the chat completions endpoint.
+    pub base_url: String,
+    /// Maximum tokens the model may generate in a single response.
+    pub max_tokens: u32,
+    /// TCP connect timeout in seconds.
+    pub connect_timeout_secs: u64,
+    /// Full request timeout in seconds (includes generation time).
+    pub request_timeout_secs: u64,
+    /// Explicit JSON mode override. `None` = auto-detect from URL.
+    pub json_mode: Option<bool>,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            model: "gpt-4-turbo".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            max_tokens: 8192,
+            connect_timeout_secs: 10,
+            request_timeout_secs: 300,
+            json_mode: None,
+        }
+    }
+}
+
 // ─── Client ─────────────────────────────────────────────────────────
 
 pub struct ReqwestLlmClient {
@@ -100,67 +137,57 @@ pub struct ReqwestLlmClient {
 }
 
 impl ReqwestLlmClient {
-    pub fn new(
-        api_key: String,
-        model: String,
-        base_url: Option<String>,
-        json_mode: Option<bool>,
-    ) -> Result<Self, String> {
+    /// Construct from a unified `LlmConfig`.
+    pub fn from_config(config: &LlmConfig) -> Result<Self, String> {
         let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                .map_err(|e| e.to_string())?,
-        );
+
+        // Only attach Authorization header when an API key is provided.
+        // This allows local/unauthenticated providers to work without
+        // requiring a dummy key.
+        if let Some(ref key) = config.api_key {
+            headers.insert(
+                header::AUTHORIZATION,
+                header::HeaderValue::from_str(&format!("Bearer {}", key))
+                    .map_err(|e| e.to_string())?,
+            );
+        }
 
         let client = Client::builder()
             .default_headers(headers)
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(300))
+            .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
+            .timeout(std::time::Duration::from_secs(config.request_timeout_secs))
             .build()
             .map_err(|e| e.to_string())?;
 
-        let resolved_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let caps = ProviderCaps::resolve(json_mode, &resolved_url);
+        let caps = ProviderCaps::resolve(config.json_mode, &config.base_url);
 
         Ok(Self {
             client,
-            model,
-            base_url: resolved_url,
-            max_tokens: 8192,
+            model: config.model.clone(),
+            base_url: config.base_url.clone(),
+            max_tokens: config.max_tokens,
             caps,
         })
-    }
-
-    pub fn with_max_tokens(mut self, max: u32) -> Self {
-        self.max_tokens = max;
-        self
-    }
-
-    pub fn with_caps(mut self, caps: ProviderCaps) -> Self {
-        self.caps = caps;
-        self
     }
 }
 
 #[async_trait]
 impl LlmClient for ReqwestLlmClient {
-    async fn generate(&self, prompt: &str) -> Result<String, String> {
+    async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, String> {
         let url = format!("{}/chat/completions", self.base_url);
+
+        // Map ChatMessage structs directly into the API messages array.
+        // The caller (IntentCompiler) is responsible for providing the
+        // system prompt — the client is a pure transport layer.
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| json!({ "role": m.role, "content": m.content }))
+            .collect();
 
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are the Intelligence Compiler. You must output ONLY valid JSON matching the requested schema. No markdown, no explanation, just pure JSON."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+            "messages": api_messages
         });
 
         if self.caps.supports_json_mode {
@@ -211,7 +238,43 @@ impl LlmClient for ReqwestLlmClient {
 FILE: crates/crow-brain/src/compiler.rs
 ════════════════════════════════════════════════════════════════
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::Error as SerdeError;
+
+// ─── Chat Message Protocol ─────────────────────────────────────────
+
+/// A structured chat message with role-content separation.
+/// Replaces raw string concatenation for LLM context management.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+        }
+    }
+}
+
+// ─── Compiler Types ─────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -222,9 +285,8 @@ pub enum CompilerError {
 /// A generic LLM driver interface to allow substituting e.g. OpenAI vs Claude vs Mock.
 #[async_trait]
 pub trait LlmClient: Send + Sync {
-    /// Send a prompt and a system prompt/JSON schema instruction to the LLM,
-    /// and get strings back.
-    async fn generate(&self, prompt: &str) -> Result<String, String>;
+    /// Send a structured conversation to the LLM and get the assistant's response.
+    async fn generate(&self, messages: &[ChatMessage]) -> Result<String, String>;
 }
 
 /// The Intelligence Compiler.
@@ -252,36 +314,43 @@ impl IntentCompiler {
     /// it catches the parsing error and prompts the LLM to fix it.
     pub async fn compile_action(
         &self,
-        base_task: &str,
+        messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
 
-        let base_prompt = format!(
-            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the AgentAction schema.",
-            base_task, schema_guide
-        );
+        // Build the base message sequence:
+        // 1. System: schema + compiler instructions
+        // 2. All caller-provided messages (context, task, prior conversation)
+        let mut conversation: Vec<ChatMessage> = Vec::new();
 
-        let mut current_prompt = base_prompt.clone();
+        conversation.push(ChatMessage::system(format!(
+            "You are the Intelligence Compiler. You must output ONLY valid JSON matching the AgentAction schema.\n\n{}",
+            schema_guide
+        )));
+
+        conversation.extend(messages.iter().cloned());
+
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
             let response = self
                 .client
-                .generate(&current_prompt)
+                .generate(&conversation)
                 .await
                 .map_err(CompilerError::PromptFailed)?;
 
-            // Try to parse the json directly (using a liberal extraction if the model wrapped it in markdown)
             let cleaned_json = extract_json_block(&response);
 
             match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
                 Ok(plan) => return Ok(plan),
                 Err(e) => {
-                    // Self-healing: capture the exact Serde error but retain original task
-                    current_prompt = format!(
-                        "{}\n\n[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPrevious Output:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
-                        base_prompt, e, cleaned_json
-                    );
+                    // Self-healing: append the failed attempt and error as
+                    // assistant + user messages for the next retry.
+                    conversation.push(ChatMessage::assistant(response.clone()));
+                    conversation.push(ChatMessage::user(format!(
+                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
+                        e
+                    )));
                     errors.push(e);
                 }
             }
@@ -319,7 +388,7 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlm {
-        async fn generate(&self, _prompt: &str) -> Result<String, String> {
+        async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
             let mut resps = self.responses.lock().unwrap();
             if resps.is_empty() {
                 Err("No more mock responses".into())
@@ -349,6 +418,10 @@ mod tests {
         .into()
     }
 
+    fn task_messages() -> Vec<ChatMessage> {
+        vec![ChatMessage::user("do something")]
+    }
+
     #[tokio::test]
     async fn compiler_succeeds_first_try() {
         let client = Box::new(MockLlm {
@@ -357,7 +430,7 @@ mod tests {
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("do something")
+            .compile_action(&task_messages())
             .await
             .expect("compile should succeed");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -369,18 +442,15 @@ mod tests {
 
     #[tokio::test]
     async fn compiler_self_heals_on_serde_error() {
-        // First response misses a comma or is junk
         let bad_json = r#"{ "invalid": yes }"#.into();
 
         let client = Box::new(MockLlm {
-            // First response is bad_json, forcing the loop to catch Err and retry
-            // The second response is valid_plan_json, so the loop succeeds.
             responses: Arc::new(Mutex::new(vec![bad_json, valid_plan_json()])),
         });
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("fix bug")
+            .compile_action(&task_messages())
             .await
             .expect("compile should heal and succeed");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -404,7 +474,7 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client).with_max_retries(2);
 
-        let err = compiler.compile_action("do things").await.unwrap_err();
+        let err = compiler.compile_action(&task_messages()).await.unwrap_err();
         match err {
             CompilerError::MaxRetriesExceeded(errors) => {
                 assert_eq!(errors.len(), 3); // initial + 2 retries
@@ -443,8 +513,6 @@ mod tests {
 
     #[tokio::test]
     async fn compiler_handles_provider_leading_newline_in_content() {
-        // Simulates what OpenRouter/DeepInfra actually returns:
-        // content field starts with "\n" before the JSON
         let with_newline = format!("\n{}", valid_plan_json());
 
         let client = Box::new(MockLlm {
@@ -453,7 +521,7 @@ mod tests {
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("create something")
+            .compile_action(&task_messages())
             .await
             .expect("Leading newline in content should not break parsing");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -473,7 +541,7 @@ mod tests {
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("create something")
+            .compile_action(&task_messages())
             .await
             .expect("Markdown-wrapped JSON should be extracted and parsed");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -497,8 +565,8 @@ pub mod client;
 pub mod compiler;
 pub mod schema;
 
-pub use client::ReqwestLlmClient;
-pub use compiler::{CompilerError, IntentCompiler, LlmClient};
+pub use client::{LlmConfig, ReqwestLlmClient};
+pub use compiler::{ChatMessage, CompilerError, IntentCompiler, LlmClient};
 
 ════════════════════════════════════════════════════════════════
 FILE: crates/crow-brain/src/schema.rs
@@ -614,6 +682,7 @@ crow-brain = { path = "../crow-brain" }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
 similar = "2.6"
+anyhow = "1"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
@@ -642,37 +711,30 @@ use std::path::PathBuf;
 /// All environment-driven configuration for a crow session.
 pub struct CliConfig {
     pub workspace: PathBuf,
-    pub api_key: String,
-    pub model: String,
-    pub base_url: Option<String>,
-    pub max_tokens: u32,
+    pub llm: crow_brain::LlmConfig,
     pub map_budget: usize,
-    /// Explicit override for provider JSON mode capability.
-    /// Set via `LLM_JSON_MODE=on|off`. `None` = auto-detect from URL.
-    pub json_mode: Option<bool>,
 }
 
 impl CliConfig {
     /// Resolve configuration from environment.
-    /// Fails fast with a clear message if required variables are missing
-    /// or if configuration values are invalid.
-    pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+    /// Fails fast with a clear message if configuration values are invalid.
+    pub fn from_env() -> anyhow::Result<Self> {
+        // API key: optional when a custom base URL is set (allows local providers).
         let api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("CROW_API_KEY"))
-            .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
+            .ok();
 
-        // Strict parsing: only recognized values are accepted.
+        // Strict parsing for JSON mode: unrecognized values fail fast.
         let json_mode = match env::var("LLM_JSON_MODE") {
             Ok(v) => {
                 let parsed = match v.to_lowercase().as_str() {
                     "on" | "true" | "1" | "yes" => true,
                     "off" | "false" | "0" | "no" => false,
                     other => {
-                        return Err(format!(
+                        anyhow::bail!(
                             "Invalid LLM_JSON_MODE='{}'. Expected: on|off|true|false|1|0|yes|no",
                             other
                         )
-                        .into())
                     }
                 };
                 Some(parsed)
@@ -684,45 +746,59 @@ impl CliConfig {
 
         // When a custom base URL is set, require an explicit model to avoid
         // accidentally sending "gpt-4-turbo" to a non-OpenAI endpoint.
+        // API key is NOT required for custom providers (local/unauthenticated).
         let model = match (&base_url, env::var("LLM_MODEL")) {
             (_, Ok(m)) => m,
             (None, Err(_)) => "gpt-4-turbo".to_string(),
             (Some(url), Err(_)) => {
-                return Err(format!(
+                anyhow::bail!(
                     "LLM_BASE_URL is set to '{}' but LLM_MODEL is not specified. \
                      Please set LLM_MODEL explicitly when using a custom provider.",
                     url
                 )
-                .into())
             }
         };
 
-        Ok(Self {
-            workspace: env::current_dir()?,
+        // When using the default OpenAI endpoint, API key is still required.
+        if base_url.is_none() && api_key.is_none() {
+            anyhow::bail!(
+                "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY. \
+                 (API key is only optional when LLM_BASE_URL points to a local/unauthenticated provider.)"
+            );
+        }
+
+        let llm = crow_brain::LlmConfig {
             api_key,
             model,
-            base_url,
+            base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".into()),
             max_tokens: env::var("LLM_MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8192),
+            connect_timeout_secs: env::var("LLM_CONNECT_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            request_timeout_secs: env::var("LLM_REQUEST_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+            json_mode,
+        };
+
+        Ok(Self {
+            workspace: env::current_dir()?,
+            llm,
             map_budget: env::var("CROW_MAP_BUDGET")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500 * 1024),
-            json_mode,
         })
     }
 
     /// Build an LLM client from this configuration.
     pub fn build_llm_client(&self) -> Result<crow_brain::ReqwestLlmClient, String> {
-        crow_brain::ReqwestLlmClient::new(
-            self.api_key.clone(),
-            self.model.clone(),
-            self.base_url.clone(),
-            self.json_mode,
-        )
-        .map(|c| c.with_max_tokens(self.max_tokens))
+        crow_brain::ReqwestLlmClient::from_config(&self.llm)
     }
 
     /// Build a repo map from the workspace using the configured budget.
@@ -821,6 +897,7 @@ FILE: crates/crow-cli/src/main.rs
 mod config;
 mod diff;
 
+use anyhow::{Context, Result};
 use config::CliConfig;
 use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
@@ -831,7 +908,7 @@ use crow_workspace::applier::apply_plan_to_sandbox;
 use std::env;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
         if args[1] == "compile" {
@@ -846,13 +923,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── Sprint 1: God Pipeline (synthetic self-test) ───────────────────
 
-async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_god_pipeline() -> Result<()> {
     println!("🦅 crow-code Sprint 1 God Pipeline initializing...\n");
 
     let current_dir = env::current_dir()?;
     println!("[1/4] Radaring Workspace: {}", current_dir.display());
 
-    let profile = scan_workspace(&current_dir)?;
+    let profile = scan_workspace(&current_dir).map_err(|e| anyhow::anyhow!(e))?;
     println!(
         "    🎯 Primary Lang: {} (Tier {:?})",
         profile.primary_lang.name, profile.primary_lang.tier
@@ -881,7 +958,7 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
         allow_hardlinks: false,
     };
 
-    let sandbox = materialize(&config).map_err(|e| format!("Materialization failed: {}", e))?;
+    let sandbox = materialize(&config).context("Failed to materialize sandbox")?;
     println!(
         "    🛡️  Sandbox established at: {}",
         sandbox.path().display()
@@ -901,7 +978,7 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
         }],
     };
 
-    apply_plan_to_sandbox(&mock_plan, &sandbox)?;
+    apply_plan_to_sandbox(&mock_plan, &sandbox).context("Failed to apply synthetic plan")?;
     println!("    💉 Inject successful!");
 
     println!("\n[4/4] Engaging Verifier execution inside sandbox...");
@@ -915,7 +992,8 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
         &candidate.command,
         &exec_config,
         &AciConfig::compact(),
-    )?;
+    )
+    .context("Verification execution failed")?;
 
     println!("\n[✓] Verification Cycle Completed");
     println!("--- Result Summary ---");
@@ -933,14 +1011,16 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── Compile-Only command ───────────────────────────────────────────
 
-async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_compile_only(args: &[String]) -> Result<()> {
+    use crow_brain::ChatMessage;
+
     println!("🦅 crow-code Compile-Only mode initializing...\n");
 
     let cfg = CliConfig::from_env()?;
     let prompt = args.join(" ");
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
-    let repo_map = cfg.build_repo_map()?;
+    let repo_map = cfg.build_repo_map().map_err(|e| anyhow::anyhow!(e))?;
     println!(
         "    🎯 Compressed map length: {} bytes",
         repo_map.map_text.len()
@@ -948,14 +1028,18 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
 
     println!(
         "\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...",
-        cfg.model
+        cfg.llm.model
     );
-    let full_prompt = format!("Context:\n{}\n\nTask:\n{}", repo_map.map_text, prompt);
 
-    let client = Box::new(cfg.build_llm_client()?);
+    let messages = vec![ChatMessage::user(format!(
+        "Context:\n{}\n\nTask:\n{}",
+        repo_map.map_text, prompt
+    ))];
+
+    let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
-    match compiler.compile_action(&full_prompt).await {
+    match compiler.compile_action(&messages).await {
         Ok(action) => {
             println!("\n[✓] Compilation Successful!");
             println!("--- Parsed AgentAction ---");
@@ -964,14 +1048,14 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
         }
         Err(e) => {
             eprintln!("\n[✗] Compilation Failed: {:?}", e);
-            Err("Failed to compile AgentAction".into())
+            anyhow::bail!("Failed to compile AgentAction")
         }
     }
 }
 
 // ─── Dry-Run command ────────────────────────────────────────────────
 
-async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_dry_run(args: &[String]) -> Result<()> {
     use crow_workspace::PlanHydrator;
 
     println!("🦅 crow-code Dry-Run mode initializing...\n");
@@ -986,13 +1070,11 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     // exclusively against this frozen snapshot.
 
     println!("[1/6] Radaring Workspace: {}", cfg.workspace.display());
-    let profile = scan_workspace(&cfg.workspace)?;
+    let profile = scan_workspace(&cfg.workspace).map_err(|e| anyhow::anyhow!(e))?;
     let candidate = match profile.verification_candidates.first() {
         Some(c) => c.clone(),
         None => {
-            return Err(
-                "No verification candidates found. Cannot dry-run without a verifier.".into(),
-            )
+            anyhow::bail!("No verification candidates found. Cannot dry-run without a verifier.");
         }
     };
 
@@ -1003,7 +1085,7 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
     };
-    let sandbox = materialize(&mat_config)?;
+    let sandbox = materialize(&mat_config).context("Failed to materialize frozen sandbox")?;
     let frozen_root = sandbox.path().to_path_buf();
     println!(
         "    🛡️  Time-Frozen Sandbox established at: {}",
@@ -1012,7 +1094,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
     // ── Step 2: Build repo map against frozen sandbox ──────────────
     println!("\n[3/6] Gathering Repomap Context from Frozen Sandbox via tree-sitter...");
-    let repo_map = cfg.build_repo_map_for(&frozen_root)?;
+    let repo_map = cfg
+        .build_repo_map_for(&frozen_root)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to build repo map from frozen sandbox")?;
     println!(
         "    🎯 Compressed map length: {} bytes",
         repo_map.map_text.len()
@@ -1021,18 +1106,26 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     // ── Step 3: Autonomous Crucible Loop ───────────────────────────
     println!(
         "\n[4/6] Entering Autonomous Crucible Loop (Model: {})...",
-        cfg.model
+        cfg.llm.model
     );
 
-    let client = Box::new(cfg.build_llm_client()?);
+    let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
-    let mut messages_context = format!(
-        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-        repo_map.map_text, prompt
-    );
+    // Structured message history with proper role separation.
+    // System context (repo map + constraints) is set once; subsequent
+    // interactions are User (system feedback) and Assistant (LLM output).
+    use crow_brain::ChatMessage;
+    let mut messages: Vec<ChatMessage> = vec![
+        ChatMessage::user(format!(
+            "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+            repo_map.map_text, prompt
+        )),
+    ];
 
-    // Outer Crucible Loop (max 3 compile-test cycles)
+    // Outer Crucible Loop (max 3 compile-test cycles).
+    // Each attempt re-materializes a fresh sandbox so that retries are
+    // independent timelines against the same frozen baseline.
     for crucible_attempt in 1..=3 {
         println!("\n▶️ Crucible Attempt {}/3", crucible_attempt);
 
@@ -1045,11 +1138,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         let compiled_plan = loop {
             epistemic_step += 1;
             if epistemic_step > MAX_EPISTEMIC_STEPS {
-                return Err(format!(
+                anyhow::bail!(
                     "Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.",
                     MAX_EPISTEMIC_STEPS
-                )
-                .into());
+                );
             }
 
             println!(
@@ -1057,24 +1149,21 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 epistemic_step, MAX_EPISTEMIC_STEPS
             );
             let action = compiler
-                .compile_action(&messages_context)
+                .compile_action(&messages)
                 .await
-                .map_err(|e| format!("Compilation failed: {:?}", e))?;
+                .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
             match action {
                 crow_patch::AgentAction::ReadFiles { paths, rationale } => {
                     println!("    📖 Agent requests to read files: {:?}", paths);
                     println!("       Rationale: {}", rationale);
 
-                    messages_context.push_str("\n\n[SYSTEM: READ FILES RESULT]\n");
+                    let mut file_contents = String::from("[READ FILES RESULT]\n");
                     for path in paths {
                         // Read from FROZEN sandbox, not live workspace
                         let abs_path = path.to_absolute(&frozen_root);
 
                         // Unified streaming read via BufReader.
-                        // The line limit (MAX_FILE_LINES) is an independent hard
-                        // gate that applies to ALL files regardless of byte size.
-                        // The byte threshold only controls the truncation warning.
                         use std::io::{BufRead, BufReader};
                         let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
 
@@ -1101,15 +1190,16 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                             Err(_) => "<file not found or unreadable>".into(),
                         };
 
-                        messages_context.push_str(&format!(
+                        file_contents.push_str(&format!(
                             "--- {} ---\n{}\n\n",
                             path.as_str(),
                             content
                         ));
                     }
-                    messages_context.push_str(
+                    file_contents.push_str(
                         "Please proceed with your task, or read more files if necessary.",
                     );
+                    messages.push(ChatMessage::user(file_contents));
                 }
                 crow_patch::AgentAction::SubmitPlan { plan } => {
                     println!("    ✅ Agent submitted IntentPlan!");
@@ -1118,14 +1208,13 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             }
         };
 
-        // Re-materialize a fresh sandbox for each crucible attempt so that
-        // each retry operates on a clean copy of the frozen baseline, not a
-        // previously-polluted sandbox. This gives "independent timeline" semantics.
+        // Re-materialize a fresh sandbox for each crucible attempt.
         println!(
             "\n[5/6] Re-materializing fresh sandbox for attempt {}...",
             crucible_attempt
         );
-        let attempt_sandbox = materialize(&mat_config)?;
+        let attempt_sandbox =
+            materialize(&mat_config).context("Failed to re-materialize attempt sandbox")?;
         println!(
             "    🛡️  Fresh attempt sandbox at: {}",
             attempt_sandbox.path().display()
@@ -1135,10 +1224,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             Ok(p) => p,
             Err(e) => {
                 println!("    ❌ Hydration failed: {:?}", e);
-                messages_context.push_str(&format!(
-                    "\n\n[SYSTEM: HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
-                    e
-                ));
+                messages.push(ChatMessage::user(format!(
+                        "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
+                        e
+                    )));
                 continue;
             }
         };
@@ -1148,11 +1237,11 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             serde_json::to_string_pretty(&hydrated_plan)?
         );
 
-        apply_plan_to_sandbox(&hydrated_plan, &attempt_sandbox)?;
+        apply_plan_to_sandbox(&hydrated_plan, &attempt_sandbox)
+            .context("Failed to apply plan to sandbox")?;
         println!("    💉 Sandbox injection successful!");
 
         // Diff baseline: frozen_root (pre-patch) → attempt_sandbox (post-patch).
-        // Both sides from materialized snapshots, never the live workspace.
         println!("\n--- Sandbox Diff (frozen baseline → patched) ---");
         diff::render_plan_diff(&frozen_root, attempt_sandbox.path(), &hydrated_plan);
 
@@ -1170,7 +1259,8 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             &candidate.command,
             &exec_config,
             &AciConfig::compact(),
-        )?;
+        )
+        .context("Verification execution failed")?;
 
         let outcome = &result.test_run.outcome;
         println!("\n╔══════════════════════════════════════╗");
@@ -1186,10 +1276,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             break;
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
-            messages_context.push_str(&format!(
-                "\n\n[SYSTEM: VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
+            messages.push(ChatMessage::user(format!(
+                "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
                 result.test_run.truncated_log
-            ));
+            )));
         }
         drop(attempt_sandbox);
     }
@@ -1207,7 +1297,7 @@ FILE: crates/crow-cli/tests/autonomous_loop_integration.rs
 //! refactors cannot silently break the cognitive loop.
 
 use async_trait::async_trait;
-use crow_brain::{IntentCompiler, LlmClient};
+use crow_brain::{ChatMessage, IntentCompiler, LlmClient};
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::AgentAction;
 use crow_verifier::{types::AciConfig, ExecutionConfig};
@@ -1225,7 +1315,7 @@ struct ScriptedLlm {
 
 #[async_trait]
 impl LlmClient for ScriptedLlm {
-    async fn generate(&self, _prompt: &str) -> Result<String, String> {
+    async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
         let mut resps = self.responses.lock().unwrap();
         if resps.is_empty() {
             Err("ScriptedLlm exhausted all scripted responses".into())
@@ -1307,8 +1397,9 @@ async fn autonomous_loop_direct_submit() {
     let sandbox = materialize(&config).expect("Materialization should succeed");
 
     // Step 2: Compile (epistemic loop — agent submits directly)
+    let messages = vec![ChatMessage::user("Add a marker file")];
     let action = compiler
-        .compile_action("Add a marker file")
+        .compile_action(&messages)
         .await
         .expect("compile_action should succeed");
 
@@ -1399,12 +1490,12 @@ async fn autonomous_loop_read_then_submit() {
     let sandbox = materialize(&config).expect("Materialization should succeed");
     let frozen_root = sandbox.path().to_path_buf();
 
-    // Step 2: Epistemic loop
-    let mut context = String::from("Task: inspect and create marker");
+    // Step 2: Epistemic loop with structured messages
+    let mut messages = vec![ChatMessage::user("Task: inspect and create marker")];
 
     let plan = loop {
         let action = compiler
-            .compile_action(&context)
+            .compile_action(&messages)
             .await
             .expect("compile_action should succeed");
 
@@ -1416,15 +1507,16 @@ async fn autonomous_loop_read_then_submit() {
                 );
                 assert!(rationale.len() > 5, "Rationale should be non-trivial");
 
-                // Inject file contents from FROZEN sandbox
-                context.push_str("\n\n[SYSTEM: READ FILES RESULT]\n");
+                // Inject file contents from FROZEN sandbox as a user message
+                let mut file_contents = String::from("[READ FILES RESULT]\n");
                 for path in paths {
                     let abs_path = path.to_absolute(&frozen_root);
                     let content =
                         fs::read_to_string(&abs_path).unwrap_or_else(|_| "<file not found>".into());
-                    context.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
+                    file_contents.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
                 }
-                context.push_str("Please proceed with your task.");
+                file_contents.push_str("Please proceed with your task.");
+                messages.push(ChatMessage::user(file_contents));
             }
             AgentAction::SubmitPlan { plan } => {
                 break plan;
