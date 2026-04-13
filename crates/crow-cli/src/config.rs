@@ -33,7 +33,7 @@ impl CliConfig {
             max_tokens: env::var("LLM_MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(2048),
+                .unwrap_or(8192),
             map_budget: env::var("CROW_MAP_BUDGET")
                 .ok()
                 .and_then(|v| v.parse().ok())

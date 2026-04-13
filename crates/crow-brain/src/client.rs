@@ -50,7 +50,7 @@ impl ReqwestLlmClient {
         let client = Client::builder()
             .default_headers(headers)
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| e.to_string())?;
 
@@ -61,7 +61,7 @@ impl ReqwestLlmClient {
             client,
             model,
             base_url: resolved_url,
-            max_tokens: 2048,
+            max_tokens: 8192,
             caps,
         })
     }
