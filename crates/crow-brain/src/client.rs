@@ -23,8 +23,7 @@ pub enum BrainError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderKind {
-    OpenAI,
-    Anthropic,
+    OpenAICompatible,
     Custom(String), // A custom identifier
 }
 
@@ -46,7 +45,7 @@ pub struct LlmProviderConfig {
 impl Default for LlmProviderConfig {
     fn default() -> Self {
         Self {
-            provider_kind: ProviderKind::OpenAI,
+            provider_kind: ProviderKind::OpenAICompatible,
             api_key: None,
             model: "gpt-4-turbo".into(),
             base_url: "https://api.openai.com/v1".into(),

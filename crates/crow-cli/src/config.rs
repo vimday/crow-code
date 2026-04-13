@@ -36,6 +36,7 @@ struct WorkspaceConfigFile {
 // ─── Runtime configuration ──────────────────────────────────────
 
 /// All configuration for a crow session.
+#[derive(Debug)]
 pub struct CrowConfig {
     pub workspace: PathBuf,
     pub llm: LlmProviderConfig,
@@ -92,21 +93,22 @@ impl CrowConfig {
         let default_base_url = "https://api.openai.com/v1".to_string();
 
         let (provider_kind, final_base_url, final_model) = match provider_str.as_deref() {
-            Some("openai") => (
-                ProviderKind::OpenAI,
+            Some("openai") | Some("openaicompatible") => (
+                ProviderKind::OpenAICompatible,
                 base_url.unwrap_or_else(|| default_base_url.clone()),
                 model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
             ),
-            Some("anthropic") => (
-                ProviderKind::Anthropic,
-                base_url.unwrap_or_else(|| "https://api.anthropic.com/v1".to_string()),
-                model.unwrap_or_else(|| "claude-3-5-sonnet-latest".to_string()),
-            ),
-            Some(other) => (
-                ProviderKind::Custom(other.to_string()),
-                base_url.unwrap_or_else(|| default_base_url.clone()),
-                model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
-            ),
+            Some(other) => {
+                let url = base_url.ok_or_else(|| anyhow::anyhow!(
+                    "Custom provider '{}' requires an explicitly set LLM_BASE_URL.",
+                    other
+                ))?;
+                let m = model.ok_or_else(|| anyhow::anyhow!(
+                    "Custom provider '{}' requires an explicitly set LLM_MODEL.",
+                    other
+                ))?;
+                (ProviderKind::Custom(other.to_string()), url, m)
+            }
             None => {
                 // If base_url is specified but not provider, treat as custom.
                 if let Some(url) = base_url {
@@ -120,7 +122,7 @@ impl CrowConfig {
                     (ProviderKind::Custom("custom".into()), url, m)
                 } else {
                     (
-                        ProviderKind::OpenAI,
+                        ProviderKind::OpenAICompatible,
                         default_base_url,
                         model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
                     )
@@ -128,11 +130,7 @@ impl CrowConfig {
             }
         };
 
-        if matches!(
-            provider_kind,
-            ProviderKind::OpenAI | ProviderKind::Anthropic
-        ) && api_key.is_none()
-        {
+        if matches!(provider_kind, ProviderKind::OpenAICompatible) && api_key.is_none() {
             anyhow::bail!(
                 "Missing API Key for {:?}. Please set OPENAI_API_KEY or CROW_API_KEY. \
                  (API key is only optional when using a custom provider with explicitly set base URL.)",
@@ -198,5 +196,43 @@ impl CrowConfig {
     pub fn build_repo_map_for(&self, root: &Path) -> Result<crow_intel::RepoMap, String> {
         let walker = crow_intel::RepoWalker::new().with_max_bytes(self.map_budget);
         walker.build_repo_map(root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_custom_provider_fails_without_url_and_model() {
+        // Clear env vars that might interfere
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("LLM_BASE_URL");
+        env::remove_var("LLM_MODEL");
+        
+        env::set_var("LLM_PROVIDER", "my_custom_provider");
+        // No BASE_URL or MODEL set => should fail fast
+        let result = CrowConfig::load();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("requires an explicitly set LLM_BASE_URL"));
+
+        env::set_var("LLM_BASE_URL", "http://localhost:11434/v1");
+        // No MODEL set => should fail fast
+        let result = CrowConfig::load();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("requires an explicitly set LLM_MODEL"));
+
+        env::set_var("LLM_MODEL", "llama3");
+        // Now it should pass config load (though it may fail missing API key for OpenAICompatible, 
+        // but custom doesn't require API key by default)
+        
+        // Ensure no local .crow config throws off test inside mock environment
+        // Since we are running in the main workspace, it might pick up an openai key. 
+        // Clean up environment variables for isolation in real test suites.
+        env::remove_var("LLM_PROVIDER");
+        env::remove_var("LLM_BASE_URL");
+        env::remove_var("LLM_MODEL");
     }
 }

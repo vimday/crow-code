@@ -37,9 +37,13 @@ impl CognitiveBudget {
     pub fn push_file_read(&mut self, content: String) {
         let max_read = 150 * 1024; // Limit single read to 150KB
         if content.len() > max_read {
+            let mut safe_len = max_read;
+            while safe_len > 0 && !content.is_char_boundary(safe_len) {
+                safe_len -= 1;
+            }
             let truncated = format!(
                 "{}...\n\n[SYSTEM: File content truncated at 150KB to preserve context budget]",
-                &content[..max_read]
+                &content[..safe_len]
             );
             self.push_user(truncated);
         } else {
