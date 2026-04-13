@@ -1,6 +1,6 @@
 # Crow-Code Source Dump
-# Generated: 2026-04-13T14:20:18Z
-# Commit: b685216
+# Generated: 2026-04-13T14:31:41Z
+# Commit: 1f11bb6
 
 ════════════════════════════════════════════════════════════════
 FILE: Cargo.toml
@@ -64,7 +64,8 @@ use serde_json::json;
 // ─── Provider Capabilities ──────────────────────────────────────────
 
 /// Declares what a given LLM provider endpoint supports.
-/// Avoids string-based heuristics like `url.contains("openai.com")`.
+/// Resolved via explicit configuration (`LLM_JSON_MODE`) first;
+/// falls back to URL heuristics only when no override is given.
 #[derive(Debug, Clone)]
 pub struct ProviderCaps {
     /// Whether the provider supports `response_format: { "type": "json_object" }`.
@@ -72,15 +73,17 @@ pub struct ProviderCaps {
 }
 
 impl ProviderCaps {
-    /// Infer capabilities from the base URL.
-    /// Known providers get explicit caps; unknown default to conservative.
-    pub fn infer(base_url: &str) -> Self {
-        Self {
-            supports_json_mode: base_url.contains("openai.com"),
-        }
+    /// Resolve capabilities from an explicit override or URL fallback.
+    ///
+    /// - `json_mode_override = Some(true/false)` → use that value directly.
+    /// - `json_mode_override = None` → fall back to URL heuristic (conservative).
+    pub fn resolve(json_mode_override: Option<bool>, base_url: &str) -> Self {
+        let supports_json_mode =
+            json_mode_override.unwrap_or_else(|| base_url.contains("openai.com"));
+        Self { supports_json_mode }
     }
 
-    /// Explicitly declare capabilities (overrides inference).
+    /// Explicitly declare capabilities (for testing / direct construction).
     pub fn new(supports_json_mode: bool) -> Self {
         Self { supports_json_mode }
     }
@@ -97,7 +100,12 @@ pub struct ReqwestLlmClient {
 }
 
 impl ReqwestLlmClient {
-    pub fn new(api_key: String, model: String, base_url: Option<String>) -> Result<Self, String> {
+    pub fn new(
+        api_key: String,
+        model: String,
+        base_url: Option<String>,
+        json_mode: Option<bool>,
+    ) -> Result<Self, String> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             header::AUTHORIZATION,
@@ -113,7 +121,7 @@ impl ReqwestLlmClient {
             .map_err(|e| e.to_string())?;
 
         let resolved_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let caps = ProviderCaps::infer(&resolved_url);
+        let caps = ProviderCaps::resolve(json_mode, &resolved_url);
 
         Ok(Self {
             client,
@@ -639,6 +647,9 @@ pub struct CliConfig {
     pub base_url: Option<String>,
     pub max_tokens: u32,
     pub map_budget: usize,
+    /// Explicit override for provider JSON mode capability.
+    /// Set via `LLM_JSON_MODE=on|off`. `None` = auto-detect from URL.
+    pub json_mode: Option<bool>,
 }
 
 impl CliConfig {
@@ -648,6 +659,10 @@ impl CliConfig {
         let api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("CROW_API_KEY"))
             .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
+
+        let json_mode = env::var("LLM_JSON_MODE")
+            .ok()
+            .map(|v| matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"));
 
         Ok(Self {
             workspace: env::current_dir()?,
@@ -662,6 +677,7 @@ impl CliConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500 * 1024),
+            json_mode,
         })
     }
 
@@ -671,6 +687,7 @@ impl CliConfig {
             self.api_key.clone(),
             self.model.clone(),
             self.base_url.clone(),
+            self.json_mode,
         )
         .map(|c| c.with_max_tokens(self.max_tokens))
     }
@@ -1021,31 +1038,34 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                         // Read from FROZEN sandbox, not live workspace
                         let abs_path = path.to_absolute(&frozen_root);
 
-                        // Streaming file read via BufReader: prevents OOM on
-                        // multi-GB files by reading line-by-line and stopping
-                        // at MAX_FILE_LINES without ever loading the whole file.
-                        let content = match std::fs::metadata(&abs_path) {
-                            Ok(meta) if meta.len() > MAX_FILE_BYTES => {
-                                use std::io::{BufRead, BufReader};
-                                match std::fs::File::open(&abs_path) {
-                                    Ok(file) => {
-                                        let reader = BufReader::new(file);
-                                        let truncated: String = reader
-                                            .lines()
-                                            .map_while(Result::ok)
-                                            .take(MAX_FILE_LINES)
-                                            .collect::<Vec<_>>()
-                                            .join("\n");
-                                        format!(
-                                            "{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]",
-                                            truncated, meta.len(), MAX_FILE_LINES
-                                        )
-                                    }
-                                    Err(_) => "<file not found or unreadable>".into(),
+                        // Unified streaming read via BufReader.
+                        // The line limit (MAX_FILE_LINES) is an independent hard
+                        // gate that applies to ALL files regardless of byte size.
+                        // The byte threshold only controls the truncation warning.
+                        use std::io::{BufRead, BufReader};
+                        let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+
+                        let content = match std::fs::File::open(&abs_path) {
+                            Ok(file) => {
+                                let reader = BufReader::new(file);
+                                let lines: Vec<String> = reader
+                                    .lines()
+                                    .map_while(Result::ok)
+                                    .take(MAX_FILE_LINES)
+                                    .collect();
+                                let was_truncated =
+                                    file_size > MAX_FILE_BYTES || lines.len() >= MAX_FILE_LINES;
+                                let text = lines.join("\n");
+                                if was_truncated {
+                                    format!(
+                                        "{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]",
+                                        text, file_size, lines.len()
+                                    )
+                                } else {
+                                    text
                                 }
                             }
-                            _ => std::fs::read_to_string(&abs_path)
-                                .unwrap_or_else(|_| "<file not found or unreadable>".into()),
+                            Err(_) => "<file not found or unreadable>".into(),
                         };
 
                         messages_context.push_str(&format!(
