@@ -7,6 +7,7 @@ fn empty_workspace_exits_gracefully() {
 
     Command::cargo_bin("crow")
         .unwrap()
+        .arg("legacy-god")
         .current_dir(dir.path())
         .assert()
         .success()

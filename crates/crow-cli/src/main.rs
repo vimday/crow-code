@@ -1,12 +1,13 @@
 mod config;
 mod context;
 mod diff;
+mod legacy_god;
 
 use anyhow::{Context, Result};
 use config::CrowConfig;
 use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
-use crow_patch::{Confidence, EditOp, FilePrecondition, IntentPlan, WorkspacePath};
+
 use crow_probe::scan_workspace;
 use crow_verifier::{types::AciConfig, ExecutionConfig};
 use crow_workspace::applier::apply_plan_to_sandbox;
@@ -20,99 +21,15 @@ async fn main() -> Result<()> {
             return run_compile_only(&args[2..]).await;
         } else if args[1] == "dry-run" {
             return run_dry_run(&args[2..]).await;
+        } else if args[1] == "legacy-god" {
+            return legacy_god::run_god_pipeline().await;
         }
     }
 
-    run_god_pipeline().await
-}
-
-// ─── Sprint 1: God Pipeline (synthetic self-test) ───────────────────
-
-async fn run_god_pipeline() -> Result<()> {
-    println!("🦅 crow-code Sprint 1 God Pipeline initializing...\n");
-
-    let current_dir = env::current_dir()?;
-    println!("[1/4] Radaring Workspace: {}", current_dir.display());
-
-    let profile = scan_workspace(&current_dir).map_err(|e| anyhow::anyhow!(e))?;
-    println!(
-        "    🎯 Primary Lang: {} (Tier {:?})",
-        profile.primary_lang.name, profile.primary_lang.tier
-    );
-
-    let candidate = match profile.verification_candidates.first() {
-        Some(c) => c,
-        None => {
-            println!("    ⚠️  No verification candidates found for this workspace.");
-            println!("    Outcome: NoVerifierAvailable");
-            println!("\n[✓] Probe complete. No verification surface discovered.");
-            return Ok(());
-        }
-    };
-    println!(
-        "    ⚔️  Target Candidate: {} [confidence: {:?}]",
-        candidate.command.display(),
-        candidate.confidence
-    );
-
-    println!("\n[2/4] Materializing O(1) Sandbox Boundary...");
-    let config = MaterializeConfig {
-        source: current_dir.clone(),
-        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: false,
-    };
-
-    let sandbox = materialize(&config).context("Failed to materialize sandbox")?;
-    println!(
-        "    🛡️  Sandbox established at: {}",
-        sandbox.path().display()
-    );
-    println!("    🏎️  Driver active: {:?}", sandbox.driver());
-
-    println!("\n[3/4] Synthesizing and Applying 'IntentPlan' (Unlink-on-Write enabled)");
-    let mock_plan = IntentPlan {
-        base_snapshot_id: crow_patch::SnapshotId("snapshot-001".into()),
-        rationale: "Pipeline synthetic verification inject".into(),
-        is_partial: false,
-        confidence: Confidence::High,
-        operations: vec![EditOp::Create {
-            path: WorkspacePath::new("dummy_test_crow.txt")?,
-            content: "This is a synthetic artifact created by God Pipeline.\n".into(),
-            precondition: FilePrecondition::MustNotExist,
-        }],
-    };
-
-    apply_plan_to_sandbox(&mock_plan, &sandbox).context("Failed to apply synthetic plan")?;
-    println!("    💉 Inject successful!");
-
-    println!("\n[4/4] Engaging Verifier execution inside sandbox...");
-    let exec_config = ExecutionConfig {
-        timeout: std::time::Duration::from_secs(60),
-        max_output_bytes: 5 * 1024 * 1024,
-    };
-
-    let result = crow_verifier::executor::execute(
-        sandbox.path(),
-        &candidate.command,
-        &exec_config,
-        &AciConfig::compact(),
-    )
-    .context("Verification execution failed")?;
-
-    println!("\n[✓] Verification Cycle Completed");
-    println!("--- Result Summary ---");
-    println!("Outcome: {:?}", result.test_run.outcome);
-    println!(
-        "Truncated Evidence Dump:\n{}",
-        result.test_run.truncated_log
-    );
-
-    drop(sandbox);
-    println!("\n[✓] Sprint 0/1 End-to-End sequence complete. Ready for LLM integration.");
-
+    println!("Welcome to crow-code. Please provide a command (dry-run, compile, legacy-god).");
     Ok(())
 }
+
 
 // ─── Compile-Only command ───────────────────────────────────────────
 
@@ -220,10 +137,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     // Structured message history with proper role separation.
     // System context (repo map + constraints) is set once; subsequent
     // interactions are User (system feedback) and Assistant (LLM output).
-    use context::CognitiveBudget;
+    use context::ConversationManager;
     use crow_brain::ChatMessage;
 
-    let mut messages = CognitiveBudget::new(ChatMessage::system(
+    let mut messages = ConversationManager::new(ChatMessage::system(
         "You are an autonomous engineering agent executing the given task.",
     ));
     messages.push_user(format!(
@@ -270,7 +187,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     println!("       Rationale: {}", rationale);
 
                     let mut file_contents = String::from("[READ FILES RESULT]\n");
-                    for path in paths {
+                    for path in &paths {
                         // Read from FROZEN sandbox, not live workspace
                         let abs_path = path.to_absolute(&frozen_root);
 
@@ -310,7 +227,9 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     file_contents.push_str(
                         "Please proceed with your task, or read more files if necessary.",
                     );
-                    messages.push_file_read(file_contents);
+                    
+                    let path_strings: Vec<String> = paths.iter().map(|s| s.as_str().to_string()).collect();
+                    messages.push_file_read(&path_strings, file_contents);
                 }
                 crow_patch::AgentAction::SubmitPlan { plan } => {
                     println!("    ✅ Agent submitted IntentPlan!");
@@ -387,10 +306,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             break;
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
-            messages.push_user(format!(
-                "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
-                result.test_run.truncated_log
-            ));
+            messages.push_verifier_result(
+                &format!("{:?}", result.test_run.outcome),
+                &result.test_run.truncated_log
+            );
         }
         drop(attempt_sandbox);
     }

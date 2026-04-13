@@ -45,9 +45,11 @@ impl ChatMessage {
 
 // ─── Compiler Types ─────────────────────────────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CompilerError {
-    PromptFailed(String),
+    #[error("Prompt failed: {0}")]
+    PromptFailed(#[from] crate::client::BrainError),
+    #[error("Max retries exceeded: {0:?}")]
     MaxRetriesExceeded(Vec<SerdeError>),
 }
 
@@ -107,7 +109,7 @@ impl IntentCompiler {
                 .client
                 .generate(&conversation)
                 .await
-                .map_err(|e| CompilerError::PromptFailed(e.to_string()))?;
+                .map_err(CompilerError::PromptFailed)?;
 
             let cleaned_json = extract_json_block(&response);
 
