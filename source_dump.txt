@@ -1,6 +1,6 @@
 # Crow-Code Source Dump
-# Generated: 2026-04-13T15:00:47Z
-# Commit: e0852fc
+# Generated: 2026-04-13T15:44:45Z
+# Commit: ccf86f2
 
 ════════════════════════════════════════════════════════════════
 FILE: Cargo.toml
@@ -52,6 +52,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"
+thiserror = "1.0"
 
 ════════════════════════════════════════════════════════════════
 FILE: crates/crow-brain/src/client.rs
@@ -61,67 +62,57 @@ use async_trait::async_trait;
 use reqwest::{header, Client};
 use serde_json::json;
 
-// ─── Provider Capabilities ──────────────────────────────────────────
+// ─── Errors ────────────────────────────────────────────────────────
 
-/// Declares what a given LLM provider endpoint supports.
-/// Resolved via explicit configuration (`LLM_JSON_MODE`) first;
-/// falls back to URL heuristics only when no override is given.
-#[derive(Debug, Clone)]
-pub struct ProviderCaps {
-    /// Whether the provider supports `response_format: { "type": "json_object" }`.
-    pub supports_json_mode: bool,
+#[derive(Debug, thiserror::Error)]
+pub enum BrainError {
+    #[error("Configuration error: {0}")]
+    Config(String),
+    #[error("Transport failed: {0}")]
+    Transport(#[from] reqwest::Error),
+    #[error("API error {status}: {body}")]
+    ApiError { status: u16, body: String },
+    #[error("Failed to parse API response as JSON: {err} — raw: {raw}")]
+    ParseError { err: serde_json::Error, raw: String },
+    #[error("Missing expected field in response: {0}")]
+    MissingField(String),
 }
 
-impl ProviderCaps {
-    /// Resolve capabilities from an explicit override or URL fallback.
-    ///
-    /// - `json_mode_override = Some(true/false)` → use that value directly.
-    /// - `json_mode_override = None` → fall back to URL heuristic (conservative).
-    pub fn resolve(json_mode_override: Option<bool>, base_url: &str) -> Self {
-        let supports_json_mode =
-            json_mode_override.unwrap_or_else(|| base_url.contains("openai.com"));
-        Self { supports_json_mode }
-    }
+// ─── Provider Capabilities & Configuration ─────────────────────────
 
-    /// Explicitly declare capabilities (for testing / direct construction).
-    pub fn new(supports_json_mode: bool) -> Self {
-        Self { supports_json_mode }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderKind {
+    OpenAI,
+    Anthropic,
+    Custom(String), // A custom identifier
 }
-
-// ─── Unified LLM Configuration ─────────────────────────────────────
 
 /// All parameters needed to construct an LLM client.
-/// Centralises API key, model, URL, timeouts, and capability flags
-/// so they are no longer scattered across multiple call sites.
+/// Centralises API key, model, URL, timeouts, and explicit capability flags.
 #[derive(Debug, Clone)]
-pub struct LlmConfig {
-    /// Bearer token. `None` for local/unauthenticated providers.
+pub struct LlmProviderConfig {
+    pub provider_kind: ProviderKind,
     pub api_key: Option<String>,
-    /// Model identifier (e.g. `gpt-4-turbo`, `claude-3.5-sonnet`).
     pub model: String,
-    /// Base URL for the chat completions endpoint.
     pub base_url: String,
-    /// Maximum tokens the model may generate in a single response.
     pub max_tokens: u32,
-    /// TCP connect timeout in seconds.
     pub connect_timeout_secs: u64,
-    /// Full request timeout in seconds (includes generation time).
     pub request_timeout_secs: u64,
-    /// Explicit JSON mode override. `None` = auto-detect from URL.
-    pub json_mode: Option<bool>,
+    /// Whether this provider requires and supports strict JSON object output.
+    pub json_mode: bool,
 }
 
-impl Default for LlmConfig {
+impl Default for LlmProviderConfig {
     fn default() -> Self {
         Self {
+            provider_kind: ProviderKind::OpenAI,
             api_key: None,
             model: "gpt-4-turbo".into(),
             base_url: "https://api.openai.com/v1".into(),
             max_tokens: 8192,
             connect_timeout_secs: 10,
             request_timeout_secs: 300,
-            json_mode: None,
+            json_mode: false,
         }
     }
 }
@@ -133,22 +124,19 @@ pub struct ReqwestLlmClient {
     model: String,
     base_url: String,
     max_tokens: u32,
-    caps: ProviderCaps,
+    json_mode: bool,
 }
 
 impl ReqwestLlmClient {
-    /// Construct from a unified `LlmConfig`.
-    pub fn from_config(config: &LlmConfig) -> Result<Self, String> {
+    /// Construct from a unified `LlmProviderConfig`.
+    pub fn from_config(config: &LlmProviderConfig) -> Result<Self, BrainError> {
         let mut headers = header::HeaderMap::new();
 
-        // Only attach Authorization header when an API key is provided.
-        // This allows local/unauthenticated providers to work without
-        // requiring a dummy key.
         if let Some(ref key) = config.api_key {
             headers.insert(
                 header::AUTHORIZATION,
                 header::HeaderValue::from_str(&format!("Bearer {}", key))
-                    .map_err(|e| e.to_string())?,
+                    .map_err(|e| BrainError::Config(e.to_string()))?,
             );
         }
 
@@ -157,28 +145,23 @@ impl ReqwestLlmClient {
             .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
             .timeout(std::time::Duration::from_secs(config.request_timeout_secs))
             .build()
-            .map_err(|e| e.to_string())?;
-
-        let caps = ProviderCaps::resolve(config.json_mode, &config.base_url);
+            .map_err(|e| BrainError::Config(e.to_string()))?;
 
         Ok(Self {
             client,
             model: config.model.clone(),
             base_url: config.base_url.clone(),
             max_tokens: config.max_tokens,
-            caps,
+            json_mode: config.json_mode,
         })
     }
 }
 
 #[async_trait]
 impl LlmClient for ReqwestLlmClient {
-    async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, String> {
+    async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, BrainError> {
         let url = format!("{}/chat/completions", self.base_url);
 
-        // Map ChatMessage structs directly into the API messages array.
-        // The caller (IntentCompiler) is responsible for providing the
-        // system prompt — the client is a pure transport layer.
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| json!({ "role": m.role, "content": m.content }))
@@ -190,44 +173,33 @@ impl LlmClient for ReqwestLlmClient {
             "messages": api_messages
         });
 
-        if self.caps.supports_json_mode {
+        if self.json_mode {
             body["response_format"] = json!({ "type": "json_object" });
         }
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+        let resp = self.client.post(&url).json(&body).send().await?;
 
         let status = resp.status();
-        let raw_text = resp
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read response body: {}", e))?;
+        let raw_text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(format!("API error {}: {}", status, raw_text));
+            return Err(BrainError::ApiError {
+                status: status.as_u16(),
+                body: raw_text,
+            });
         }
 
         let trimmed = raw_text.trim();
-        let data: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
-            format!(
-                "Failed to parse API response as JSON: {} — raw: {}",
-                e,
-                &trimmed[..trimmed.len().min(500)]
-            )
-        })?;
+        let data: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| BrainError::ParseError {
+                err: e,
+                raw: trimmed[..trimmed.len().min(500)].to_string(),
+            })?;
 
         let content = data["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| {
-                format!(
-                    "Missing content in response: {}",
-                    &trimmed[..trimmed.len().min(500)]
-                )
+                BrainError::MissingField(trimmed[..trimmed.len().min(500)].to_string())
             })?;
 
         Ok(content.to_string())
@@ -243,32 +215,40 @@ use serde_json::Error as SerdeError;
 
 // ─── Chat Message Protocol ─────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+}
+
 /// A structured chat message with role-content separation.
 /// Replaces raw string concatenation for LLM context management.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
-    pub role: String,
+    pub role: ChatRole,
     pub content: String,
 }
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
-            role: "system".into(),
+            role: ChatRole::System,
             content: content.into(),
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: "user".into(),
+            role: ChatRole::User,
             content: content.into(),
         }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
-            role: "assistant".into(),
+            role: ChatRole::Assistant,
             content: content.into(),
         }
     }
@@ -286,7 +266,8 @@ pub enum CompilerError {
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Send a structured conversation to the LLM and get the assistant's response.
-    async fn generate(&self, messages: &[ChatMessage]) -> Result<String, String>;
+    async fn generate(&self, messages: &[ChatMessage])
+        -> Result<String, crate::client::BrainError>;
 }
 
 /// The Intelligence Compiler.
@@ -337,7 +318,7 @@ impl IntentCompiler {
                 .client
                 .generate(&conversation)
                 .await
-                .map_err(CompilerError::PromptFailed)?;
+                .map_err(|e| CompilerError::PromptFailed(e.to_string()))?;
 
             let cleaned_json = extract_json_block(&response);
 
@@ -388,10 +369,15 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlm {
-        async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+        ) -> Result<String, crate::client::BrainError> {
             let mut resps = self.responses.lock().unwrap();
             if resps.is_empty() {
-                Err("No more mock responses".into())
+                Err(crate::client::BrainError::Config(
+                    "No more mock responses".into(),
+                ))
             } else {
                 Ok(resps.remove(0))
             }
@@ -565,8 +551,8 @@ pub mod client;
 pub mod compiler;
 pub mod schema;
 
-pub use client::{LlmConfig, ReqwestLlmClient};
-pub use compiler::{ChatMessage, CompilerError, IntentCompiler, LlmClient};
+pub use client::{BrainError, LlmProviderConfig, ProviderKind, ReqwestLlmClient};
+pub use compiler::{ChatMessage, ChatRole, CompilerError, IntentCompiler, LlmClient};
 
 ════════════════════════════════════════════════════════════════
 FILE: crates/crow-brain/src/schema.rs
@@ -681,6 +667,7 @@ crow-intel = { path = "../crow-intel" }
 crow-brain = { path = "../crow-brain" }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 similar = "2.6"
 anyhow = "1"
 
@@ -699,106 +686,195 @@ crow-workspace = { path = "../crow-workspace" }
 ════════════════════════════════════════════════════════════════
 FILE: crates/crow-cli/src/config.rs
 ════════════════════════════════════════════════════════════════
-//! Shared CLI configuration resolved from environment variables.
+//! Shared CLI configuration resolved from project file and environment variables.
 //!
-//! Single source of truth for all runtime knobs. Every command
-//! (compile, dry-run, future Darwin loop) reads from this struct
-//! instead of scattering `env::var` calls across orchestration code.
+//! Priority: Environment variables > `.crow/config.json` > defaults.
 
+use crow_brain::{BrainError, LlmProviderConfig, ProviderKind, ReqwestLlmClient};
+use serde::Deserialize;
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-/// All environment-driven configuration for a crow session.
-pub struct CliConfig {
+// ─── File-based configuration shapes ───────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct ConfigFile {
+    llm: Option<LlmConfigFile>,
+    workspace: Option<WorkspaceConfigFile>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct LlmConfigFile {
+    provider: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    base_url: Option<String>,
+    max_tokens: Option<u32>,
+    connect_timeout: Option<u64>,
+    request_timeout: Option<u64>,
+    json_mode: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct WorkspaceConfigFile {
+    map_budget: Option<usize>,
+}
+
+// ─── Runtime configuration ──────────────────────────────────────
+
+/// All configuration for a crow session.
+pub struct CrowConfig {
     pub workspace: PathBuf,
-    pub llm: crow_brain::LlmConfig,
+    pub llm: LlmProviderConfig,
     pub map_budget: usize,
 }
 
-impl CliConfig {
-    /// Resolve configuration from environment.
+impl CrowConfig {
+    /// Resolve configuration from project file and environment.
     /// Fails fast with a clear message if configuration values are invalid.
-    pub fn from_env() -> anyhow::Result<Self> {
-        // API key: optional when a custom base URL is set (allows local providers).
-        let api_key = env::var("OPENAI_API_KEY")
+    pub fn load() -> anyhow::Result<Self> {
+        let workspace_dir = env::current_dir()?;
+        let config_path = workspace_dir.join(".crow").join("config.json");
+
+        let file_cfg = if config_path.exists() {
+            let content = fs::read_to_string(&config_path)?;
+            serde_json::from_str::<ConfigFile>(&content)
+                .map_err(|e| anyhow::anyhow!("Failed to parse .crow/config.json: {}", e))?
+        } else {
+            ConfigFile::default()
+        };
+
+        let file_llm = file_cfg.llm.unwrap_or_default();
+        let file_ws = file_cfg.workspace.unwrap_or_default();
+
+        // ── LLM Configuration ──
+
+        let env_api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("CROW_API_KEY"))
             .ok();
+        let api_key = env_api_key.or(file_llm.api_key);
 
-        // Strict parsing for JSON mode: unrecognized values fail fast.
+        let env_base_url = env::var("LLM_BASE_URL").ok();
+        let base_url = env_base_url.or(file_llm.base_url);
+
+        let env_model = env::var("LLM_MODEL").ok();
+        let model = env_model.or(file_llm.model);
+
+        // Strict parsing for JSON mode
         let json_mode = match env::var("LLM_JSON_MODE") {
-            Ok(v) => {
-                let parsed = match v.to_lowercase().as_str() {
-                    "on" | "true" | "1" | "yes" => true,
-                    "off" | "false" | "0" | "no" => false,
-                    other => {
-                        anyhow::bail!(
-                            "Invalid LLM_JSON_MODE='{}'. Expected: on|off|true|false|1|0|yes|no",
-                            other
+            Ok(v) => match v.to_lowercase().as_str() {
+                "on" | "true" | "1" | "yes" => true,
+                "off" | "false" | "0" | "no" => false,
+                other => anyhow::bail!(
+                    "Invalid LLM_JSON_MODE='{}'. Expected: on|off|true|false|1|0|yes|no",
+                    other
+                ),
+            },
+            Err(_) => file_llm.json_mode.unwrap_or(false),
+        };
+
+        // Resolve ProviderKind
+        let provider_str = env::var("LLM_PROVIDER").ok().or(file_llm.provider);
+
+        let default_base_url = "https://api.openai.com/v1".to_string();
+
+        let (provider_kind, final_base_url, final_model) = match provider_str.as_deref() {
+            Some("openai") => (
+                ProviderKind::OpenAI,
+                base_url.unwrap_or_else(|| default_base_url.clone()),
+                model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
+            ),
+            Some("anthropic") => (
+                ProviderKind::Anthropic,
+                base_url.unwrap_or_else(|| "https://api.anthropic.com/v1".to_string()),
+                model.unwrap_or_else(|| "claude-3-5-sonnet-latest".to_string()),
+            ),
+            Some(other) => (
+                ProviderKind::Custom(other.to_string()),
+                base_url.unwrap_or_else(|| default_base_url.clone()),
+                model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
+            ),
+            None => {
+                // If base_url is specified but not provider, treat as custom.
+                if let Some(url) = base_url {
+                    let m = model.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "LLM_BASE_URL is set to '{}' but model is not specified. \
+                         Please set LLM_MODEL explicitly when using a custom provider.",
+                            url
                         )
-                    }
-                };
-                Some(parsed)
-            }
-            Err(_) => None,
-        };
-
-        let base_url = env::var("LLM_BASE_URL").ok();
-
-        // When a custom base URL is set, require an explicit model to avoid
-        // accidentally sending "gpt-4-turbo" to a non-OpenAI endpoint.
-        // API key is NOT required for custom providers (local/unauthenticated).
-        let model = match (&base_url, env::var("LLM_MODEL")) {
-            (_, Ok(m)) => m,
-            (None, Err(_)) => "gpt-4-turbo".to_string(),
-            (Some(url), Err(_)) => {
-                anyhow::bail!(
-                    "LLM_BASE_URL is set to '{}' but LLM_MODEL is not specified. \
-                     Please set LLM_MODEL explicitly when using a custom provider.",
-                    url
-                )
+                    })?;
+                    (ProviderKind::Custom("custom".into()), url, m)
+                } else {
+                    (
+                        ProviderKind::OpenAI,
+                        default_base_url,
+                        model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
+                    )
+                }
             }
         };
 
-        // When using the default OpenAI endpoint, API key is still required.
-        if base_url.is_none() && api_key.is_none() {
+        if matches!(
+            provider_kind,
+            ProviderKind::OpenAI | ProviderKind::Anthropic
+        ) && api_key.is_none()
+        {
             anyhow::bail!(
-                "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY. \
-                 (API key is only optional when LLM_BASE_URL points to a local/unauthenticated provider.)"
+                "Missing API Key for {:?}. Please set OPENAI_API_KEY or CROW_API_KEY. \
+                 (API key is only optional when using a custom provider with explicitly set base URL.)",
+                 provider_kind
             );
         }
 
-        let llm = crow_brain::LlmConfig {
+        let max_tokens = env::var("LLM_MAX_TOKENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or(file_llm.max_tokens)
+            .unwrap_or(8192);
+
+        let connect_timeout_secs = env::var("LLM_CONNECT_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or(file_llm.connect_timeout)
+            .unwrap_or(10);
+
+        let request_timeout_secs = env::var("LLM_REQUEST_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or(file_llm.request_timeout)
+            .unwrap_or(300);
+
+        let llm = LlmProviderConfig {
+            provider_kind,
             api_key,
-            model,
-            base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".into()),
-            max_tokens: env::var("LLM_MAX_TOKENS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(8192),
-            connect_timeout_secs: env::var("LLM_CONNECT_TIMEOUT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10),
-            request_timeout_secs: env::var("LLM_REQUEST_TIMEOUT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
+            model: final_model,
+            base_url: final_base_url,
+            max_tokens,
+            connect_timeout_secs,
+            request_timeout_secs,
             json_mode,
         };
 
+        // ── Workspace Configuration ──
+
+        let map_budget = env::var("CROW_MAP_BUDGET")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or(file_ws.map_budget)
+            .unwrap_or(500 * 1024);
+
         Ok(Self {
-            workspace: env::current_dir()?,
+            workspace: workspace_dir,
             llm,
-            map_budget: env::var("CROW_MAP_BUDGET")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(500 * 1024),
+            map_budget,
         })
     }
 
     /// Build an LLM client from this configuration.
-    pub fn build_llm_client(&self) -> Result<crow_brain::ReqwestLlmClient, String> {
-        crow_brain::ReqwestLlmClient::from_config(&self.llm)
+    pub fn build_llm_client(&self) -> Result<ReqwestLlmClient, BrainError> {
+        ReqwestLlmClient::from_config(&self.llm)
     }
 
     /// Build a repo map from the workspace using the configured budget.
@@ -807,12 +883,105 @@ impl CliConfig {
     }
 
     /// Build a repo map against an arbitrary root (e.g. a frozen sandbox).
-    pub fn build_repo_map_for(
-        &self,
-        root: &std::path::Path,
-    ) -> Result<crow_intel::RepoMap, String> {
+    pub fn build_repo_map_for(&self, root: &Path) -> Result<crow_intel::RepoMap, String> {
         let walker = crow_intel::RepoWalker::new().with_max_bytes(self.map_budget);
         walker.build_repo_map(root)
+    }
+}
+
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/src/context.rs
+════════════════════════════════════════════════════════════════
+use crow_brain::{ChatMessage, ChatRole};
+use std::collections::VecDeque;
+
+/// Manages the LLM context envelope.
+/// Ensures that the cognitive loop does not blow out the token window
+/// with massive file reads or lengthy verification logs over multiple retries.
+pub struct CognitiveBudget {
+    system_messages: Vec<ChatMessage>,
+    conversation: VecDeque<ChatMessage>,
+    max_bytes: usize,
+    max_history_turns: usize,
+}
+
+impl CognitiveBudget {
+    pub fn new(sys_msg: ChatMessage) -> Self {
+        Self {
+            system_messages: vec![sys_msg],
+            conversation: VecDeque::new(),
+            // 768 KB default hard cap on context size.
+            max_bytes: 768 * 1024,
+            max_history_turns: 30, // 30 messages max
+        }
+    }
+
+    pub fn push_user(&mut self, content: impl Into<String>) {
+        self.conversation.push_back(ChatMessage::user(content));
+        self.enforce_budget();
+    }
+
+    pub fn push_assistant(&mut self, content: impl Into<String>) {
+        self.conversation.push_back(ChatMessage::assistant(content));
+        self.enforce_budget();
+    }
+
+    /// Adds the result of a file read to the context.
+    /// Truncates the text if the file is massive.
+    pub fn push_file_read(&mut self, content: String) {
+        let max_read = 150 * 1024; // Limit single read to 150KB
+        if content.len() > max_read {
+            let truncated = format!(
+                "{}...\n\n[SYSTEM: File content truncated at 150KB to preserve context budget]",
+                &content[..max_read]
+            );
+            self.push_user(truncated);
+        } else {
+            self.push_user(content);
+        }
+    }
+
+    /// Enforces size limits by aggressively pruning older messages.
+    fn enforce_budget(&mut self) {
+        // Strip out the oldest messages if we exceed the turn count.
+        while self.conversation.len() > self.max_history_turns {
+            self.conversation.pop_front();
+        }
+
+        // If we exceed byte budget, replace the oldest user message with a pruning marker
+        // until we fit or run out of old messages.
+        while self.total_bytes() > self.max_bytes && self.conversation.len() > 2 {
+            let removed = self.conversation.pop_front();
+            if let Some(msg) = removed {
+                if msg.role == ChatRole::User
+                    && !msg.content.starts_with("[SYSTEM: Older context pruned")
+                {
+                    self.conversation.push_front(ChatMessage::user(
+                        "[SYSTEM: Older context pruned to save budget]",
+                    ));
+                    // Check if it fits now, else pop again loop
+                }
+            }
+        }
+    }
+
+    fn total_bytes(&self) -> usize {
+        self.system_messages
+            .iter()
+            .map(|s| s.content.len())
+            .sum::<usize>()
+            + self
+                .conversation
+                .iter()
+                .map(|s| s.content.len())
+                .sum::<usize>()
+    }
+
+    /// Export the bounded context window for the LLM client.
+    pub fn as_messages(&self) -> Vec<ChatMessage> {
+        let mut out = self.system_messages.clone();
+        out.extend(self.conversation.iter().cloned());
+        out
     }
 }
 
@@ -895,10 +1064,11 @@ fn render_myers_diff(old: &str, new: &str) {
 FILE: crates/crow-cli/src/main.rs
 ════════════════════════════════════════════════════════════════
 mod config;
+mod context;
 mod diff;
 
 use anyhow::{Context, Result};
-use config::CliConfig;
+use config::CrowConfig;
 use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::{Confidence, EditOp, FilePrecondition, IntentPlan, WorkspacePath};
@@ -1016,7 +1186,7 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
 
     println!("🦅 crow-code Compile-Only mode initializing...\n");
 
-    let cfg = CliConfig::from_env()?;
+    let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
@@ -1060,7 +1230,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
     println!("🦅 crow-code Dry-Run mode initializing...\n");
 
-    let cfg = CliConfig::from_env()?;
+    let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
 
     // ── Step 1: Freeze the timeline FIRST ──────────────────────────
@@ -1115,13 +1285,16 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     // Structured message history with proper role separation.
     // System context (repo map + constraints) is set once; subsequent
     // interactions are User (system feedback) and Assistant (LLM output).
+    use context::CognitiveBudget;
     use crow_brain::ChatMessage;
-    let mut messages: Vec<ChatMessage> = vec![
-        ChatMessage::user(format!(
-            "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-            repo_map.map_text, prompt
-        )),
-    ];
+
+    let mut messages = CognitiveBudget::new(ChatMessage::system(
+        "You are an autonomous engineering agent executing the given task.",
+    ));
+    messages.push_user(format!(
+        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+        repo_map.map_text, prompt
+    ));
 
     // Outer Crucible Loop (max 3 compile-test cycles).
     // Each attempt re-materializes a fresh sandbox so that retries are
@@ -1149,9 +1322,12 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 epistemic_step, MAX_EPISTEMIC_STEPS
             );
             let action = compiler
-                .compile_action(&messages)
+                .compile_action(&messages.as_messages())
                 .await
                 .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
+
+            // Track the agent's action
+            messages.push_assistant(serde_json::to_string(&action)?);
 
             match action {
                 crow_patch::AgentAction::ReadFiles { paths, rationale } => {
@@ -1199,7 +1375,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     file_contents.push_str(
                         "Please proceed with your task, or read more files if necessary.",
                     );
-                    messages.push(ChatMessage::user(file_contents));
+                    messages.push_file_read(file_contents);
                 }
                 crow_patch::AgentAction::SubmitPlan { plan } => {
                     println!("    ✅ Agent submitted IntentPlan!");
@@ -1224,10 +1400,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             Ok(p) => p,
             Err(e) => {
                 println!("    ❌ Hydration failed: {:?}", e);
-                messages.push(ChatMessage::user(format!(
+                messages.push_user(format!(
                         "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
                         e
-                    )));
+                    ));
                 continue;
             }
         };
@@ -1276,10 +1452,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             break;
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
-            messages.push(ChatMessage::user(format!(
+            messages.push_user(format!(
                 "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
                 result.test_run.truncated_log
-            )));
+            ));
         }
         drop(attempt_sandbox);
     }
@@ -1315,10 +1491,12 @@ struct ScriptedLlm {
 
 #[async_trait]
 impl LlmClient for ScriptedLlm {
-    async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
+    async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, crow_brain::BrainError> {
         let mut resps = self.responses.lock().unwrap();
         if resps.is_empty() {
-            Err("ScriptedLlm exhausted all scripted responses".into())
+            Err(crow_brain::BrainError::Config(
+                "ScriptedLlm exhausted all scripted responses".into(),
+            ))
         } else {
             Ok(resps.remove(0))
         }
