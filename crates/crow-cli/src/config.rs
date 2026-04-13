@@ -53,7 +53,15 @@ impl CliConfig {
 
     /// Build a repo map from the workspace using the configured budget.
     pub fn build_repo_map(&self) -> Result<crow_intel::RepoMap, String> {
+        self.build_repo_map_for(&self.workspace)
+    }
+
+    /// Build a repo map against an arbitrary root (e.g. a frozen sandbox).
+    pub fn build_repo_map_for(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<crow_intel::RepoMap, String> {
         let walker = crow_intel::RepoWalker::new().with_max_bytes(self.map_budget);
-        walker.build_repo_map(&self.workspace)
+        walker.build_repo_map(root)
     }
 }

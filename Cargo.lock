@@ -179,6 +179,7 @@ name = "crow-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "async-trait",
  "crow-brain",
  "crow-intel",
  "crow-materialize",

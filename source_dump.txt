@@ -1,101 +1,10 @@
+# Crow-Code Source Dump
+# Generated: 2026-04-13T01:40:51Z
+# Commit: 74a940f
 
-================================================================================
-FILE: ./CLAUDE.md
-================================================================================
-# CLAUDE.md — Crow-Code Project Memory
-
-This file is the persistent project context for AI assistants working on this codebase.
-
-## Project Identity
-
-- **Name:** Crow Code
-- **Organization:** CorvusMatrix
-- **Repo:** `crow-code`
-- **Language:** Rust (pure workspace, no Go/Python/JS)
-- **Binary:** `crow` (built from `crates/crow-cli`)
-- **License:** MIT
-
-## Architecture Overview
-
-Crow Code is an evidence-driven AI coding agent built on defensive engineering
-principles. See `docs/RFC-001-Architecture-Baseline.md` for the full
-constitution.
-
-### Crate Topology (dependency flows downward only)
-
-```
-Layer 0 — Currencies (zero inter-deps, zero external deps)
-  crow-patch       Unified patch contract (EditOp, IntentPlan)
-  crow-evidence    Multidimensional verification evidence (EvidenceMatrix)
-  crow-probe       Repository recon radar (ProjectProfile)
-
-Layer 1 — Runtime
-  crow-workspace   Event-sourcing log & snapshot state machine
-  crow-materialize Workspace-isolation materialization (CoW / copy)
-
-Layer 2 — Crucible
-  crow-verifier    Workspace-isolated command execution & ACI log truncation
-
-Layer 3 — Intelligence
-  crow-intel       Tree-sitter outlines, LSP bridge, language-tier confidence
-
-Layer 4 — Reasoning
-  crow-brain       Intent compiler, budget governor, dual-track MCTS
-
-Layer 5 — Interface & Observability
-  crow-cli         Ratatui TUI (the user-facing binary)
-  crow-replay      Behavioral regression & task replay harness
-```
-
-### Dependency Convention
-
-Crates may only depend on crates in **equal or lower** layers. This is
-enforced by code review today; a `cargo-deny` or `xtask lint-deps` policy
-is planned. Circular dependencies are caught by `cargo check`.
-
-## Build & Test Commands
-
-```bash
-# Check compilation (all crates)
-cargo check --workspace
-
-# Run all tests
-cargo test --workspace
-
-# Run tests for a single crate
-cargo test -p crow-patch
-
-# Build the CLI binary
-cargo build -p crow-cli
-```
-
-## Code Conventions
-
-- **No external dependencies in Currency crates** (Layer 0). They use only `std`.
-- **Every public type must derive** at minimum: `Debug, Clone, PartialEq, Eq`.
-- **Ordered enums** (like `Confidence`, `LanguageTier`) must also derive `PartialOrd, Ord`.
-- **Tests live in `#[cfg(test)] mod tests`** inside each types module. No separate test files until integration tests are needed.
-- **Workspace-relative paths** are represented as `WorkspacePath` (validated newtype), never bare `PathBuf`.
-- **No `unwrap()` in library code.** Use `Result` or `Option` propagation.
-
-## System Invariants (from RFC-001)
-
-1. The LLM **never writes to disk directly.** All mutations go through `IntentPlan`.
-2. Final disk flushes **must verify** `base_snapshot_id` preconditions.
-3. A failed operation **must leave the workspace untouched** (zero pollution).
-4. Every risk flag or test result **must trace back** to a concrete command log or snapshot.
-
-## Current Status
-
-- **Step 1** ✅ Workspace genesis — 10 crates, `cargo check` green.
-- **Step 2** ✅ Core data contracts — `crow-patch` (12 tests), `crow-evidence` (10 tests), `crow-probe` (7 tests).
-- **Step 3** ✅ `crow-materialize` — Workspace-isolation physical materialization (20 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
-- **Step 4** ✅ `crow-verifier` — Workspace-isolated execution + ACI log truncation (20 tests). Direct exec (no shell), head+tail truncation, VerificationResult → EvidenceMatrix.
-- **Step 5** ✅ `crow-probe` scanner, `crow-workspace` applier, `crow-cli` God Pipeline.
-
-================================================================================
-FILE: ./Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: Cargo.toml
+════════════════════════════════════════════════════════════════
 [workspace]
 members = [
     # 💎 The Currencies — system-wide data primitives
@@ -127,94 +36,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
-================================================================================
-FILE: ./README.md
-================================================================================
-# 🦅 Crow Code
-
-![Corvus Matrix Logo](./assets/logo.png)
-
-> The smartest bird in the codebase.
-
-**Crow Code** is a next-generation AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). It is being designed from the ground up with evidence-driven verification, zero-pollution guarantees, and time-travel safety — no legacy, no compromises.
-
-## Why Crow?
-
-Crows are the most intelligent birds on the planet: they use tools, plan ahead, and solve multi-step problems. This project embodies that philosophy:
-
-- **Evidence over confidence scores.** Every proposed change will carry a structured proof bundle — compile results, test run history, lint status, and semantic risk flags — not an opaque 0–100 number.
-- **Patches are first-class citizens.** The LLM never touches your files directly. All mutations are buffered as atomic `IntentPlan`s anchored to workspace snapshots.
-- **Zero pollution guarantee (design goal).** If anything fails, your workspace stays exactly as it was. This is the invariant the runtime is being built to enforce.
-- **Time-travel (planned).** Event-sourced state machine with O(1) snapshots. Undo, redo, branch — at the infrastructure level.
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────┐
-│  crow-cli  (TUI)          crow-replay  (QA)      │  L5: Interface
-├──────────────────────────────────────────────────┤
-│  crow-brain  (Intent Compiler + MCTS Solver)     │  L4: Reasoning
-├──────────────────────────────────────────────────┤
-│  crow-intel  (Tree-sitter + LSP Bridge)          │  L3: Intelligence
-├──────────────────────────────────────────────────┤
-│  crow-verifier  (Workspace Exec + ACI Truncation)│  L2: Crucible
-├──────────────────────────────────────────────────┤
-│  crow-workspace        crow-materialize          │  L1: Runtime
-│  (Event Log + Snapshots) (Workspace Copy / CoW)  │
-├──────────────────────────────────────────────────┤
-│  crow-patch    crow-evidence    crow-probe       │  L0: Currencies
-│  (Patch Contract) (Evidence Matrix) (Recon Radar)│
-└──────────────────────────────────────────────────┘
-```
-
-10 Rust crates, strict layered dependencies, zero external deps at the foundation.
-
-See [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md) for the full design document.
-
-## Quick Start
-
-```bash
-# Build
-cargo build --workspace
-
-# Run all tests
-cargo test --workspace
-
-# Run the CLI
-cargo run -p crow-cli
-```
-
-## Project Status
-
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | Workspace genesis (10 crates) | ✅ |
-| 2 | Core data contracts (23 tests) | ✅ |
-| 3 | Workspace-isolation materialization | ✅ |
-| 4 | ACI log truncation & bounded exec | ✅ |
-| 5 | Probe + Applier + God Pipeline | ✅ |
-
-## Crate Overview
-
-| Crate | Layer | Purpose |
-|-------|-------|---------|
-| `crow-patch` | L0 | Unified patch contract: `EditOp`, `IntentPlan`, `WorkspacePath` |
-| `crow-evidence` | L0 | Multidimensional verification: `EvidenceMatrix`, `TestRun`, `RiskFlag` |
-| `crow-probe` | L0 | Repository radar: `ProjectProfile`, `VerificationCandidate` |
-| `crow-workspace` | L1 | Event-sourcing log and snapshot state machine |
-| `crow-materialize` | L1 | Workspace-isolation CoW/copy materialization |
-| `crow-verifier` | L2 | Workspace-isolated command execution, log truncation |
-| `crow-intel` | L3 | Tree-sitter outlines, LSP bridge |
-| `crow-brain` | L4 | Intent compiler, budget governor, MCTS |
-| `crow-cli` | L5 | Ratatui TUI — the `crow` binary |
-| `crow-replay` | L5 | Behavioral regression test harness |
-
-## License
-
-[MIT](LICENSE)
-================================================================================
-FILE: ./crates/crow-brain/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-brain/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-brain"
 version.workspace = true
@@ -229,12 +53,12 @@ serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"
 
-================================================================================
-FILE: ./crates/crow-brain/src/client.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-brain/src/client.rs
+════════════════════════════════════════════════════════════════
 use crate::LlmClient;
 use async_trait::async_trait;
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 use serde_json::json;
 
 // ─── Provider Capabilities ──────────────────────────────────────────
@@ -315,7 +139,7 @@ impl ReqwestLlmClient {
 impl LlmClient for ReqwestLlmClient {
     async fn generate(&self, prompt: &str) -> Result<String, String> {
         let url = format!("{}/chat/completions", self.base_url);
-        
+
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -335,7 +159,8 @@ impl LlmClient for ReqwestLlmClient {
             body["response_format"] = json!({ "type": "json_object" });
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -343,30 +168,42 @@ impl LlmClient for ReqwestLlmClient {
             .map_err(|e| format!("HTTP request failed: {}", e))?;
 
         let status = resp.status();
-        let raw_text = resp.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+        let raw_text = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
 
         if !status.is_success() {
             return Err(format!("API error {}: {}", status, raw_text));
         }
 
         let trimmed = raw_text.trim();
-        let data: serde_json::Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Failed to parse API response as JSON: {} — raw: {}", e, &trimmed[..trimmed.len().min(500)]))?;
-        
+        let data: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+            format!(
+                "Failed to parse API response as JSON: {} — raw: {}",
+                e,
+                &trimmed[..trimmed.len().min(500)]
+            )
+        })?;
+
         let content = data["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| format!("Missing content in response: {}", &trimmed[..trimmed.len().min(500)]))?;
+            .ok_or_else(|| {
+                format!(
+                    "Missing content in response: {}",
+                    &trimmed[..trimmed.len().min(500)]
+                )
+            })?;
 
         Ok(content.to_string())
     }
 }
 
-================================================================================
-FILE: ./crates/crow-brain/src/compiler.rs
-================================================================================
-use crow_patch::IntentPlan;
-use serde_json::Error as SerdeError;
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-brain/src/compiler.rs
+════════════════════════════════════════════════════════════════
 use async_trait::async_trait;
+use serde_json::Error as SerdeError;
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -402,28 +239,34 @@ impl IntentCompiler {
         self
     }
 
-    /// Compiles a task directive into a strict `IntentPlan`.
-    /// Employs a self-healing loop: if the LLM output violates the `IntentPlan`
-    /// schema, it catches the parsing error and prompts the LLM to fix it,
-    /// up to `max_retries` times.
-    pub async fn compile(&self, base_task: &str) -> Result<IntentPlan, CompilerError> {
+    /// Compiles a task directive into a strict `AgentAction`.
+    /// Employs a self-healing loop: if the LLM output violates the schema,
+    /// it catches the parsing error and prompts the LLM to fix it.
+    pub async fn compile_action(
+        &self,
+        base_task: &str,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
 
         let base_prompt = format!(
-            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the IntentPlan schema.",
+            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the AgentAction schema.",
             base_task, schema_guide
         );
-        
+
         let mut current_prompt = base_prompt.clone();
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
-            let response = self.client.generate(&current_prompt).await.map_err(CompilerError::PromptFailed)?;
-            
+            let response = self
+                .client
+                .generate(&current_prompt)
+                .await
+                .map_err(CompilerError::PromptFailed)?;
+
             // Try to parse the json directly (using a liberal extraction if the model wrapped it in markdown)
             let cleaned_json = extract_json_block(&response);
 
-            match serde_json::from_str::<IntentPlan>(cleaned_json) {
+            match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
                 Ok(plan) => return Ok(plan),
                 Err(e) => {
                     // Self-healing: capture the exact Serde error but retain original task
@@ -480,18 +323,22 @@ mod tests {
 
     fn valid_plan_json() -> String {
         r#"{
-            "base_snapshot_id": "snap-1",
-            "rationale": "mock",
-            "is_partial": false,
-            "confidence": "High",
-            "operations": [{
-                "Create": {
-                    "path": "test.txt",
-                    "content": "hello",
-                    "precondition": "MustNotExist"
-                }
-            }]
-        }"#.into()
+            "action": "submit_plan",
+            "plan": {
+                "base_snapshot_id": "snap-1",
+                "rationale": "mock",
+                "is_partial": false,
+                "confidence": "High",
+                "operations": [{
+                    "Create": {
+                        "path": "test.txt",
+                        "content": "hello",
+                        "precondition": "MustNotExist"
+                    }
+                }]
+            }
+        }"#
+        .into()
     }
 
     #[tokio::test]
@@ -501,15 +348,22 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("do something").await.expect("compile should succeed");
-        assert_eq!(plan.rationale, "mock");
+        let action = compiler
+            .compile_action("do something")
+            .await
+            .expect("compile should succeed");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 
     #[tokio::test]
     async fn compiler_self_heals_on_serde_error() {
         // First response misses a comma or is junk
         let bad_json = r#"{ "invalid": yes }"#.into();
-        
+
         let client = Box::new(MockLlm {
             // First response is bad_json, forcing the loop to catch Err and retry
             // The second response is valid_plan_json, so the loop succeeds.
@@ -517,22 +371,32 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("fix bug").await.expect("compile should heal and succeed");
-        assert_eq!(plan.rationale, "mock");
+        let action = compiler
+            .compile_action("fix bug")
+            .await
+            .expect("compile should heal and succeed");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 
     #[tokio::test]
     async fn compiler_fails_after_max_retries() {
         let bad_json = String::from(r#"{ "still_bad": true }"#);
-        
+
         let client = Box::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![
-                bad_json.clone(), bad_json.clone(), bad_json.clone(), bad_json.clone()
+                bad_json.clone(),
+                bad_json.clone(),
+                bad_json.clone(),
+                bad_json.clone(),
             ])),
         });
         let compiler = IntentCompiler::new(client).with_max_retries(2);
 
-        let err = compiler.compile("do things").await.unwrap_err();
+        let err = compiler.compile_action("do things").await.unwrap_err();
         match err {
             CompilerError::MaxRetriesExceeded(errors) => {
                 assert_eq!(errors.len(), 3); // initial + 2 retries
@@ -572,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn compiler_handles_provider_leading_newline_in_content() {
         // Simulates what OpenRouter/DeepInfra actually returns:
-        // content field starts with "\n" before the JSON 
+        // content field starts with "\n" before the JSON
         let with_newline = format!("\n{}", valid_plan_json());
 
         let client = Box::new(MockLlm {
@@ -580,9 +444,15 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("create something").await
+        let action = compiler
+            .compile_action("create something")
+            .await
             .expect("Leading newline in content should not break parsing");
-        assert_eq!(plan.rationale, "mock");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 
     #[tokio::test]
@@ -594,15 +464,21 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client);
 
-        let plan = compiler.compile("create something").await
+        let action = compiler
+            .compile_action("create something")
+            .await
             .expect("Markdown-wrapped JSON should be extracted and parsed");
-        assert_eq!(plan.rationale, "mock");
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            assert_eq!(plan.rationale, "mock");
+        } else {
+            panic!("Expected SubmitPlan");
+        }
     }
 }
 
-================================================================================
-FILE: ./crates/crow-brain/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-brain/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-brain: Intent compiler, budget governor, and dual-track solver.
 //!
 //! Single-track Proposal Engine for simple tasks; multi-track MCTS
@@ -616,9 +492,9 @@ pub mod schema;
 pub use client::ReqwestLlmClient;
 pub use compiler::{CompilerError, IntentCompiler, LlmClient};
 
-================================================================================
-FILE: ./crates/crow-brain/src/schema.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-brain/src/schema.rs
+════════════════════════════════════════════════════════════════
 //! Centralized IntentPlan schema definition for LLM prompts.
 //!
 //! This module is the **single source of truth** for the JSON schema
@@ -631,65 +507,83 @@ FILE: ./crates/crow-brain/src/schema.rs
 /// constituent types. The schema is intentionally simplified for the
 /// model — the hydrator will fill in system-owned fields afterwards.
 pub fn intent_plan_schema() -> &'static str {
-    r#"Expected JSON Schema for IntentPlan:
+    r#"Expected JSON Schema for AgentAction:
+
+You may choose ONE of the following actions.
+If you need to see the exact code of a file before modifying it, use "read_files".
+If you are ready to apply changes, use "submit_plan".
+
+ACTION TYPE 1: Read Files
 {
-  "base_snapshot_id": "string (any identifier)",
-  "rationale": "string (explain why you are making these changes)",
-  "is_partial": boolean,
-  "confidence": "High" | "Medium" | "Low" | "None",
-  "operations": [
-    {
-      "Create": {
-        "path": "relative/path.ext",
-        "content": "full file content as string",
-        "precondition": "MustNotExist"
+  "action": "read_files",
+  "paths": ["src/main.rs", "src/lib.rs"],
+  "rationale": "I need to see the function body to correctly replace it."
+}
+
+ACTION TYPE 2: Submit Plan
+{
+  "action": "submit_plan",
+  "plan": {
+    "base_snapshot_id": "string (any identifier)",
+    "rationale": "string (explain why you are making these changes)",
+    "is_partial": boolean,
+    "confidence": "High" | "Medium" | "Low" | "None",
+    "operations": [
+      {
+        "Create": {
+          "path": "relative/path.ext",
+          "content": "full file content as string",
+          "precondition": "MustNotExist"
+        }
+      },
+      {
+        "Modify": {
+          "path": "relative/path.ext",
+          "preconditions": {
+            "content_hash": "any-placeholder (system will replace)",
+            "expected_line_count": null
+          },
+          "hunks": [
+            {
+              "original_start": 1,
+              "remove_block": "exact lines to remove\\nas a single string",
+              "insert_block": "replacement lines\\nas a single string"
+            }
+          ]
+        }
+      },
+      {
+        "Delete": {
+          "path": "relative/path.ext",
+          "precondition": "MustExist"
+        }
+      },
+      {
+        "Rename": {
+          "from": "old/path.ext",
+          "to": "new/path.ext",
+          "on_conflict": "Fail",
+          "source_precondition": "MustExist",
+          "dest_precondition": "MustNotExist"
+        }
       }
-    },
-    {
-      "Modify": {
-        "path": "relative/path.ext",
-        "preconditions": {
-          "content_hash": "any-placeholder (system will replace)",
-          "expected_line_count": null
-        },
-        "hunks": [
-          {
-            "original_start": 1,
-            "remove_lines": ["exact line to remove"],
-            "insert_lines": ["replacement line"]
-          }
-        ]
-      }
-    },
-    {
-      "Delete": {
-        "path": "relative/path.ext",
-        "precondition": "MustExist"
-      }
-    },
-    {
-      "Rename": {
-        "from": "old/path.ext",
-        "to": "new/path.ext",
-        "on_conflict": "Fail",
-        "source_precondition": "MustExist",
-        "dest_precondition": "MustNotExist"
-      }
-    }
-  ]
+    ]
+  }
 }
 
 Rules:
+- Output ONLY a valid JSON object matching ONE of the action types above.
 - Paths must be relative to workspace root, no leading slash, no ".." traversal.
 - For Modify, preconditions.content_hash can be any string — the system will replace it.
 - For Create, precondition must be "MustNotExist".
 - Each hunk's original_start is 1-based.
-- Output ONLY a valid JSON object. No markdown, no explanation."#
+- `remove_block` and `insert_block` must be single strings using `\n` for line breaks. Do NOT use arrays for lines.
+- Output ONLY valid JSON. No markdown, no explanation."#
 }
 
-================================================================================
-FILE: ./crates/crow-cli/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-cli"
 version.workspace = true
@@ -710,6 +604,7 @@ crow-intel = { path = "../crow-intel" }
 crow-brain = { path = "../crow-brain" }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
+similar = "2.6"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
@@ -721,9 +616,9 @@ crow-probe = { path = "../crow-probe" }
 crow-verifier = { path = "../crow-verifier" }
 crow-workspace = { path = "../crow-workspace" }
 
-================================================================================
-FILE: ./crates/crow-cli/src/config.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/src/config.rs
+════════════════════════════════════════════════════════════════
 //! Shared CLI configuration resolved from environment variables.
 //!
 //! Single source of truth for all runtime knobs. Every command
@@ -784,17 +679,21 @@ impl CliConfig {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-cli/src/diff.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/src/diff.rs
+════════════════════════════════════════════════════════════════
 //! Plan diff renderer.
 //!
-//! Produces a human-readable, stable diff output for each operation
-//! in an IntentPlan by comparing source workspace against post-apply sandbox.
-//! Uses a sequential LCS-like algorithm rather than set membership,
-//! so duplicate/reordered lines are rendered correctly.
+//! Produces human-readable, stable, memory-efficient diff output for each
+//! operation in an IntentPlan by comparing source workspace against
+//! post-apply sandbox.
+//!
+//! Uses the `similar` crate (Myers O(ND) algorithm) instead of hand-written
+//! LCS, so memory usage is linear in the diff size — not quadratic in
+//! the file size. Safe for 100K-line files.
 
 use crow_patch::{EditOp, IntentPlan};
+use similar::TextDiff;
 use std::path::Path;
 
 /// Render a diff between the source workspace and patched sandbox for every
@@ -808,20 +707,23 @@ pub fn render_plan_diff(source_root: &Path, sandbox_root: &Path, plan: &IntentPl
                     println!("diff --crow /dev/null b/{}", path.as_str());
                     println!("--- /dev/null");
                     println!("+++ b/{}", path.as_str());
-                    println!("@@ -0,0 +1,{} @@", content.lines().count());
+                    let line_count = content.lines().count();
+                    println!("@@ -0,0 +1,{} @@", line_count);
                     for line in content.lines() {
                         println!("+{}", line);
                     }
                 }
             }
             EditOp::Modify { path, .. } => {
-                let old = std::fs::read_to_string(source_root.join(path.as_str())).unwrap_or_default();
-                let new = std::fs::read_to_string(sandbox_root.join(path.as_str())).unwrap_or_default();
+                let old =
+                    std::fs::read_to_string(source_root.join(path.as_str())).unwrap_or_default();
+                let new =
+                    std::fs::read_to_string(sandbox_root.join(path.as_str())).unwrap_or_default();
                 if old != new {
                     println!("diff --crow a/{f} b/{f}", f = path.as_str());
                     println!("--- a/{}", path.as_str());
                     println!("+++ b/{}", path.as_str());
-                    render_line_diff(&old, &new);
+                    render_myers_diff(&old, &new);
                 }
             }
             EditOp::Delete { path, .. } => {
@@ -829,7 +731,8 @@ pub fn render_plan_diff(source_root: &Path, sandbox_root: &Path, plan: &IntentPl
                 println!("--- a/{}", path.as_str());
                 println!("+++ /dev/null");
                 if let Ok(content) = std::fs::read_to_string(source_root.join(path.as_str())) {
-                    println!("@@ -1,{} +0,0 @@", content.lines().count());
+                    let line_count = content.lines().count();
+                    println!("@@ -1,{} +0,0 @@", line_count);
                     for line in content.lines() {
                         println!("-{}", line);
                     }
@@ -842,67 +745,18 @@ pub fn render_plan_diff(source_root: &Path, sandbox_root: &Path, plan: &IntentPl
     }
 }
 
-/// Simple sequential line diff using a greedy LCS approach.
-/// Produces unified-diff-style output with proper hunk context.
-fn render_line_diff(old: &str, new: &str) {
-    let old_lines: Vec<&str> = old.lines().collect();
-    let new_lines: Vec<&str> = new.lines().collect();
-
-    // Build LCS table
-    let m = old_lines.len();
-    let n = new_lines.len();
-    let mut dp = vec![vec![0u32; n + 1]; m + 1];
-    for i in (0..m).rev() {
-        for j in (0..n).rev() {
-            dp[i][j] = if old_lines[i] == new_lines[j] {
-                dp[i + 1][j + 1] + 1
-            } else {
-                dp[i + 1][j].max(dp[i][j + 1])
-            };
-        }
-    }
-
-    // Walk the table to produce diff lines
-    let mut i = 0;
-    let mut j = 0;
-    let mut removed = Vec::new();
-    let mut added = Vec::new();
-
-    while i < m || j < n {
-        if i < m && j < n && old_lines[i] == new_lines[j] {
-            // Flush any pending changes before context
-            flush_hunk(&removed, &added);
-            removed.clear();
-            added.clear();
-            // Context line (don't print to keep output concise)
-            i += 1;
-            j += 1;
-        } else if j < n && (i >= m || dp[i][j + 1] >= dp[i + 1][j]) {
-            added.push(new_lines[j]);
-            j += 1;
-        } else {
-            removed.push(old_lines[i]);
-            i += 1;
-        }
-    }
-    flush_hunk(&removed, &added);
-}
-
-fn flush_hunk(removed: &[&str], added: &[&str]) {
-    if removed.is_empty() && added.is_empty() {
-        return;
-    }
-    for line in removed {
-        println!("-{}", line);
-    }
-    for line in added {
-        println!("+{}", line);
+/// Render a unified diff using Myers O(ND) algorithm via `similar`.
+/// Memory usage is O(D) where D is the edit distance, not O(N*M).
+fn render_myers_diff(old: &str, new: &str) {
+    let diff = TextDiff::from_lines(old, new);
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        print!("{}", hunk);
     }
 }
 
-================================================================================
-FILE: ./crates/crow-cli/src/main.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/src/main.rs
+════════════════════════════════════════════════════════════════
 mod config;
 mod diff;
 
@@ -1026,24 +880,30 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
     let repo_map = cfg.build_repo_map()?;
-    println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
+    println!(
+        "    🎯 Compressed map length: {} bytes",
+        repo_map.map_text.len()
+    );
 
-    println!("\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...", cfg.model);
+    println!(
+        "\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...",
+        cfg.model
+    );
     let full_prompt = format!("Context:\n{}\n\nTask:\n{}", repo_map.map_text, prompt);
 
     let client = Box::new(cfg.build_llm_client()?);
     let compiler = IntentCompiler::new(client);
 
-    match compiler.compile(&full_prompt).await {
-        Ok(plan) => {
+    match compiler.compile_action(&full_prompt).await {
+        Ok(action) => {
             println!("\n[✓] Compilation Successful!");
-            println!("--- Parsed IntentPlan ---");
-            println!("{}", serde_json::to_string_pretty(&plan)?);
+            println!("--- Parsed AgentAction ---");
+            println!("{}", serde_json::to_string_pretty(&action)?);
             Ok(())
         }
         Err(e) => {
             eprintln!("\n[✗] Compilation Failed: {:?}", e);
-            Err("Failed to compile IntentPlan".into())
+            Err("Failed to compile AgentAction".into())
         }
     }
 }
@@ -1062,83 +922,162 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let profile = scan_workspace(&cfg.workspace)?;
     let candidate = match profile.verification_candidates.first() {
         Some(c) => c,
-        None => return Err("No verification candidates found. Cannot dry-run without a verifier.".into()),
+        None => {
+            return Err(
+                "No verification candidates found. Cannot dry-run without a verifier.".into(),
+            )
+        }
     };
 
     println!("\n[2/6] Gathering Repomap Context via tree-sitter...");
     let repo_map = cfg.build_repo_map()?;
-    println!("    🎯 Compressed map length: {} bytes", repo_map.map_text.len());
+    println!(
+        "    🎯 Compressed map length: {} bytes",
+        repo_map.map_text.len()
+    );
 
-    println!("\n[3/6] Compiling IntentPlan via crow-brain (Model: {})...", cfg.model);
-    let full_prompt = format!(
-        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-        repo_map.map_text, prompt
+    println!(
+        "\n[3/6] Entering Autonomous Crucible Loop (Model: {})...",
+        cfg.model
     );
 
     let client = Box::new(cfg.build_llm_client()?);
     let compiler = IntentCompiler::new(client);
-    let compiled_plan = compiler.compile(&full_prompt).await
-        .map_err(|e| format!("Compilation failed: {:?}", e))?;
 
-    println!("\n[4/6] Hydrating IntentPlan (resolving real workspace preconditions)...");
-    let hydrated_plan = PlanHydrator::hydrate(&compiled_plan, &cfg.workspace)
-        .map_err(|e| format!("Hydration failed: {:?}", e))?;
+    let mut messages_context = format!(
+        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+        repo_map.map_text, prompt
+    );
 
-    println!("    💧 Hydrated Plan:\n{}", serde_json::to_string_pretty(&hydrated_plan)?);
+    // Outer Crucible Loop (max 3 compile-test cycles)
+    for crucible_attempt in 1..=3 {
+        println!("\n▶️ Crucible Attempt {}/3", crucible_attempt);
 
-    println!("\n[5/6] Materializing O(1) Sandbox and Applying Plan...");
-    let mat_config = MaterializeConfig {
-        source: cfg.workspace.clone(),
-        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: false,
-    };
-    let sandbox = materialize(&mat_config)?;
+        // Inner Epistemic Loop
+        let compiled_plan = loop {
+            println!("  🧠 Modulating Cognitive Request...");
+            let action = compiler
+                .compile_action(&messages_context)
+                .await
+                .map_err(|e| format!("Compilation failed: {:?}", e))?;
 
-    apply_plan_to_sandbox(&hydrated_plan, &sandbox)?;
-    println!("    💉 Sandbox injection successful!");
+            match action {
+                crow_patch::AgentAction::ReadFiles { paths, rationale } => {
+                    println!("    📖 Agent requests to read files: {:?}", paths);
+                    println!("       Rationale: {}", rationale);
 
-    // ── Diff output ──
-    println!("\n--- Sandbox Diff (source → patched) ---");
-    diff::render_plan_diff(&cfg.workspace, sandbox.path(), &hydrated_plan);
+                    messages_context.push_str("\n\n[SYSTEM: READ FILES RESULT]\n");
+                    for path in paths {
+                        let abs_path = path.to_absolute(&cfg.workspace);
+                        let content = std::fs::read_to_string(&abs_path)
+                            .unwrap_or_else(|_| "<file not found or unreadable>".into());
+                        messages_context.push_str(&format!(
+                            "--- {} ---\n{}\n\n",
+                            path.as_str(),
+                            content
+                        ));
+                    }
+                    messages_context.push_str(
+                        "Please proceed with your task, or read more files if necessary.",
+                    );
+                }
+                crow_patch::AgentAction::SubmitPlan { plan } => {
+                    println!("    ✅ Agent submitted IntentPlan!");
+                    break plan;
+                }
+            }
+        };
 
-    println!("\n[6/6] Verifying Sandbox with '{}'...", candidate.command.display());
-    let exec_config = ExecutionConfig {
-        timeout: std::time::Duration::from_secs(60),
-        max_output_bytes: 5 * 1024 * 1024,
-    };
+        println!("\n[4/6] Materializing O(1) Sandbox Boundary (Freezing Timeline)...");
+        let mat_config = MaterializeConfig {
+            source: cfg.workspace.clone(),
+            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+            allow_hardlinks: false,
+        };
+        let sandbox = materialize(&mat_config)?;
+        println!(
+            "    🛡️  Time-Frozen Sandbox established at: {}",
+            sandbox.path().display()
+        );
 
-    let result = crow_verifier::executor::execute(
-        sandbox.path(),
-        &candidate.command,
-        &exec_config,
-        &AciConfig::compact(),
-    )?;
+        println!("\n[5/6] Hydrating IntentPlan against Frozen Sandbox...");
+        let hydrated_plan = match PlanHydrator::hydrate(&compiled_plan, sandbox.path()) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("    ❌ Hydration failed: {:?}", e);
+                messages_context.push_str(&format!(
+                    "\n\n[SYSTEM: HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
+                    e
+                ));
+                continue;
+            }
+        };
 
-    let outcome = &result.test_run.outcome;
-    println!("\n╔══════════════════════════════════════╗");
-    println!("║  Dry-Run Verdict: {:?}", outcome);
-    println!("╚══════════════════════════════════════╝");
-    println!("Evidence:\n{}", result.test_run.truncated_log);
+        println!(
+            "    💧 Hydrated Plan:\n{}",
+            serde_json::to_string_pretty(&hydrated_plan)?
+        );
 
-    drop(sandbox);
+        apply_plan_to_sandbox(&hydrated_plan, &sandbox)?;
+        println!("    💉 Sandbox injection successful!");
+
+        println!("\n--- Sandbox Diff (source → patched) ---");
+        diff::render_plan_diff(&cfg.workspace, sandbox.path(), &hydrated_plan);
+
+        println!(
+            "\n[6/6] Verifying Sandbox with '{}'...",
+            candidate.command.display()
+        );
+        let exec_config = ExecutionConfig {
+            timeout: std::time::Duration::from_secs(60),
+            max_output_bytes: 5 * 1024 * 1024,
+        };
+
+        let result = crow_verifier::executor::execute(
+            sandbox.path(),
+            &candidate.command,
+            &exec_config,
+            &AciConfig::compact(),
+        )?;
+
+        let outcome = &result.test_run.outcome;
+        println!("\n╔══════════════════════════════════════╗");
+        println!("║  Dry-Run Verdict: {:?}", outcome);
+        println!("╚══════════════════════════════════════╝");
+        println!("Evidence:\n{}", result.test_run.truncated_log);
+
+        if format!("{:?}", result.test_run.outcome) == "Passed" {
+            println!(
+                "\n[🎉] Autonomous execution successful on attempt {}!",
+                crucible_attempt
+            );
+            break;
+        } else {
+            println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
+            messages_context.push_str(&format!(
+                "\n\n[SYSTEM: VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
+                result.test_run.truncated_log
+            ));
+        }
+        drop(sandbox);
+    }
     Ok(())
 }
 
-================================================================================
-FILE: ./crates/crow-cli/tests/dry_run_integration.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/tests/dry_run_integration.rs
+════════════════════════════════════════════════════════════════
 //! Integration test: exercises the full local pipeline
 //! (hydrate → materialize → apply → verify) with a synthetic plan
 //! instead of calling the real LLM. This proves the physical loop
 //! is wired correctly end-to-end without requiring network access.
 
-use crow_probe::types::VerificationCommand;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::{
-    Confidence, EditOp, FilePrecondition, IntentPlan, PreconditionState,
-    SnapshotId, WorkspacePath,
+    Confidence, EditOp, FilePrecondition, IntentPlan, PreconditionState, SnapshotId, WorkspacePath,
 };
+use crow_probe::types::VerificationCommand;
 use crow_verifier::{types::AciConfig, ExecutionConfig};
 use crow_workspace::applier::apply_plan_to_sandbox;
 use crow_workspace::PlanHydrator;
@@ -1197,16 +1136,7 @@ fn synthetic_create_plan_passes_verification() {
         }],
     };
 
-    // ── 2. Hydrate ──
-    let hydrated = PlanHydrator::hydrate(&plan, workspace.path())
-        .expect("Hydration of a Create op should not fail");
-
-    // Create precondition should still be MustNotExist after hydration
-    if let EditOp::Create { precondition, .. } = &hydrated.operations[0] {
-        assert_eq!(*precondition, FilePrecondition::MustNotExist);
-    }
-
-    // ── 3. Materialize sandbox ──
+    // ── 2. Materialize sandbox (Freeze Time) ──
     let config = MaterializeConfig {
         source: workspace.path().to_path_buf(),
         artifact_dirs: vec!["target".into()],
@@ -1215,12 +1145,24 @@ fn synthetic_create_plan_passes_verification() {
     };
     let sandbox = materialize(&config).expect("Materialization should succeed");
 
+    // ── 3. Hydrate against sandbox ──
+    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path())
+        .expect("Hydration of a Create op should not fail");
+
+    // Create precondition should still be MustNotExist after hydration
+    if let EditOp::Create { precondition, .. } = &hydrated.operations[0] {
+        assert_eq!(*precondition, FilePrecondition::MustNotExist);
+    }
+
     // ── 4. Apply ──
     apply_plan_to_sandbox(&hydrated, &sandbox).expect("Apply should succeed");
 
     // Verify the file exists in the sandbox
     let marker_in_sandbox = sandbox.path().join("MARKER.txt");
-    assert!(marker_in_sandbox.exists(), "MARKER.txt should exist in sandbox");
+    assert!(
+        marker_in_sandbox.exists(),
+        "MARKER.txt should exist in sandbox"
+    );
     assert_eq!(
         fs::read_to_string(&marker_in_sandbox).unwrap(),
         "Created by integration test.\n"
@@ -1274,15 +1216,23 @@ fn synthetic_modify_plan_hydrates_and_applies() {
             },
             hunks: vec![crow_patch::DiffHunk {
                 original_start: 2,
-                remove_lines: vec!["    \"hello\"".into()],
-                insert_lines: vec!["    \"world\"".into()],
+                remove_block: "    \"hello\"\n".into(),
+                insert_block: "    \"world\"\n".into(),
             }],
         }],
     };
 
-    // ── 2. Hydrate: hash and line count must be replaced ──
-    let hydrated = PlanHydrator::hydrate(&plan, workspace.path())
-        .expect("Hydration should succeed");
+    // ── 2. Materialize sandbox (Freeze Time) ──
+    let config = MaterializeConfig {
+        source: workspace.path().to_path_buf(),
+        artifact_dirs: vec!["target".into()],
+        skip_patterns: vec![],
+        allow_hardlinks: false,
+    };
+    let sandbox = materialize(&config).unwrap();
+
+    // ── 3. Hydrate against sandbox ──
+    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path()).expect("Hydration should succeed");
 
     if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
         assert_ne!(preconditions.content_hash, "will-be-replaced-by-hydrator");
@@ -1291,35 +1241,38 @@ fn synthetic_modify_plan_hydrates_and_applies() {
         panic!("Expected Modify op");
     }
 
-    // ── 3. Materialize + Apply ──
-    let config = MaterializeConfig {
-        source: workspace.path().to_path_buf(),
-        artifact_dirs: vec!["target".into()],
-        skip_patterns: vec![],
-        allow_hardlinks: false,
-    };
-    let sandbox = materialize(&config).unwrap();
+    // ── 4. Apply ──
     apply_plan_to_sandbox(&hydrated, &sandbox).expect("Apply should succeed");
 
     // Verify the modification happened in the sandbox
     let modified = fs::read_to_string(sandbox.path().join("src/lib.rs")).unwrap();
-    assert!(modified.contains("\"world\""), "Sandbox should have the patched text");
+    assert!(
+        modified.contains("\"world\""),
+        "Sandbox should have the patched text"
+    );
     // The function body should return "world" now, not "hello".
     // Note: "hello" still appears in the test assertion line — that's expected.
-    let fn_body: String = modified.lines()
+    let fn_body: String = modified
+        .lines()
         .take_while(|l| !l.contains("#[cfg(test)]"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!fn_body.contains("\"hello\""), "Function body should no longer contain the old return value");
+    assert!(
+        !fn_body.contains("\"hello\""),
+        "Function body should no longer contain the old return value"
+    );
 
     // Verify original workspace is untouched (zero pollution)
     let original = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
-    assert!(original.contains("\"hello\""), "Original workspace must remain untouched");
+    assert!(
+        original.contains("\"hello\""),
+        "Original workspace must remain untouched"
+    );
 }
 
-================================================================================
-FILE: ./crates/crow-cli/tests/graceful_exit.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-cli/tests/graceful_exit.rs
+════════════════════════════════════════════════════════════════
 use assert_cmd::Command;
 use tempfile::TempDir;
 
@@ -1336,9 +1289,9 @@ fn empty_workspace_exits_gracefully() {
         .stdout(predicates::str::contains("NoVerifierAvailable"));
 }
 
-================================================================================
-FILE: ./crates/crow-evidence/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-evidence/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-evidence"
 version.workspace = true
@@ -1349,9 +1302,9 @@ license.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 
-================================================================================
-FILE: ./crates/crow-evidence/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-evidence/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-evidence: Multidimensional verification evidence.
 //!
 //! Replaces single-score confidence with a structured [`EvidenceMatrix`]
@@ -1362,9 +1315,9 @@ pub mod types;
 
 pub use types::*;
 
-================================================================================
-FILE: ./crates/crow-evidence/src/types.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-evidence/src/types.rs
+════════════════════════════════════════════════════════════════
 //! Core data types for the evidence contract.
 
 use serde::{Deserialize, Serialize};
@@ -1694,9 +1647,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-intel/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-intel/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-intel"
 version.workspace = true
@@ -1711,9 +1664,9 @@ tree-sitter-typescript = "0.21"
 [dev-dependencies]
 tempfile = "3.27.0"
 
-================================================================================
-FILE: ./crates/crow-intel/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-intel/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-intel: Codebase intelligence via AST analysis.
 //!
 //! Provides Tree-sitter outlines, LSP bridge, and per-language
@@ -1725,11 +1678,11 @@ pub mod walker;
 pub use skeleton::{ASTProcessor, SupportedLanguage};
 pub use walker::{RepoMap, RepoWalker};
 
-================================================================================
-FILE: ./crates/crow-intel/src/skeleton.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-intel/src/skeleton.rs
+════════════════════════════════════════════════════════════════
 use std::path::Path;
-use tree_sitter::{Language, Parser, Node};
+use tree_sitter::{Language, Node, Parser};
 
 pub enum SupportedLanguage {
     Rust,
@@ -1773,14 +1726,16 @@ impl ASTProcessor {
     /// If the language is unsupported, it currently just returns the original source.
     pub fn generate_skeleton(&self, source: &str, path: &Path) -> Result<String, String> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        
+
         let lang = match SupportedLanguage::from_extension(ext) {
             Some(l) => l,
             None => return Ok(source.to_string()),
         };
 
         let mut parser = Parser::new();
-        parser.set_language(&lang.tree_sitter_lang()).map_err(|e| e.to_string())?;
+        parser
+            .set_language(&lang.tree_sitter_lang())
+            .map_err(|e| e.to_string())?;
 
         let tree = parser.parse(source, None).ok_or("Failed to parse AST")?;
         let root = tree.root_node();
@@ -1812,7 +1767,7 @@ impl ASTProcessor {
 
     fn collect_body_spans(node: Node<'_>, spans: &mut Vec<(usize, usize)>) {
         let kind = node.kind();
-        
+
         // Check if this node is a block that implements a function body
         let is_target_block = match kind {
             "block" => {
@@ -1822,7 +1777,10 @@ impl ASTProcessor {
             "statement_block" => {
                 // TS/JS: parent is function_declaration, method_definition, arrow_function, etc.
                 node.parent().is_some_and(|p| {
-                    matches!(p.kind(), "function_declaration" | "method_definition" | "arrow_function")
+                    matches!(
+                        p.kind(),
+                        "function_declaration" | "method_definition" | "arrow_function"
+                    )
                 })
             }
             _ => false,
@@ -1910,9 +1868,9 @@ const arrow = () => {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-intel/src/walker.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-intel/src/walker.rs
+════════════════════════════════════════════════════════════════
 use crate::skeleton::ASTProcessor;
 use std::fs;
 use std::path::Path;
@@ -1946,70 +1904,103 @@ impl RepoWalker {
         self
     }
 
-    /// Walk the workspace, skip target/ and node_modules/, and build a combined map up to max_bytes.
+    /// Walk the workspace using breadth-first traversal.
+    /// At each directory level, files are emitted before subdirectories,
+    /// ensuring shallow/important files (Cargo.toml, src/main.rs) are seen
+    /// by the LLM before deep nested paths consume the budget.
     pub fn build_repo_map(&self, root: &Path) -> Result<RepoMap, String> {
-        let mut map_text = String::new();
-        self.walk_dir(root, root, &mut map_text)?;
-        Ok(RepoMap { map_text })
-    }
+        use std::collections::VecDeque;
 
-    fn walk_dir(&self, dir: &Path, root: &Path, out: &mut String) -> Result<(), String> {
-        if out.len() >= self.max_bytes {
-            return Ok(());
-        }
+        let skip = ["target", "node_modules", ".git", "vendor", ".venv"];
+        let mut out = String::new();
+        let mut queue: VecDeque<std::path::PathBuf> = VecDeque::new();
+        queue.push_back(root.to_path_buf());
 
-        let entries = match fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(()), // gracefully skip unreadable dirs
-        };
-
-        let mut paths: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
-        paths.sort();
-
-        for path in paths {
+        while let Some(dir) = queue.pop_front() {
             if out.len() >= self.max_bytes {
-                if !out.ends_with("\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n") {
-                    out.push_str("\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n");
-                }
                 break;
             }
 
-            if path.is_dir() {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                if name == "target" || name == "node_modules" || name == ".git" || name == "vendor" || name == ".venv" {
+            let entries = match fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let mut files = Vec::new();
+            let mut subdirs = Vec::new();
+
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if !skip.contains(&name.as_ref()) {
+                        subdirs.push(path);
+                    }
+                } else if path.is_file() {
+                    files.push(path);
+                }
+            }
+
+            // Sort within each level for stable output
+            files.sort();
+            subdirs.sort();
+
+            // Emit files at this depth level first
+            for path in files {
+                if out.len() >= self.max_bytes {
+                    Self::append_truncation(&mut out);
+                    return Ok(RepoMap { map_text: out });
+                }
+
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if !["rs", "ts", "js", "jsx", "tsx"].contains(&ext) {
                     continue;
                 }
-                self.walk_dir(&path, root, out)?;
-            } else if path.is_file() {
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if ["rs", "ts", "js", "jsx", "tsx"].contains(&ext) {
-                    if let Ok(source) = fs::read_to_string(&path) {
-                        let rel_path = path.strip_prefix(root).unwrap_or(&path);
-                        let skeleton = self.processor.generate_skeleton(&source, &path).unwrap_or(source);
-                        
-                        let combined = format!("// ─── File: {} ────────────────────────\n{}\n\n", rel_path.display(), skeleton);
-                        
-                        if out.len() + combined.len() >= self.max_bytes {
-                            let remaining = self.max_bytes.saturating_sub(out.len());
-                            let safe_end = combined.char_indices()
-                                .take_while(|&(idx, _)| idx < remaining)
-                                .last()
-                                .map(|(idx, ch)| idx + ch.len_utf8())
-                                .unwrap_or(0);
-                                
-                            out.push_str(&combined[..safe_end]);
-                            if !out.ends_with("\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n") {
-                                out.push_str("\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n");
-                            }
-                            break; // Abort traversing further
-                        } else {
-                            out.push_str(&combined);
-                        }
+
+                if let Ok(source) = fs::read_to_string(&path) {
+                    let rel_path = path.strip_prefix(root).unwrap_or(&path);
+                    let skeleton = self
+                        .processor
+                        .generate_skeleton(&source, &path)
+                        .unwrap_or(source);
+                    let combined = format!(
+                        "// ─── File: {} ────────────────────────\n{}\n\n",
+                        rel_path.display(),
+                        skeleton
+                    );
+
+                    if out.len() + combined.len() >= self.max_bytes {
+                        let remaining = self.max_bytes.saturating_sub(out.len());
+                        let safe_end = combined
+                            .char_indices()
+                            .take_while(|&(idx, _)| idx < remaining)
+                            .last()
+                            .map(|(idx, ch)| idx + ch.len_utf8())
+                            .unwrap_or(0);
+
+                        out.push_str(&combined[..safe_end]);
+                        Self::append_truncation(&mut out);
+                        return Ok(RepoMap { map_text: out });
+                    } else {
+                        out.push_str(&combined);
                     }
                 }
             }
+
+            // Enqueue subdirectories for next BFS level
+            for subdir in subdirs {
+                queue.push_back(subdir);
+            }
         }
-        Ok(())
+
+        Ok(RepoMap { map_text: out })
+    }
+
+    fn append_truncation(out: &mut String) {
+        let marker = "\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n";
+        if !out.ends_with(marker) {
+            out.push_str(marker);
+        }
     }
 }
 
@@ -2025,18 +2016,25 @@ mod tests {
         let file1 = dir.path().join("a.rs");
         let file2 = dir.path().join("b.rs");
         let file3 = dir.path().join("c.rs");
-        
+
         fs::write(&file1, "fn a() { println!(\"a\"); }").unwrap();
-        fs::write(&file2, "fn b() { println!(\"long padding string here \"); }").unwrap();
+        fs::write(
+            &file2,
+            "fn b() { println!(\"long padding string here \"); }",
+        )
+        .unwrap();
         fs::write(&file3, "fn c() { println!(\"c\"); }").unwrap(); // Should not fit
-        
+
         // Very tight budget: 100 bytes
         let walker = RepoWalker::new().with_max_bytes(100);
         let map = walker.build_repo_map(dir.path()).unwrap();
-        
+
         // Assert length won't exceed budget + truncation message
         let truncate_msg_len = "\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n".len();
-        assert!(map.map_text.len() <= 100 + truncate_msg_len, "Map text exceeded hard budget limits!");
+        assert!(
+            map.map_text.len() <= 100 + truncate_msg_len,
+            "Map text exceeded hard budget limits!"
+        );
         assert!(map.map_text.contains("TRUNCATED DUE TO"));
         assert!(map.map_text.contains("File: a.rs"));
         // c.rs should be fully cut off
@@ -2044,9 +2042,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-materialize/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-materialize/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-materialize"
 version.workspace = true
@@ -2059,9 +2057,9 @@ globset = "0.4.18"
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
-================================================================================
-FILE: ./crates/crow-materialize/src/driver.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-materialize/src/driver.rs
+════════════════════════════════════════════════════════════════
 //! Materialization driver implementations.
 //!
 //! Each driver implements the same contract: given a source directory and
@@ -2787,9 +2785,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-materialize/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-materialize/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-materialize: Workspace-isolation materialization engine.
 //!
 //! Responsible for creating isolated copies of the user workspace
@@ -2809,9 +2807,9 @@ pub mod types;
 
 pub use types::*;
 
-================================================================================
-FILE: ./crates/crow-materialize/src/types.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-materialize/src/types.rs
+════════════════════════════════════════════════════════════════
 //! Core types for the materialization engine.
 
 use crate::driver;
@@ -3099,9 +3097,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-patch/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-patch/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-patch"
 version.workspace = true
@@ -3112,9 +3110,9 @@ license.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 
-================================================================================
-FILE: ./crates/crow-patch/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-patch/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-patch: Unified patch contract.
 //!
 //! The LLM never writes to disk directly. All intended mutations are
@@ -3125,9 +3123,9 @@ pub mod types;
 
 pub use types::*;
 
-================================================================================
-FILE: ./crates/crow-patch/src/types.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-patch/src/types.rs
+════════════════════════════════════════════════════════════════
 //! Core data types for the patch contract.
 
 use serde::{Deserialize, Serialize};
@@ -3253,10 +3251,25 @@ pub enum FilePrecondition {
 pub struct DiffHunk {
     /// 1-based start line in the original file.
     pub original_start: usize,
-    /// Lines to remove (empty = pure insertion).
-    pub remove_lines: Vec<String>,
-    /// Lines to insert (empty = pure deletion).
-    pub insert_lines: Vec<String>,
+    /// Lines to remove, as a single multi-line string (empty = pure insertion).
+    pub remove_block: String,
+    /// Lines to insert, as a single multi-line string (empty = pure deletion).
+    pub insert_block: String,
+}
+
+// ─── Agent Action ───────────────────────────────────────────────────
+
+/// An action the agent can take. Wraps either an intent plan or a read request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action")]
+pub enum AgentAction {
+    #[serde(rename = "read_files")]
+    ReadFiles {
+        paths: Vec<WorkspacePath>,
+        rationale: String,
+    },
+    #[serde(rename = "submit_plan")]
+    SubmitPlan { plan: IntentPlan },
 }
 
 // ─── Edit Operations ────────────────────────────────────────────────
@@ -3370,21 +3383,21 @@ mod tests {
     fn pure_insertion_hunk() {
         let h = DiffHunk {
             original_start: 10,
-            remove_lines: vec![],
-            insert_lines: vec!["// new comment".into()],
+            remove_block: "".into(),
+            insert_block: "// new comment\n".into(),
         };
-        assert!(h.remove_lines.is_empty());
-        assert_eq!(h.insert_lines.len(), 1);
+        assert!(h.remove_block.is_empty());
+        assert!(!h.insert_block.is_empty());
     }
 
     #[test]
     fn pure_deletion_hunk() {
         let h = DiffHunk {
             original_start: 5,
-            remove_lines: vec!["old line".into()],
-            insert_lines: vec![],
+            remove_block: "old line\n".into(),
+            insert_block: "".into(),
         };
-        assert!(h.insert_lines.is_empty());
+        assert!(h.insert_block.is_empty());
     }
 
     // --- IntentPlan construction ---
@@ -3404,8 +3417,8 @@ mod tests {
                 },
                 hunks: vec![DiffHunk {
                     original_start: 3,
-                    remove_lines: vec!["teh".into()],
-                    insert_lines: vec!["the".into()],
+                    remove_block: "teh\n".into(),
+                    insert_block: "the\n".into(),
                 }],
             }],
         };
@@ -3450,8 +3463,8 @@ mod tests {
                     },
                     hunks: vec![DiffHunk {
                         original_start: 1,
-                        remove_lines: vec!["mod old;".into()],
-                        insert_lines: vec!["mod new;".into()],
+                        remove_block: "mod old;\n".into(),
+                        insert_block: "mod new;\n".into(),
                     }],
                 },
             ],
@@ -3494,9 +3507,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-probe/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-probe/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-probe"
 version.workspace = true
@@ -3508,9 +3521,9 @@ license.workspace = true
 [dev-dependencies]
 tempfile = "3.27.0"
 
-================================================================================
-FILE: ./crates/crow-probe/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-probe/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-probe: Repository recon radar.
 //!
 //! Within the first 100ms of launch, probes the workspace to detect
@@ -3524,9 +3537,9 @@ pub mod types;
 pub use scanner::*;
 pub use types::*;
 
-================================================================================
-FILE: ./crates/crow-probe/src/scanner.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-probe/src/scanner.rs
+════════════════════════════════════════════════════════════════
 use crate::types::*;
 use std::fs;
 use std::path::Path;
@@ -3726,9 +3739,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-probe/src/types.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-probe/src/types.rs
+════════════════════════════════════════════════════════════════
 //! Core data types for the probe contract.
 
 use std::path::PathBuf;
@@ -3979,9 +3992,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-replay/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-replay/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-replay"
 version.workspace = true
@@ -3990,17 +4003,17 @@ license.workspace = true
 
 [dependencies]
 
-================================================================================
-FILE: ./crates/crow-replay/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-replay/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-replay: Behavioral regression and task replay test harness.
 //!
 //! Records deterministic event sequences and replays them to detect
 //! regressions after code changes. The anti-degradation safety net.
 
-================================================================================
-FILE: ./crates/crow-verifier/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-verifier/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-verifier"
 version.workspace = true
@@ -4014,9 +4027,9 @@ crow-probe = { path = "../crow-probe" }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-================================================================================
-FILE: ./crates/crow-verifier/src/aci.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-verifier/src/aci.rs
+════════════════════════════════════════════════════════════════
 //! Adaptive Context Integration (ACI) log truncation.
 //!
 //! Raw command output can be megabytes of test output, compiler
@@ -4272,9 +4285,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-verifier/src/executor.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-verifier/src/executor.rs
+════════════════════════════════════════════════════════════════
 //! Workspace isolated command executor.
 //!
 //! Runs a `VerificationCommand` inside a designated workspace directory, captures
@@ -4810,9 +4823,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-verifier/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-verifier/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-verifier: Workspace isolated command execution and ACI log truncation.
 //!
 //! Runs build/test commands inside newly materialized workspace isolates.
@@ -4842,9 +4855,9 @@ pub mod types;
 
 pub use types::*;
 
-================================================================================
-FILE: ./crates/crow-verifier/src/types.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-verifier/src/types.rs
+════════════════════════════════════════════════════════════════
 //! Core types for the verifier contract.
 
 use crow_evidence::TestRun;
@@ -5012,9 +5025,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-workspace/Cargo.toml
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-workspace/Cargo.toml
+════════════════════════════════════════════════════════════════
 [package]
 name = "crow-workspace"
 version.workspace = true
@@ -5032,9 +5045,9 @@ thiserror = "2.0.18"
 serde_json = "1.0.149"
 tempfile = "3.27.0"
 
-================================================================================
-FILE: ./crates/crow-workspace/src/applier.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-workspace/src/applier.rs
+════════════════════════════════════════════════════════════════
 //! Physical sandbox mutation applier.
 //!
 //! This module is the **only** place that performs physical I/O against
@@ -5187,8 +5200,37 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
     let mut sorted_hunks = hunks.to_vec();
     sorted_hunks.sort_by(|a, b| b.original_start.cmp(&a.original_start));
 
+    // Convert strings back into physical line arrays for precise manipulation
+    #[derive(Clone)]
+    struct ProcessedHunk<'a> {
+        original_start: usize,
+        remove_lines: Vec<&'a str>,
+        insert_lines: Vec<&'a str>,
+    }
+
+    let p_hunks: Vec<ProcessedHunk> = sorted_hunks
+        .iter()
+        .map(|h| {
+            ProcessedHunk {
+                original_start: h.original_start,
+                // Splitting by \n properly preserves empty internal lines.
+                // If the block is completely empty, it drops no lines.
+                remove_lines: if h.remove_block.is_empty() {
+                    vec![]
+                } else {
+                    h.remove_block.lines().collect()
+                },
+                insert_lines: if h.insert_block.is_empty() {
+                    vec![]
+                } else {
+                    h.insert_block.lines().collect()
+                },
+            }
+        })
+        .collect();
+
     // ── Structural validation ──────────────────────────────────
-    for (i, hunk) in sorted_hunks.iter().enumerate() {
+    for (i, hunk) in p_hunks.iter().enumerate() {
         if hunk.original_start == 0 {
             return Err(ApplyError::HunkConflict {
                 path: file_path.into(),
@@ -5197,7 +5239,7 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
             });
         }
         if i > 0 {
-            let bottom_hunk = &sorted_hunks[i - 1];
+            let bottom_hunk = &p_hunks[i - 1];
             let top_end = hunk.original_start + hunk.remove_lines.len();
             if top_end > bottom_hunk.original_start {
                 return Err(ApplyError::HunkConflict {
@@ -5214,7 +5256,7 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
 
     let max_drift: isize = 10;
 
-    for hunk in sorted_hunks {
+    for hunk in p_hunks {
         let expected_idx = (hunk.original_start as isize - 1).max(0);
         let target_len = hunk.remove_lines.len();
         let mut match_indices = Vec::new();
@@ -5249,15 +5291,11 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                 let start_idx = match_indices[0];
                 lines.splice(
                     start_idx..start_idx + target_len,
-                    hunk.insert_lines.iter().cloned(),
+                    hunk.insert_lines.iter().map(|s| s.to_string()),
                 );
             }
             0 => {
-                let context = hunk
-                    .remove_lines
-                    .first()
-                    .map(|s| s.trim_end())
-                    .unwrap_or("<empty>");
+                let context = hunk.remove_lines.first().copied().unwrap_or("<empty>");
                 return Err(ApplyError::HunkConflict {
                     path: file_path.into(),
                     line: hunk.original_start,
@@ -5417,8 +5455,8 @@ mod tests {
         let original = "line 1\nline 2\nline 3\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
-            remove_lines: vec![],
-            insert_lines: vec!["inserted".into()],
+            remove_block: "".into(),
+            insert_block: "inserted\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("inserted"));
@@ -5432,8 +5470,8 @@ mod tests {
         let original = "line 1\nline 2\nline 3\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
-            remove_lines: vec!["line 2".into()],
-            insert_lines: vec![],
+            remove_block: "line 2\n".into(),
+            insert_block: "".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(!result.contains("line 2"));
@@ -5446,8 +5484,8 @@ mod tests {
         let original = "fn old() {}\nfn keep() {}\n";
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["fn old() {}".into()],
-            insert_lines: vec!["fn new() {}".into()],
+            remove_block: "fn old() {}\n".into(),
+            insert_block: "fn new() {}\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("fn new() {}"));
@@ -5460,8 +5498,8 @@ mod tests {
         let original = "line 1\nline 2\n";
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["WRONG CONTEXT".into()],
-            insert_lines: vec!["new".into()],
+            remove_block: "WRONG CONTEXT\n".into(),
+            insert_block: "new\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
@@ -5494,8 +5532,8 @@ mod tests {
         let original = "line 1\nline 2\n";
         let hunks = vec![DiffHunk {
             original_start: 0,
-            remove_lines: vec![],
-            insert_lines: vec!["bad".into()],
+            remove_block: "".into(),
+            insert_block: "bad\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
@@ -5509,13 +5547,13 @@ mod tests {
         let hunks = vec![
             DiffHunk {
                 original_start: 1,
-                remove_lines: vec!["a".into(), "b".into()],
-                insert_lines: vec!["x".into()],
+                remove_block: "a\nb\n".into(),
+                insert_block: "x\n".into(),
             },
             DiffHunk {
                 original_start: 2, // overlaps: previous hunk covers lines 1-2
-                remove_lines: vec!["c".into()],
-                insert_lines: vec!["y".into()],
+                remove_block: "c\n".into(),
+                insert_block: "y\n".into(),
             },
         ];
         let result = apply_hunks(original, &hunks, "test.rs");
@@ -5529,8 +5567,8 @@ mod tests {
         let original = "line 1\nline 2"; // no trailing newline
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["line 1".into()],
-            insert_lines: vec!["replaced".into()],
+            remove_block: "line 1\n".into(),
+            insert_block: "replaced\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(!result.ends_with('\n'));
@@ -5542,8 +5580,8 @@ mod tests {
         let original = "line 1\nline 2\n"; // has trailing newline
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["line 1".into()],
-            insert_lines: vec!["replaced".into()],
+            remove_block: "line 1\n".into(),
+            insert_block: "replaced\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.ends_with('\n'));
@@ -5555,8 +5593,8 @@ mod tests {
         let original = "line 1\r\nline 2\r\nline 3\r\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
-            remove_lines: vec!["line 2".into()],
-            insert_lines: vec!["replaced".into()],
+            remove_block: "line 2\n".into(),
+            insert_block: "replaced\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         // Must preserve CRLF endings
@@ -5571,8 +5609,8 @@ mod tests {
         let original = "fn foo()   \nfn bar()\n";
         let hunks = vec![DiffHunk {
             original_start: 1,
-            remove_lines: vec!["fn foo()".into()], // no trailing spaces
-            insert_lines: vec!["fn baz()".into()],
+            remove_block: "fn foo()\n".into(), // no trailing spaces
+            insert_block: "fn baz()\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("fn baz()"));
@@ -5584,8 +5622,8 @@ mod tests {
         let original = "line 1\nline 2\nline 3\nline 4\nunique target\nline 6\n";
         let hunks = vec![DiffHunk {
             original_start: 3, // true line is 5, but within ±10 drift
-            remove_lines: vec!["unique target".into()],
-            insert_lines: vec!["patched target".into()],
+            remove_block: "unique target\n".into(),
+            insert_block: "patched target\n".into(),
         }];
 
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
@@ -5598,8 +5636,8 @@ mod tests {
         let original = "line 1\nrepeated target\nline 3\nline 4\nrepeated target\nline 6\n";
         let hunks = vec![DiffHunk {
             original_start: 3,
-            remove_lines: vec!["repeated target".into()],
-            insert_lines: vec!["patched target".into()],
+            remove_block: "repeated target\n".into(),
+            insert_block: "patched target\n".into(),
         }];
 
         let result = apply_hunks(original, &hunks, "test.rs");
@@ -5627,10 +5665,10 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-workspace/src/hydrator.rs
-================================================================================
-use crow_patch::{EditOp, FilePrecondition, IntentPlan, ConflictStrategy};
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-workspace/src/hydrator.rs
+════════════════════════════════════════════════════════════════
+use crow_patch::{ConflictStrategy, EditOp, FilePrecondition, IntentPlan};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -5643,7 +5681,9 @@ pub enum HydrationError {
 impl std::fmt::Display for HydrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HydrationError::IoError { path, reason } => write!(f, "Failed to hydrate {}: {}", path, reason),
+            HydrationError::IoError { path, reason } => {
+                write!(f, "Failed to hydrate {}: {}", path, reason)
+            }
         }
     }
 }
@@ -5656,36 +5696,49 @@ pub struct PlanHydrator;
 impl PlanHydrator {
     pub fn hydrate(plan: &IntentPlan, workspace_root: &Path) -> Result<IntentPlan, HydrationError> {
         let mut hydrated = plan.clone();
-        
+
         for op in &mut hydrated.operations {
             match op {
-                EditOp::Modify { path, preconditions, .. } => {
+                EditOp::Modify {
+                    path,
+                    preconditions,
+                    ..
+                } => {
                     let absolute_path = workspace_root.join(path.as_str());
-                    let (hash, lines) = Self::compute_file_state(&absolute_path)
-                        .map_err(|e| HydrationError::IoError { 
-                            path: path.as_str().to_string(), 
-                            reason: e 
-                        })?;
-                    
+                    let (hash, lines) = Self::compute_file_state(&absolute_path).map_err(|e| {
+                        HydrationError::IoError {
+                            path: path.as_str().to_string(),
+                            reason: e,
+                        }
+                    })?;
+
                     preconditions.content_hash = hash;
                     preconditions.expected_line_count = Some(lines);
                 }
                 EditOp::Delete { path, precondition } => {
                     let absolute_path = workspace_root.join(path.as_str());
-                    let (hash, _) = Self::compute_file_state(&absolute_path)
-                        .map_err(|e| HydrationError::IoError { 
-                            path: path.as_str().to_string(), 
-                            reason: e 
-                        })?;
+                    let (hash, _) = Self::compute_file_state(&absolute_path).map_err(|e| {
+                        HydrationError::IoError {
+                            path: path.as_str().to_string(),
+                            reason: e,
+                        }
+                    })?;
                     *precondition = FilePrecondition::MustExistWithHash(hash);
                 }
-                EditOp::Rename { from, to, on_conflict, source_precondition, dest_precondition } => {
+                EditOp::Rename {
+                    from,
+                    to,
+                    on_conflict,
+                    source_precondition,
+                    dest_precondition,
+                } => {
                     let absolute_source = workspace_root.join(from.as_str());
-                    let (hash, _) = Self::compute_file_state(&absolute_source)
-                        .map_err(|e| HydrationError::IoError { 
-                            path: from.as_str().to_string(), 
-                            reason: e 
-                        })?;
+                    let (hash, _) = Self::compute_file_state(&absolute_source).map_err(|e| {
+                        HydrationError::IoError {
+                            path: from.as_str().to_string(),
+                            reason: e,
+                        }
+                    })?;
                     *source_precondition = FilePrecondition::MustExistWithHash(hash);
 
                     if *on_conflict == ConflictStrategy::Fail {
@@ -5695,10 +5748,12 @@ impl PlanHydrator {
                         if absolute_dest.exists() {
                             // If it exists, hydrate its exact hash so we don't blindly overwrite
                             // a file that changed between compilation and application.
-                            let (hash, _) = Self::compute_file_state(&absolute_dest)
-                                .map_err(|e| HydrationError::IoError { 
-                                    path: to.as_str().to_string(), 
-                                    reason: e 
+                            let (hash, _) =
+                                Self::compute_file_state(&absolute_dest).map_err(|e| {
+                                    HydrationError::IoError {
+                                        path: to.as_str().to_string(),
+                                        reason: e,
+                                    }
                                 })?;
                             *dest_precondition = FilePrecondition::MustExistWithHash(hash);
                         } else {
@@ -5720,11 +5775,11 @@ impl PlanHydrator {
 
     fn compute_file_state(path: &Path) -> Result<(String, usize), String> {
         let content = fs::read(path).map_err(|e| e.to_string())?;
-        
+
         let mut hasher = Sha256::new();
         hasher.update(&content);
         let hash = hex::encode(hasher.finalize());
-        
+
         let lines = std::str::from_utf8(&content).unwrap_or("").lines().count();
 
         Ok((hash, lines))
@@ -5734,7 +5789,7 @@ impl PlanHydrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crow_patch::{WorkspacePath, Confidence, SnapshotId, PreconditionState};
+    use crow_patch::{Confidence, PreconditionState, SnapshotId, WorkspacePath};
     use tempfile::tempdir;
 
     fn make_plan(ops: Vec<EditOp>) -> IntentPlan {
@@ -5809,7 +5864,12 @@ mod tests {
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
 
-        if let EditOp::Rename { source_precondition, dest_precondition, .. } = &hydrated.operations[0] {
+        if let EditOp::Rename {
+            source_precondition,
+            dest_precondition,
+            ..
+        } = &hydrated.operations[0]
+        {
             // Source must be hydrated with real hash
             match source_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
@@ -5832,13 +5892,18 @@ mod tests {
             from: WorkspacePath::new("src.txt").unwrap(),
             to: WorkspacePath::new("dst.txt").unwrap(),
             on_conflict: ConflictStrategy::Overwrite,
-            source_precondition: FilePrecondition::MustExist,    // hallucinated
-            dest_precondition: FilePrecondition::MustNotExist,   // hallucinated — wrong!
+            source_precondition: FilePrecondition::MustExist, // hallucinated
+            dest_precondition: FilePrecondition::MustNotExist, // hallucinated — wrong!
         }]);
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
 
-        if let EditOp::Rename { source_precondition, dest_precondition, .. } = &hydrated.operations[0] {
+        if let EditOp::Rename {
+            source_precondition,
+            dest_precondition,
+            ..
+        } = &hydrated.operations[0]
+        {
             match source_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
                 other => panic!("Expected source hash, got {:?}", other),
@@ -5869,7 +5934,10 @@ mod tests {
 
         let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
 
-        if let EditOp::Rename { dest_precondition, .. } = &hydrated.operations[0] {
+        if let EditOp::Rename {
+            dest_precondition, ..
+        } = &hydrated.operations[0]
+        {
             assert_eq!(*dest_precondition, FilePrecondition::MustNotExist);
         } else {
             panic!("Expected Rename op");
@@ -5877,9 +5945,9 @@ mod tests {
     }
 }
 
-================================================================================
-FILE: ./crates/crow-workspace/src/lib.rs
-================================================================================
+════════════════════════════════════════════════════════════════
+FILE: crates/crow-workspace/src/lib.rs
+════════════════════════════════════════════════════════════════
 //! crow-workspace: Event-sourcing log and O(1) snapshot state machine.
 //!
 //! Maintains the canonical event ledger for all workspace mutations.
@@ -5888,135 +5956,5 @@ FILE: ./crates/crow-workspace/src/lib.rs
 pub mod applier;
 pub mod hydrator;
 
-pub use hydrator::{PlanHydrator, HydrationError};
+pub use hydrator::{HydrationError, PlanHydrator};
 
-================================================================================
-FILE: ./docs/RFC-001-Architecture-Baseline.md
-================================================================================
-# RFC-001: Crow-Code Production Architecture Baseline
-
-**Status:** 🟢 Ready for Implementation
-**Objective:** To build a verified, timeline-rewindable, zero-leak refactoring engine for cross-file physical consistency.
-**Core Principle:** Evidence over rhetoric, Patches are first-class citizens, Never blindly write to disk.
-
-## 1. Abstract
-Crow-Code is an intelligent coding agent architecture designed with extreme defensive engineering. It shifts the paradigm from simple "LLM text manipulation" to "Evidence-based materialization." The system operates on a dual-track proposal and MCTS search mechanism, generating atomic patches that must pass a rigorous crucible of local environment verification before finalizing a write to the physical workspace. 
-
-## 2. Goals
-- **O(1) Snapshot State Machine:** Ensure flawless workspace isolation during agent reasoning.
-- **Evidence-Driven Resolution:** Replace opaque 0-100 confidence scores with multidimensional, verifiable matrices (lints, test passes, intelligence confidence).
-- **Graceful Degradation:** A tri-state final resolution (Auto-apply, Review-required, Escalate-with-evidence).
-- **Time-Travel Safety:** Every action must be logged in an event-sourcing model that supports rewind and deterministic replay.
-
-## 3. Non-Goals
-- We will **not** build custom cross-language compilers; we rely on OS and local toolchains.
-- We do **not** promise to auto-discover all correct build/test hooks (user overrides or heuristics apply).
-- We do **not** guarantee 100% auto-apply rates; safety outweighs automation.
-- We do **not** guarantee optimal filesystem isolation setups (e.g., `clonefile`) on day 1 for all OSs, falling back to safe copies if necessary.
-- We do **not** implement full OS-level process sandboxing (e.g., `bwrap`, `nsjail`, macOS Seatbelt) for Sprint 0. Current execution isolation is constrained strictly to bounding the physical workspace directory, environment variables, time, and bytes. Deep network and system read protections are deferred.
-
-## 4. System Invariants
-- **No Direct Disk Writes:** The LLM cannot directly modify the user's workspace. All changes are buffered as Intent Plans.
-- **Precondition Verification:** Final disk flushes must match the hash, baseline snapshot ID, and file precondition rules before applying.
-- **Zero Pollution:** A failed MCTS sequence or verification step must leave the physical workspace completely untouched.
-- **Evidence Traceability:** Every risk flag or test pass must trace back to a specific command log, snapshot, or parser output.
-
-## 5. Architectural Topology (Physical Crates)
-
-All 10 crates are pre-split from day 1 as separate Cargo workspace members.
-This is an intentional deviation from the original "start monolithic, split
-later" strategy. Rationale: Rust's compilation model naturally enforces
-dependency boundaries at the crate level, so pre-splitting gives us free
-circular-dependency detection from `cargo check` on every commit. The cost
-(interface design overhead) is acceptable because the Currency crates have
-no inter-dependencies and higher-layer crates only depend downward.
-
-**Dependency rule (convention):** crates may only depend on crates listed
-_above_ them in this document. `cargo check` catches cyclic violations but
-does _not_ prevent an acyclic upward dependency (e.g., a Currency crate
-pulling in a Control crate). Until we add an explicit enforcement mechanism
-(planned: `cargo-deny` policy or `xtask lint-deps`), this rule is upheld by
-code review discipline.
-
-### The Currencies (Data Primitives)
-- `crow-patch`: Fuzzy-matching, struct-based diff application, rename, and structural AST manipulations.
-- `crow-evidence`: Verifiable data structures defining the safety of a patch.
-- `crow-probe`: Local workspace radar for framework detection, verification targets, and ignore extraction.
-
-### The Crucible & Runtime
-- `crow-workspace`: Event-sourcing log and VFS snapshot state machine.
-- `crow-materialize`: Workspace-isolation physical copy engine (CoW / safe-copy fallback) to clone environments safely.
-- `crow-verifier`: Workspace-isolated command executor that truncates standard outputs (ACI Log Pruning) cleanly.
-
-### Intelligence & Control
-- `crow-intel`: Tree-sitter powered codebase intelligence ensuring language-aware validations.
-- `crow-brain`: Intent compiler, budget governor, and dual-track MCTS solver.
-
-### Observability
-- `crow-cli`: Evidence-first Ratatui terminal UI.
-- `crow-replay`: State regression and debug testing harness.
-
-## 6. Core Data Contracts
-
-### 6.1 Unified Patch Intent
-```rust
-pub enum EditOp {
-    Modify { 
-        path: WorkspacePath, 
-        preconditions: PreconditionState, // e.g., base_hash, lines
-        hunks: Vec<DiffHunk> 
-    },
-    Create { path: WorkspacePath, content: String },
-    Rename { from: WorkspacePath, to: WorkspacePath, on_conflict: ConflictStrategy },
-    Delete { path: WorkspacePath },
-}
-
-pub struct IntentPlan {
-    pub base_snapshot_id: SnapshotId,  // Crucial for consistency
-    pub rationale: String,
-    pub is_partial: bool,              // Supports exploratory branching
-    pub confidence: Confidence,
-    pub operations: Vec<EditOp>,
-}
-```
-
-### 6.2 Evidence Matrix
-```rust
-pub struct EvidenceMatrix {
-    pub compile_runs: Vec<TestRun>,            // Structured test history, not just f32
-    pub lints_clean: bool,
-    pub intelligence_confidence: Confidence,   // e.g. LSP resolution success
-    pub risk_flags: Vec<RiskFlag>,             // e.g. "Deleted critical authentication routing"
-}
-```
-
-### 6.3 Workspace Probe
-```rust
-pub struct ProjectProfile {
-    pub primary_lang: DetectedLanguage,
-    pub workspace_root: PathBuf,               // Absolute OS path, not WorkspacePath
-    pub verification_candidates: Vec<VerificationCandidate>,
-    pub ignore_spec: FilterSpec,
-}
-```
-
-## 7. Failure Modes & Tri-State Resolution
-
-1. 🟢 **Auto-Apply:** 
-   - Criteria: `EvidenceMatrix` fully green, no severe `RiskFlags`, and execution logic semantically safe.
-2. 🟡 **Review-Required:** 
-   - Criteria: Safe base, but multiple paths found or high-risk areas modified. Presented to humane via TUI split-diffs.
-3. 🔴 **Escalate-with-Evidence:** 
-   - Criteria: All verification targets failed or budget depleted. Halts immediately, providing the user the isolated ACI truncated logs and stack traces without altering the workspace.
-
-## 8. Rollout Plan (Sprint 0)
-
-All 10 crates exist as physical workspace members from Step 1. Each step
-adds real types and tests to exactly one layer, verified by `cargo test`
-before moving on.
-
-- **Step 1: Workspace Genesis** — Skeleton crates, `cargo check` green. ✅
-- **Step 2: Core Data Contracts** — Implement types in the three Currency crates (`crow-patch`, `crow-evidence`, `crow-probe`). ✅
-- **Step 3: Workspace-Isolation Materialization** — Implement physical working tree cloning in `crow-materialize`. APFS clonefile, SafeCopy, HardlinkTree (opt-in). ✅
-- **Step 4: ACI Log Truncation** — Implement isolated execution constraint pipelines in `crow-verifier`. Verified by feeding 100K-line logs and asserting output ≤ 200 lines. ✅
-- **Step 5: Probe + Applier + God Pipeline** — Implement detection heuristics in `crow-probe`, physical patch applier in `crow-workspace`, end-to-end integration pipeline in `crow-cli`. ✅

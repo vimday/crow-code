@@ -159,10 +159,16 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let cfg = CliConfig::from_env()?;
     let prompt = args.join(" ");
 
+    // ── Step 1: Freeze the timeline FIRST ──────────────────────────
+    // We probe the live workspace only to discover ignore patterns,
+    // then immediately materialize a sandbox. ALL subsequent work
+    // (repo map, LLM compile, hydrate, apply, verify) operates
+    // exclusively against this frozen snapshot.
+
     println!("[1/6] Radaring Workspace: {}", cfg.workspace.display());
     let profile = scan_workspace(&cfg.workspace)?;
     let candidate = match profile.verification_candidates.first() {
-        Some(c) => c,
+        Some(c) => c.clone(),
         None => {
             return Err(
                 "No verification candidates found. Cannot dry-run without a verifier.".into(),
@@ -170,15 +176,31 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         }
     };
 
-    println!("\n[2/6] Gathering Repomap Context via tree-sitter...");
-    let repo_map = cfg.build_repo_map()?;
+    println!("\n[2/6] Materializing O(1) Sandbox Boundary (Freezing Timeline)...");
+    let mat_config = MaterializeConfig {
+        source: cfg.workspace.clone(),
+        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+        allow_hardlinks: false,
+    };
+    let sandbox = materialize(&mat_config)?;
+    let frozen_root = sandbox.path().to_path_buf();
+    println!(
+        "    🛡️  Time-Frozen Sandbox established at: {}",
+        frozen_root.display()
+    );
+
+    // ── Step 2: Build repo map against frozen sandbox ──────────────
+    println!("\n[3/6] Gathering Repomap Context from Frozen Sandbox via tree-sitter...");
+    let repo_map = cfg.build_repo_map_for(&frozen_root)?;
     println!(
         "    🎯 Compressed map length: {} bytes",
         repo_map.map_text.len()
     );
 
+    // ── Step 3: Autonomous Crucible Loop ───────────────────────────
     println!(
-        "\n[3/6] Entering Autonomous Crucible Loop (Model: {})...",
+        "\n[4/6] Entering Autonomous Crucible Loop (Model: {})...",
         cfg.model
     );
 
@@ -209,7 +231,8 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
                     messages_context.push_str("\n\n[SYSTEM: READ FILES RESULT]\n");
                     for path in paths {
-                        let abs_path = path.to_absolute(&cfg.workspace);
+                        // Read from FROZEN sandbox, not live workspace
+                        let abs_path = path.to_absolute(&frozen_root);
                         let content = std::fs::read_to_string(&abs_path)
                             .unwrap_or_else(|_| "<file not found or unreadable>".into());
                         messages_context.push_str(&format!(
@@ -229,21 +252,9 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             }
         };
 
-        println!("\n[4/6] Materializing O(1) Sandbox Boundary (Freezing Timeline)...");
-        let mat_config = MaterializeConfig {
-            source: cfg.workspace.clone(),
-            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-            allow_hardlinks: false,
-        };
-        let sandbox = materialize(&mat_config)?;
-        println!(
-            "    🛡️  Time-Frozen Sandbox established at: {}",
-            sandbox.path().display()
-        );
-
+        // Hydrate against the frozen sandbox
         println!("\n[5/6] Hydrating IntentPlan against Frozen Sandbox...");
-        let hydrated_plan = match PlanHydrator::hydrate(&compiled_plan, sandbox.path()) {
+        let hydrated_plan = match PlanHydrator::hydrate(&compiled_plan, &frozen_root) {
             Ok(p) => p,
             Err(e) => {
                 println!("    ❌ Hydration failed: {:?}", e);
@@ -301,7 +312,8 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 result.test_run.truncated_log
             ));
         }
-        drop(sandbox);
     }
+
+    drop(sandbox);
     Ok(())
 }
