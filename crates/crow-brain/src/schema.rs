@@ -81,5 +81,6 @@ Rules:
 - For Create, precondition must be "MustNotExist".
 - Each hunk's original_start is 1-based.
 - `remove_block` and `insert_block` must be single strings using `\n` for line breaks. Do NOT use arrays for lines.
+- IMPORTANT: `remove_block` must NEVER be empty. For insertions, include at least one existing line as anchor context in `remove_block` and repeat that line alongside your new lines in `insert_block`. Example: to insert "new_line" after "line 2", set remove_block="line 2\n" and insert_block="line 2\nnew_line\n".
 - Output ONLY valid JSON. No markdown, no explanation."#
 }

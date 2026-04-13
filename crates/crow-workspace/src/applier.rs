@@ -212,8 +212,18 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
         let mut match_indices = Vec::new();
 
         if target_len == 0 {
-            let safe_idx = expected_idx.clamp(0, lines.len() as isize) as usize;
-            match_indices.push(safe_idx);
+            // Pure insertion with no context anchor is forbidden.
+            // The LLM must include at least one existing line in remove_block
+            // (and replicate it in insert_block alongside the new lines) so
+            // that the drift search can verify the correct insertion site.
+            return Err(ApplyError::HunkConflict {
+                path: file_path.into(),
+                line: hunk.original_start,
+                reason: "contextless pure insertion rejected: remove_block is empty. \
+                         Include at least one existing line as anchor context in remove_block \
+                         and repeat it in insert_block alongside the new lines."
+                    .into(),
+            });
         } else {
             for drift in -max_drift..=max_drift {
                 let probe_idx = expected_idx + drift;
@@ -401,12 +411,31 @@ mod tests {
     }
 
     #[test]
-    fn apply_hunks_pure_insertion() {
+    fn apply_hunks_rejects_contextless_pure_insertion() {
         let original = "line 1\nline 2\nline 3\n";
         let hunks = vec![DiffHunk {
             original_start: 2,
             remove_block: "".into(),
             insert_block: "inserted\n".into(),
+        }];
+        let result = apply_hunks(original, &hunks, "test.rs");
+        assert!(
+            result.is_err(),
+            "contextless pure insertion must be rejected"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("contextless pure insertion"), "got: {}", msg);
+    }
+
+    #[test]
+    fn apply_hunks_anchored_insertion() {
+        // The correct way: include anchor context in remove_block,
+        // replicate it plus new lines in insert_block.
+        let original = "line 1\nline 2\nline 3\n";
+        let hunks = vec![DiffHunk {
+            original_start: 2,
+            remove_block: "line 2\n".into(),
+            insert_block: "line 2\ninserted\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         assert!(result.contains("inserted"));
@@ -482,7 +511,7 @@ mod tests {
         let original = "line 1\nline 2\n";
         let hunks = vec![DiffHunk {
             original_start: 0,
-            remove_block: "".into(),
+            remove_block: "line 1\n".into(),
             insert_block: "bad\n".into(),
         }];
         let result = apply_hunks(original, &hunks, "test.rs");

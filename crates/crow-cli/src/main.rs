@@ -216,9 +216,26 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     for crucible_attempt in 1..=3 {
         println!("\n▶️ Crucible Attempt {}/3", crucible_attempt);
 
-        // Inner Epistemic Loop
+        // Inner Epistemic Loop (bounded)
+        const MAX_EPISTEMIC_STEPS: usize = 7;
+        const MAX_FILE_BYTES: u64 = 50 * 1024; // 50 KB
+        const MAX_FILE_LINES: usize = 500;
+        let mut epistemic_step = 0;
+
         let compiled_plan = loop {
-            println!("  🧠 Modulating Cognitive Request...");
+            epistemic_step += 1;
+            if epistemic_step > MAX_EPISTEMIC_STEPS {
+                return Err(format!(
+                    "Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.",
+                    MAX_EPISTEMIC_STEPS
+                )
+                .into());
+            }
+
+            println!(
+                "  🧠 Epistemic Step {}/{} — Modulating Cognitive Request...",
+                epistemic_step, MAX_EPISTEMIC_STEPS
+            );
             let action = compiler
                 .compile_action(&messages_context)
                 .await
@@ -233,8 +250,27 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                     for path in paths {
                         // Read from FROZEN sandbox, not live workspace
                         let abs_path = path.to_absolute(&frozen_root);
-                        let content = std::fs::read_to_string(&abs_path)
-                            .unwrap_or_else(|_| "<file not found or unreadable>".into());
+
+                        // File size gate: prevent context explosion
+                        let content = match std::fs::metadata(&abs_path) {
+                            Ok(meta) if meta.len() > MAX_FILE_BYTES => {
+                                // Truncate large files to first N lines
+                                let raw = std::fs::read_to_string(&abs_path)
+                                    .unwrap_or_else(|_| "<file not found or unreadable>".into());
+                                let truncated: String = raw
+                                    .lines()
+                                    .take(MAX_FILE_LINES)
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                format!(
+                                    "{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]",
+                                    truncated, meta.len(), MAX_FILE_LINES
+                                )
+                            }
+                            _ => std::fs::read_to_string(&abs_path)
+                                .unwrap_or_else(|_| "<file not found or unreadable>".into()),
+                        };
+
                         messages_context.push_str(&format!(
                             "--- {} ---\n{}\n\n",
                             path.as_str(),
