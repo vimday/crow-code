@@ -6,7 +6,8 @@ use serde_json::json;
 // ─── Provider Capabilities ──────────────────────────────────────────
 
 /// Declares what a given LLM provider endpoint supports.
-/// Avoids string-based heuristics like `url.contains("openai.com")`.
+/// Resolved via explicit configuration (`LLM_JSON_MODE`) first;
+/// falls back to URL heuristics only when no override is given.
 #[derive(Debug, Clone)]
 pub struct ProviderCaps {
     /// Whether the provider supports `response_format: { "type": "json_object" }`.
@@ -14,15 +15,17 @@ pub struct ProviderCaps {
 }
 
 impl ProviderCaps {
-    /// Infer capabilities from the base URL.
-    /// Known providers get explicit caps; unknown default to conservative.
-    pub fn infer(base_url: &str) -> Self {
-        Self {
-            supports_json_mode: base_url.contains("openai.com"),
-        }
+    /// Resolve capabilities from an explicit override or URL fallback.
+    ///
+    /// - `json_mode_override = Some(true/false)` → use that value directly.
+    /// - `json_mode_override = None` → fall back to URL heuristic (conservative).
+    pub fn resolve(json_mode_override: Option<bool>, base_url: &str) -> Self {
+        let supports_json_mode =
+            json_mode_override.unwrap_or_else(|| base_url.contains("openai.com"));
+        Self { supports_json_mode }
     }
 
-    /// Explicitly declare capabilities (overrides inference).
+    /// Explicitly declare capabilities (for testing / direct construction).
     pub fn new(supports_json_mode: bool) -> Self {
         Self { supports_json_mode }
     }
@@ -39,7 +42,12 @@ pub struct ReqwestLlmClient {
 }
 
 impl ReqwestLlmClient {
-    pub fn new(api_key: String, model: String, base_url: Option<String>) -> Result<Self, String> {
+    pub fn new(
+        api_key: String,
+        model: String,
+        base_url: Option<String>,
+        json_mode: Option<bool>,
+    ) -> Result<Self, String> {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             header::AUTHORIZATION,
@@ -55,7 +63,7 @@ impl ReqwestLlmClient {
             .map_err(|e| e.to_string())?;
 
         let resolved_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let caps = ProviderCaps::infer(&resolved_url);
+        let caps = ProviderCaps::resolve(json_mode, &resolved_url);
 
         Ok(Self {
             client,

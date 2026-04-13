@@ -251,31 +251,34 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                         // Read from FROZEN sandbox, not live workspace
                         let abs_path = path.to_absolute(&frozen_root);
 
-                        // Streaming file read via BufReader: prevents OOM on
-                        // multi-GB files by reading line-by-line and stopping
-                        // at MAX_FILE_LINES without ever loading the whole file.
-                        let content = match std::fs::metadata(&abs_path) {
-                            Ok(meta) if meta.len() > MAX_FILE_BYTES => {
-                                use std::io::{BufRead, BufReader};
-                                match std::fs::File::open(&abs_path) {
-                                    Ok(file) => {
-                                        let reader = BufReader::new(file);
-                                        let truncated: String = reader
-                                            .lines()
-                                            .map_while(Result::ok)
-                                            .take(MAX_FILE_LINES)
-                                            .collect::<Vec<_>>()
-                                            .join("\n");
-                                        format!(
-                                            "{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]",
-                                            truncated, meta.len(), MAX_FILE_LINES
-                                        )
-                                    }
-                                    Err(_) => "<file not found or unreadable>".into(),
+                        // Unified streaming read via BufReader.
+                        // The line limit (MAX_FILE_LINES) is an independent hard
+                        // gate that applies to ALL files regardless of byte size.
+                        // The byte threshold only controls the truncation warning.
+                        use std::io::{BufRead, BufReader};
+                        let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+
+                        let content = match std::fs::File::open(&abs_path) {
+                            Ok(file) => {
+                                let reader = BufReader::new(file);
+                                let lines: Vec<String> = reader
+                                    .lines()
+                                    .map_while(Result::ok)
+                                    .take(MAX_FILE_LINES)
+                                    .collect();
+                                let was_truncated =
+                                    file_size > MAX_FILE_BYTES || lines.len() >= MAX_FILE_LINES;
+                                let text = lines.join("\n");
+                                if was_truncated {
+                                    format!(
+                                        "{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]",
+                                        text, file_size, lines.len()
+                                    )
+                                } else {
+                                    text
                                 }
                             }
-                            _ => std::fs::read_to_string(&abs_path)
-                                .unwrap_or_else(|_| "<file not found or unreadable>".into()),
+                            Err(_) => "<file not found or unreadable>".into(),
                         };
 
                         messages_context.push_str(&format!(

@@ -15,6 +15,9 @@ pub struct CliConfig {
     pub base_url: Option<String>,
     pub max_tokens: u32,
     pub map_budget: usize,
+    /// Explicit override for provider JSON mode capability.
+    /// Set via `LLM_JSON_MODE=on|off`. `None` = auto-detect from URL.
+    pub json_mode: Option<bool>,
 }
 
 impl CliConfig {
@@ -24,6 +27,10 @@ impl CliConfig {
         let api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("CROW_API_KEY"))
             .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
+
+        let json_mode = env::var("LLM_JSON_MODE")
+            .ok()
+            .map(|v| matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"));
 
         Ok(Self {
             workspace: env::current_dir()?,
@@ -38,6 +45,7 @@ impl CliConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500 * 1024),
+            json_mode,
         })
     }
 
@@ -47,6 +55,7 @@ impl CliConfig {
             self.api_key.clone(),
             self.model.clone(),
             self.base_url.clone(),
+            self.json_mode,
         )
         .map(|c| c.with_max_tokens(self.max_tokens))
     }
