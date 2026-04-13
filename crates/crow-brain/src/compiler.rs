@@ -1,5 +1,41 @@
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::Error as SerdeError;
+
+// ─── Chat Message Protocol ─────────────────────────────────────────
+
+/// A structured chat message with role-content separation.
+/// Replaces raw string concatenation for LLM context management.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+        }
+    }
+}
+
+// ─── Compiler Types ─────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum CompilerError {
@@ -10,9 +46,8 @@ pub enum CompilerError {
 /// A generic LLM driver interface to allow substituting e.g. OpenAI vs Claude vs Mock.
 #[async_trait]
 pub trait LlmClient: Send + Sync {
-    /// Send a prompt and a system prompt/JSON schema instruction to the LLM,
-    /// and get strings back.
-    async fn generate(&self, prompt: &str) -> Result<String, String>;
+    /// Send a structured conversation to the LLM and get the assistant's response.
+    async fn generate(&self, messages: &[ChatMessage]) -> Result<String, String>;
 }
 
 /// The Intelligence Compiler.
@@ -40,36 +75,43 @@ impl IntentCompiler {
     /// it catches the parsing error and prompts the LLM to fix it.
     pub async fn compile_action(
         &self,
-        base_task: &str,
+        messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
 
-        let base_prompt = format!(
-            "Task and Context:\n{}\n\n{}\nOutput ONLY a valid JSON object matching the AgentAction schema.",
-            base_task, schema_guide
-        );
+        // Build the base message sequence:
+        // 1. System: schema + compiler instructions
+        // 2. All caller-provided messages (context, task, prior conversation)
+        let mut conversation: Vec<ChatMessage> = Vec::new();
 
-        let mut current_prompt = base_prompt.clone();
+        conversation.push(ChatMessage::system(format!(
+            "You are the Intelligence Compiler. You must output ONLY valid JSON matching the AgentAction schema.\n\n{}",
+            schema_guide
+        )));
+
+        conversation.extend(messages.iter().cloned());
+
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
             let response = self
                 .client
-                .generate(&current_prompt)
+                .generate(&conversation)
                 .await
                 .map_err(CompilerError::PromptFailed)?;
 
-            // Try to parse the json directly (using a liberal extraction if the model wrapped it in markdown)
             let cleaned_json = extract_json_block(&response);
 
             match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
                 Ok(plan) => return Ok(plan),
                 Err(e) => {
-                    // Self-healing: capture the exact Serde error but retain original task
-                    current_prompt = format!(
-                        "{}\n\n[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPrevious Output:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
-                        base_prompt, e, cleaned_json
-                    );
+                    // Self-healing: append the failed attempt and error as
+                    // assistant + user messages for the next retry.
+                    conversation.push(ChatMessage::assistant(response.clone()));
+                    conversation.push(ChatMessage::user(format!(
+                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
+                        e
+                    )));
                     errors.push(e);
                 }
             }
@@ -107,7 +149,7 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlm {
-        async fn generate(&self, _prompt: &str) -> Result<String, String> {
+        async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
             let mut resps = self.responses.lock().unwrap();
             if resps.is_empty() {
                 Err("No more mock responses".into())
@@ -137,6 +179,10 @@ mod tests {
         .into()
     }
 
+    fn task_messages() -> Vec<ChatMessage> {
+        vec![ChatMessage::user("do something")]
+    }
+
     #[tokio::test]
     async fn compiler_succeeds_first_try() {
         let client = Box::new(MockLlm {
@@ -145,7 +191,7 @@ mod tests {
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("do something")
+            .compile_action(&task_messages())
             .await
             .expect("compile should succeed");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -157,18 +203,15 @@ mod tests {
 
     #[tokio::test]
     async fn compiler_self_heals_on_serde_error() {
-        // First response misses a comma or is junk
         let bad_json = r#"{ "invalid": yes }"#.into();
 
         let client = Box::new(MockLlm {
-            // First response is bad_json, forcing the loop to catch Err and retry
-            // The second response is valid_plan_json, so the loop succeeds.
             responses: Arc::new(Mutex::new(vec![bad_json, valid_plan_json()])),
         });
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("fix bug")
+            .compile_action(&task_messages())
             .await
             .expect("compile should heal and succeed");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -192,7 +235,7 @@ mod tests {
         });
         let compiler = IntentCompiler::new(client).with_max_retries(2);
 
-        let err = compiler.compile_action("do things").await.unwrap_err();
+        let err = compiler.compile_action(&task_messages()).await.unwrap_err();
         match err {
             CompilerError::MaxRetriesExceeded(errors) => {
                 assert_eq!(errors.len(), 3); // initial + 2 retries
@@ -231,8 +274,6 @@ mod tests {
 
     #[tokio::test]
     async fn compiler_handles_provider_leading_newline_in_content() {
-        // Simulates what OpenRouter/DeepInfra actually returns:
-        // content field starts with "\n" before the JSON
         let with_newline = format!("\n{}", valid_plan_json());
 
         let client = Box::new(MockLlm {
@@ -241,7 +282,7 @@ mod tests {
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("create something")
+            .compile_action(&task_messages())
             .await
             .expect("Leading newline in content should not break parsing");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -261,7 +302,7 @@ mod tests {
         let compiler = IntentCompiler::new(client);
 
         let action = compiler
-            .compile_action("create something")
+            .compile_action(&task_messages())
             .await
             .expect("Markdown-wrapped JSON should be extracted and parsed");
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {

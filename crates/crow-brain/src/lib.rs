@@ -8,5 +8,5 @@ pub mod client;
 pub mod compiler;
 pub mod schema;
 
-pub use client::ReqwestLlmClient;
-pub use compiler::{CompilerError, IntentCompiler, LlmClient};
+pub use client::{LlmConfig, ReqwestLlmClient};
+pub use compiler::{ChatMessage, CompilerError, IntentCompiler, LlmClient};

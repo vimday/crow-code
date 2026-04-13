@@ -10,37 +10,30 @@ use std::path::PathBuf;
 /// All environment-driven configuration for a crow session.
 pub struct CliConfig {
     pub workspace: PathBuf,
-    pub api_key: String,
-    pub model: String,
-    pub base_url: Option<String>,
-    pub max_tokens: u32,
+    pub llm: crow_brain::LlmConfig,
     pub map_budget: usize,
-    /// Explicit override for provider JSON mode capability.
-    /// Set via `LLM_JSON_MODE=on|off`. `None` = auto-detect from URL.
-    pub json_mode: Option<bool>,
 }
 
 impl CliConfig {
     /// Resolve configuration from environment.
-    /// Fails fast with a clear message if required variables are missing
-    /// or if configuration values are invalid.
-    pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+    /// Fails fast with a clear message if configuration values are invalid.
+    pub fn from_env() -> anyhow::Result<Self> {
+        // API key: optional when a custom base URL is set (allows local providers).
         let api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("CROW_API_KEY"))
-            .map_err(|_| "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY.")?;
+            .ok();
 
-        // Strict parsing: only recognized values are accepted.
+        // Strict parsing for JSON mode: unrecognized values fail fast.
         let json_mode = match env::var("LLM_JSON_MODE") {
             Ok(v) => {
                 let parsed = match v.to_lowercase().as_str() {
                     "on" | "true" | "1" | "yes" => true,
                     "off" | "false" | "0" | "no" => false,
                     other => {
-                        return Err(format!(
+                        anyhow::bail!(
                             "Invalid LLM_JSON_MODE='{}'. Expected: on|off|true|false|1|0|yes|no",
                             other
                         )
-                        .into())
                     }
                 };
                 Some(parsed)
@@ -52,45 +45,59 @@ impl CliConfig {
 
         // When a custom base URL is set, require an explicit model to avoid
         // accidentally sending "gpt-4-turbo" to a non-OpenAI endpoint.
+        // API key is NOT required for custom providers (local/unauthenticated).
         let model = match (&base_url, env::var("LLM_MODEL")) {
             (_, Ok(m)) => m,
             (None, Err(_)) => "gpt-4-turbo".to_string(),
             (Some(url), Err(_)) => {
-                return Err(format!(
+                anyhow::bail!(
                     "LLM_BASE_URL is set to '{}' but LLM_MODEL is not specified. \
                      Please set LLM_MODEL explicitly when using a custom provider.",
                     url
                 )
-                .into())
             }
         };
 
-        Ok(Self {
-            workspace: env::current_dir()?,
+        // When using the default OpenAI endpoint, API key is still required.
+        if base_url.is_none() && api_key.is_none() {
+            anyhow::bail!(
+                "Missing API Key. Please set OPENAI_API_KEY or CROW_API_KEY. \
+                 (API key is only optional when LLM_BASE_URL points to a local/unauthenticated provider.)"
+            );
+        }
+
+        let llm = crow_brain::LlmConfig {
             api_key,
             model,
-            base_url,
+            base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".into()),
             max_tokens: env::var("LLM_MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8192),
+            connect_timeout_secs: env::var("LLM_CONNECT_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            request_timeout_secs: env::var("LLM_REQUEST_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+            json_mode,
+        };
+
+        Ok(Self {
+            workspace: env::current_dir()?,
+            llm,
             map_budget: env::var("CROW_MAP_BUDGET")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500 * 1024),
-            json_mode,
         })
     }
 
     /// Build an LLM client from this configuration.
     pub fn build_llm_client(&self) -> Result<crow_brain::ReqwestLlmClient, String> {
-        crow_brain::ReqwestLlmClient::new(
-            self.api_key.clone(),
-            self.model.clone(),
-            self.base_url.clone(),
-            self.json_mode,
-        )
-        .map(|c| c.with_max_tokens(self.max_tokens))
+        crow_brain::ReqwestLlmClient::from_config(&self.llm)
     }
 
     /// Build a repo map from the workspace using the configured budget.

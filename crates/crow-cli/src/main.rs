@@ -1,6 +1,7 @@
 mod config;
 mod diff;
 
+use anyhow::{Context, Result};
 use config::CliConfig;
 use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
@@ -11,7 +12,7 @@ use crow_workspace::applier::apply_plan_to_sandbox;
 use std::env;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() >= 2 {
         if args[1] == "compile" {
@@ -26,13 +27,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── Sprint 1: God Pipeline (synthetic self-test) ───────────────────
 
-async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_god_pipeline() -> Result<()> {
     println!("🦅 crow-code Sprint 1 God Pipeline initializing...\n");
 
     let current_dir = env::current_dir()?;
     println!("[1/4] Radaring Workspace: {}", current_dir.display());
 
-    let profile = scan_workspace(&current_dir)?;
+    let profile = scan_workspace(&current_dir).map_err(|e| anyhow::anyhow!(e))?;
     println!(
         "    🎯 Primary Lang: {} (Tier {:?})",
         profile.primary_lang.name, profile.primary_lang.tier
@@ -61,7 +62,7 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
         allow_hardlinks: false,
     };
 
-    let sandbox = materialize(&config).map_err(|e| format!("Materialization failed: {}", e))?;
+    let sandbox = materialize(&config).context("Failed to materialize sandbox")?;
     println!(
         "    🛡️  Sandbox established at: {}",
         sandbox.path().display()
@@ -81,7 +82,7 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
         }],
     };
 
-    apply_plan_to_sandbox(&mock_plan, &sandbox)?;
+    apply_plan_to_sandbox(&mock_plan, &sandbox).context("Failed to apply synthetic plan")?;
     println!("    💉 Inject successful!");
 
     println!("\n[4/4] Engaging Verifier execution inside sandbox...");
@@ -95,7 +96,8 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
         &candidate.command,
         &exec_config,
         &AciConfig::compact(),
-    )?;
+    )
+    .context("Verification execution failed")?;
 
     println!("\n[✓] Verification Cycle Completed");
     println!("--- Result Summary ---");
@@ -113,14 +115,16 @@ async fn run_god_pipeline() -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── Compile-Only command ───────────────────────────────────────────
 
-async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_compile_only(args: &[String]) -> Result<()> {
+    use crow_brain::ChatMessage;
+
     println!("🦅 crow-code Compile-Only mode initializing...\n");
 
     let cfg = CliConfig::from_env()?;
     let prompt = args.join(" ");
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
-    let repo_map = cfg.build_repo_map()?;
+    let repo_map = cfg.build_repo_map().map_err(|e| anyhow::anyhow!(e))?;
     println!(
         "    🎯 Compressed map length: {} bytes",
         repo_map.map_text.len()
@@ -128,14 +132,18 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
 
     println!(
         "\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...",
-        cfg.model
+        cfg.llm.model
     );
-    let full_prompt = format!("Context:\n{}\n\nTask:\n{}", repo_map.map_text, prompt);
 
-    let client = Box::new(cfg.build_llm_client()?);
+    let messages = vec![ChatMessage::user(format!(
+        "Context:\n{}\n\nTask:\n{}",
+        repo_map.map_text, prompt
+    ))];
+
+    let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
-    match compiler.compile_action(&full_prompt).await {
+    match compiler.compile_action(&messages).await {
         Ok(action) => {
             println!("\n[✓] Compilation Successful!");
             println!("--- Parsed AgentAction ---");
@@ -144,14 +152,14 @@ async fn run_compile_only(args: &[String]) -> Result<(), Box<dyn std::error::Err
         }
         Err(e) => {
             eprintln!("\n[✗] Compilation Failed: {:?}", e);
-            Err("Failed to compile AgentAction".into())
+            anyhow::bail!("Failed to compile AgentAction")
         }
     }
 }
 
 // ─── Dry-Run command ────────────────────────────────────────────────
 
-async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_dry_run(args: &[String]) -> Result<()> {
     use crow_workspace::PlanHydrator;
 
     println!("🦅 crow-code Dry-Run mode initializing...\n");
@@ -166,13 +174,11 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     // exclusively against this frozen snapshot.
 
     println!("[1/6] Radaring Workspace: {}", cfg.workspace.display());
-    let profile = scan_workspace(&cfg.workspace)?;
+    let profile = scan_workspace(&cfg.workspace).map_err(|e| anyhow::anyhow!(e))?;
     let candidate = match profile.verification_candidates.first() {
         Some(c) => c.clone(),
         None => {
-            return Err(
-                "No verification candidates found. Cannot dry-run without a verifier.".into(),
-            )
+            anyhow::bail!("No verification candidates found. Cannot dry-run without a verifier.");
         }
     };
 
@@ -183,7 +189,7 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
     };
-    let sandbox = materialize(&mat_config)?;
+    let sandbox = materialize(&mat_config).context("Failed to materialize frozen sandbox")?;
     let frozen_root = sandbox.path().to_path_buf();
     println!(
         "    🛡️  Time-Frozen Sandbox established at: {}",
@@ -192,7 +198,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
     // ── Step 2: Build repo map against frozen sandbox ──────────────
     println!("\n[3/6] Gathering Repomap Context from Frozen Sandbox via tree-sitter...");
-    let repo_map = cfg.build_repo_map_for(&frozen_root)?;
+    let repo_map = cfg
+        .build_repo_map_for(&frozen_root)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to build repo map from frozen sandbox")?;
     println!(
         "    🎯 Compressed map length: {} bytes",
         repo_map.map_text.len()
@@ -201,18 +210,26 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     // ── Step 3: Autonomous Crucible Loop ───────────────────────────
     println!(
         "\n[4/6] Entering Autonomous Crucible Loop (Model: {})...",
-        cfg.model
+        cfg.llm.model
     );
 
-    let client = Box::new(cfg.build_llm_client()?);
+    let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
-    let mut messages_context = format!(
-        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-        repo_map.map_text, prompt
-    );
+    // Structured message history with proper role separation.
+    // System context (repo map + constraints) is set once; subsequent
+    // interactions are User (system feedback) and Assistant (LLM output).
+    use crow_brain::ChatMessage;
+    let mut messages: Vec<ChatMessage> = vec![
+        ChatMessage::user(format!(
+            "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+            repo_map.map_text, prompt
+        )),
+    ];
 
-    // Outer Crucible Loop (max 3 compile-test cycles)
+    // Outer Crucible Loop (max 3 compile-test cycles).
+    // Each attempt re-materializes a fresh sandbox so that retries are
+    // independent timelines against the same frozen baseline.
     for crucible_attempt in 1..=3 {
         println!("\n▶️ Crucible Attempt {}/3", crucible_attempt);
 
@@ -225,11 +242,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         let compiled_plan = loop {
             epistemic_step += 1;
             if epistemic_step > MAX_EPISTEMIC_STEPS {
-                return Err(format!(
+                anyhow::bail!(
                     "Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.",
                     MAX_EPISTEMIC_STEPS
-                )
-                .into());
+                );
             }
 
             println!(
@@ -237,24 +253,21 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                 epistemic_step, MAX_EPISTEMIC_STEPS
             );
             let action = compiler
-                .compile_action(&messages_context)
+                .compile_action(&messages)
                 .await
-                .map_err(|e| format!("Compilation failed: {:?}", e))?;
+                .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
             match action {
                 crow_patch::AgentAction::ReadFiles { paths, rationale } => {
                     println!("    📖 Agent requests to read files: {:?}", paths);
                     println!("       Rationale: {}", rationale);
 
-                    messages_context.push_str("\n\n[SYSTEM: READ FILES RESULT]\n");
+                    let mut file_contents = String::from("[READ FILES RESULT]\n");
                     for path in paths {
                         // Read from FROZEN sandbox, not live workspace
                         let abs_path = path.to_absolute(&frozen_root);
 
                         // Unified streaming read via BufReader.
-                        // The line limit (MAX_FILE_LINES) is an independent hard
-                        // gate that applies to ALL files regardless of byte size.
-                        // The byte threshold only controls the truncation warning.
                         use std::io::{BufRead, BufReader};
                         let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
 
@@ -281,15 +294,16 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                             Err(_) => "<file not found or unreadable>".into(),
                         };
 
-                        messages_context.push_str(&format!(
+                        file_contents.push_str(&format!(
                             "--- {} ---\n{}\n\n",
                             path.as_str(),
                             content
                         ));
                     }
-                    messages_context.push_str(
+                    file_contents.push_str(
                         "Please proceed with your task, or read more files if necessary.",
                     );
+                    messages.push(ChatMessage::user(file_contents));
                 }
                 crow_patch::AgentAction::SubmitPlan { plan } => {
                     println!("    ✅ Agent submitted IntentPlan!");
@@ -298,14 +312,13 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             }
         };
 
-        // Re-materialize a fresh sandbox for each crucible attempt so that
-        // each retry operates on a clean copy of the frozen baseline, not a
-        // previously-polluted sandbox. This gives "independent timeline" semantics.
+        // Re-materialize a fresh sandbox for each crucible attempt.
         println!(
             "\n[5/6] Re-materializing fresh sandbox for attempt {}...",
             crucible_attempt
         );
-        let attempt_sandbox = materialize(&mat_config)?;
+        let attempt_sandbox =
+            materialize(&mat_config).context("Failed to re-materialize attempt sandbox")?;
         println!(
             "    🛡️  Fresh attempt sandbox at: {}",
             attempt_sandbox.path().display()
@@ -315,10 +328,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             Ok(p) => p,
             Err(e) => {
                 println!("    ❌ Hydration failed: {:?}", e);
-                messages_context.push_str(&format!(
-                    "\n\n[SYSTEM: HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
-                    e
-                ));
+                messages.push(ChatMessage::user(format!(
+                        "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
+                        e
+                    )));
                 continue;
             }
         };
@@ -328,11 +341,11 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             serde_json::to_string_pretty(&hydrated_plan)?
         );
 
-        apply_plan_to_sandbox(&hydrated_plan, &attempt_sandbox)?;
+        apply_plan_to_sandbox(&hydrated_plan, &attempt_sandbox)
+            .context("Failed to apply plan to sandbox")?;
         println!("    💉 Sandbox injection successful!");
 
         // Diff baseline: frozen_root (pre-patch) → attempt_sandbox (post-patch).
-        // Both sides from materialized snapshots, never the live workspace.
         println!("\n--- Sandbox Diff (frozen baseline → patched) ---");
         diff::render_plan_diff(&frozen_root, attempt_sandbox.path(), &hydrated_plan);
 
@@ -350,7 +363,8 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             &candidate.command,
             &exec_config,
             &AciConfig::compact(),
-        )?;
+        )
+        .context("Verification execution failed")?;
 
         let outcome = &result.test_run.outcome;
         println!("\n╔══════════════════════════════════════╗");
@@ -366,10 +380,10 @@ async fn run_dry_run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             break;
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
-            messages_context.push_str(&format!(
-                "\n\n[SYSTEM: VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
+            messages.push(ChatMessage::user(format!(
+                "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
                 result.test_run.truncated_log
-            ));
+            )));
         }
         drop(attempt_sandbox);
     }

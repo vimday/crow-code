@@ -4,7 +4,7 @@
 //! refactors cannot silently break the cognitive loop.
 
 use async_trait::async_trait;
-use crow_brain::{IntentCompiler, LlmClient};
+use crow_brain::{ChatMessage, IntentCompiler, LlmClient};
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::AgentAction;
 use crow_verifier::{types::AciConfig, ExecutionConfig};
@@ -22,7 +22,7 @@ struct ScriptedLlm {
 
 #[async_trait]
 impl LlmClient for ScriptedLlm {
-    async fn generate(&self, _prompt: &str) -> Result<String, String> {
+    async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
         let mut resps = self.responses.lock().unwrap();
         if resps.is_empty() {
             Err("ScriptedLlm exhausted all scripted responses".into())
@@ -104,8 +104,9 @@ async fn autonomous_loop_direct_submit() {
     let sandbox = materialize(&config).expect("Materialization should succeed");
 
     // Step 2: Compile (epistemic loop — agent submits directly)
+    let messages = vec![ChatMessage::user("Add a marker file")];
     let action = compiler
-        .compile_action("Add a marker file")
+        .compile_action(&messages)
         .await
         .expect("compile_action should succeed");
 
@@ -196,12 +197,12 @@ async fn autonomous_loop_read_then_submit() {
     let sandbox = materialize(&config).expect("Materialization should succeed");
     let frozen_root = sandbox.path().to_path_buf();
 
-    // Step 2: Epistemic loop
-    let mut context = String::from("Task: inspect and create marker");
+    // Step 2: Epistemic loop with structured messages
+    let mut messages = vec![ChatMessage::user("Task: inspect and create marker")];
 
     let plan = loop {
         let action = compiler
-            .compile_action(&context)
+            .compile_action(&messages)
             .await
             .expect("compile_action should succeed");
 
@@ -213,15 +214,16 @@ async fn autonomous_loop_read_then_submit() {
                 );
                 assert!(rationale.len() > 5, "Rationale should be non-trivial");
 
-                // Inject file contents from FROZEN sandbox
-                context.push_str("\n\n[SYSTEM: READ FILES RESULT]\n");
+                // Inject file contents from FROZEN sandbox as a user message
+                let mut file_contents = String::from("[READ FILES RESULT]\n");
                 for path in paths {
                     let abs_path = path.to_absolute(&frozen_root);
                     let content =
                         fs::read_to_string(&abs_path).unwrap_or_else(|_| "<file not found>".into());
-                    context.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
+                    file_contents.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
                 }
-                context.push_str("Please proceed with your task.");
+                file_contents.push_str("Please proceed with your task.");
+                messages.push(ChatMessage::user(file_contents));
             }
             AgentAction::SubmitPlan { plan } => {
                 break plan;
