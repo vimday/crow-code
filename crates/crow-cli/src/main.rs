@@ -1,8 +1,9 @@
 mod config;
+mod context;
 mod diff;
 
 use anyhow::{Context, Result};
-use config::CliConfig;
+use config::CrowConfig;
 use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::{Confidence, EditOp, FilePrecondition, IntentPlan, WorkspacePath};
@@ -120,7 +121,7 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
 
     println!("🦅 crow-code Compile-Only mode initializing...\n");
 
-    let cfg = CliConfig::from_env()?;
+    let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
 
     println!("[1/3] Gathering Repomap Context via tree-sitter...");
@@ -164,7 +165,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
     println!("🦅 crow-code Dry-Run mode initializing...\n");
 
-    let cfg = CliConfig::from_env()?;
+    let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
 
     // ── Step 1: Freeze the timeline FIRST ──────────────────────────
@@ -219,13 +220,16 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     // Structured message history with proper role separation.
     // System context (repo map + constraints) is set once; subsequent
     // interactions are User (system feedback) and Assistant (LLM output).
+    use context::CognitiveBudget;
     use crow_brain::ChatMessage;
-    let mut messages: Vec<ChatMessage> = vec![
-        ChatMessage::user(format!(
-            "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-            repo_map.map_text, prompt
-        )),
-    ];
+
+    let mut messages = CognitiveBudget::new(ChatMessage::system(
+        "You are an autonomous engineering agent executing the given task.",
+    ));
+    messages.push_user(format!(
+        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+        repo_map.map_text, prompt
+    ));
 
     // Outer Crucible Loop (max 3 compile-test cycles).
     // Each attempt re-materializes a fresh sandbox so that retries are
@@ -253,9 +257,12 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 epistemic_step, MAX_EPISTEMIC_STEPS
             );
             let action = compiler
-                .compile_action(&messages)
+                .compile_action(&messages.as_messages())
                 .await
                 .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
+
+            // Track the agent's action
+            messages.push_assistant(serde_json::to_string(&action)?);
 
             match action {
                 crow_patch::AgentAction::ReadFiles { paths, rationale } => {
@@ -303,7 +310,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     file_contents.push_str(
                         "Please proceed with your task, or read more files if necessary.",
                     );
-                    messages.push(ChatMessage::user(file_contents));
+                    messages.push_file_read(file_contents);
                 }
                 crow_patch::AgentAction::SubmitPlan { plan } => {
                     println!("    ✅ Agent submitted IntentPlan!");
@@ -328,10 +335,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             Ok(p) => p,
             Err(e) => {
                 println!("    ❌ Hydration failed: {:?}", e);
-                messages.push(ChatMessage::user(format!(
+                messages.push_user(format!(
                         "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
                         e
-                    )));
+                    ));
                 continue;
             }
         };
@@ -380,10 +387,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             break;
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
-            messages.push(ChatMessage::user(format!(
+            messages.push_user(format!(
                 "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
                 result.test_run.truncated_log
-            )));
+            ));
         }
         drop(attempt_sandbox);
     }

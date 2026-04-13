@@ -4,32 +4,40 @@ use serde_json::Error as SerdeError;
 
 // ─── Chat Message Protocol ─────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+}
+
 /// A structured chat message with role-content separation.
 /// Replaces raw string concatenation for LLM context management.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
-    pub role: String,
+    pub role: ChatRole,
     pub content: String,
 }
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
-            role: "system".into(),
+            role: ChatRole::System,
             content: content.into(),
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: "user".into(),
+            role: ChatRole::User,
             content: content.into(),
         }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
-            role: "assistant".into(),
+            role: ChatRole::Assistant,
             content: content.into(),
         }
     }
@@ -47,7 +55,8 @@ pub enum CompilerError {
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Send a structured conversation to the LLM and get the assistant's response.
-    async fn generate(&self, messages: &[ChatMessage]) -> Result<String, String>;
+    async fn generate(&self, messages: &[ChatMessage])
+        -> Result<String, crate::client::BrainError>;
 }
 
 /// The Intelligence Compiler.
@@ -98,7 +107,7 @@ impl IntentCompiler {
                 .client
                 .generate(&conversation)
                 .await
-                .map_err(CompilerError::PromptFailed)?;
+                .map_err(|e| CompilerError::PromptFailed(e.to_string()))?;
 
             let cleaned_json = extract_json_block(&response);
 
@@ -149,10 +158,15 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for MockLlm {
-        async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+        ) -> Result<String, crate::client::BrainError> {
             let mut resps = self.responses.lock().unwrap();
             if resps.is_empty() {
-                Err("No more mock responses".into())
+                Err(crate::client::BrainError::Config(
+                    "No more mock responses".into(),
+                ))
             } else {
                 Ok(resps.remove(0))
             }

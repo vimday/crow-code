@@ -18,6 +18,7 @@ crow-intel = { path = "../crow-intel" }
 crow-brain = { path = "../crow-brain" }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 similar = "2.6"
 anyhow = "1"
 

@@ -22,10 +22,12 @@ struct ScriptedLlm {
 
 #[async_trait]
 impl LlmClient for ScriptedLlm {
-    async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, String> {
+    async fn generate(&self, _messages: &[ChatMessage]) -> Result<String, crow_brain::BrainError> {
         let mut resps = self.responses.lock().unwrap();
         if resps.is_empty() {
-            Err("ScriptedLlm exhausted all scripted responses".into())
+            Err(crow_brain::BrainError::Config(
+                "ScriptedLlm exhausted all scripted responses".into(),
+            ))
         } else {
             Ok(resps.remove(0))
         }
