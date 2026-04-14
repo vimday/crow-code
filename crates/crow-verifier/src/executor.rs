@@ -281,7 +281,7 @@ pub async fn execute(
     })
 }
 
-/// Kill the child process and all its subprocesses if possible via pid
+/// Kill the child process and all its subprocesses if possible via pid.
 fn kill_process_tree(pid: u32) {
     #[cfg(unix)]
     {
@@ -289,6 +289,17 @@ fn kill_process_tree(pid: u32) {
             // Signal negative PID to kill the whole process group
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
+    }
+    #[cfg(not(unix))]
+    {
+        // Fallback: kill the main process via taskkill (Windows) or
+        // best-effort SIGKILL. This won't catch grandchildren but
+        // prevents the primary child from running indefinitely.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 }
 

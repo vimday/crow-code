@@ -91,6 +91,6 @@ Rules:
 - Each hunk's original_start is 1-based.
 - `remove_block` and `insert_block` must be single strings using `\n` for line breaks. Do NOT use arrays for lines.
 - IMPORTANT: `remove_block` must NEVER be empty. For insertions, include at least one existing line as anchor context in `remove_block` and repeat that line alongside your new lines in `insert_block`. Example: to insert "new_line" after "line 2", set remove_block="line 2\n" and insert_block="line 2\nnew_line\n".
-- For run_command, `program` must be from the allowlist (ls, cat, head, tail, find, wc, rg, grep, tree, file, stat, du). `args` is a list of argument strings.
+- For run_command, `program` must be from the allowlist (ls, cat, head, tail, wc, rg, grep, tree, file, stat, du). `args` is a list of argument strings.
 - Output ONLY valid JSON. No markdown, no explanation."#
 }

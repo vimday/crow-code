@@ -246,10 +246,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
                     // Allowlist: genuinely read-only reconnaissance programs ONLY.
                     // Programs that *can* mutate (python, node, cargo, awk, sed)
-                    // are excluded because they run directly against frozen_root.
+                    // or have built-in exec/delete semantics (find) are excluded.
                     const ALLOWED_PROGRAMS: &[&str] = &[
-                        "ls", "cat", "head", "tail", "find", "wc", "rg", "grep", "tree", "file",
-                        "stat", "du",
+                        "ls", "cat", "head", "tail", "wc", "rg", "grep", "tree", "file", "stat",
+                        "du",
                     ];
 
                     // Extract the basename in case the model passes a path
