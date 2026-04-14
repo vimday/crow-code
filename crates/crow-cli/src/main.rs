@@ -268,6 +268,47 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                         continue;
                     }
 
+                    // Argument validation: confine all path-like arguments
+                    // inside the frozen workspace. This prevents the model
+                    // from using allowlisted tools to read host files
+                    // (e.g. `cat /etc/passwd`, `find .. -name '*.key'`).
+                    let bad_arg = args.iter().find(|a| {
+                        let trimmed = a.trim();
+                        // Reject absolute paths
+                        if trimmed.starts_with('/') {
+                            return true;
+                        }
+                        // Reject parent traversal as standalone arg or path component
+                        if trimmed == ".."
+                            || trimmed.starts_with("../")
+                            || trimmed.contains("/../")
+                            || trimmed.ends_with("/..")
+                        {
+                            return true;
+                        }
+                        // Reject home directory expansion
+                        if trimmed.starts_with('~') {
+                            return true;
+                        }
+                        // Reject /dev/ references (e.g. /dev/tcp for network)
+                        if trimmed.contains("/dev/") {
+                            return true;
+                        }
+                        false
+                    });
+
+                    if let Some(offending) = bad_arg {
+                        println!(
+                            "    ⛔ Blocked: argument `{}` escapes workspace boundary",
+                            offending
+                        );
+                        messages.push_user(format!(
+                            "[RUN COMMAND BLOCKED]\nArgument `{}` rejected: paths must be relative to the workspace root.\nDo not use absolute paths, `..` traversal, or `~`. All file arguments are relative to the project root.",
+                            offending
+                        ));
+                        continue;
+                    }
+
                     let v_cmd = crow_probe::VerificationCommand {
                         program: program.clone(),
                         args: args.clone(),
@@ -324,7 +365,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             source: frozen_root.clone(),
             artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
             skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-            allow_hardlinks: true, // safe: cloning from our own frozen snapshot
+            allow_hardlinks: false, // MUST be false: verifier executes repo commands inside this sandbox
         };
         let attempt_sandbox = tokio::task::spawn_blocking(move || materialize(&attempt_mat_config))
             .await
