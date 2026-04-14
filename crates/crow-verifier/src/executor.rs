@@ -135,6 +135,10 @@ pub async fn execute(
 
     let start = Instant::now();
 
+    // Capture stdout and stderr as pipes so we can stream-read with a byte budget.
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
     // Spawn the process
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -146,36 +150,83 @@ pub async fn execute(
 
     let child_id = child.id();
 
-    // Execute with perfect tokio timeout hunting
-    let (exit_code, unified_vec) =
-        match timeout(exec_config.timeout, child.wait_with_output()).await {
-            Ok(Ok(output)) => {
-                let mut combined = output.stdout;
-                combined.extend(output.stderr);
-                (output.status.code(), combined)
-            }
-            Ok(Err(e)) => {
-                if let Some(id) = child_id {
-                    kill_process_tree(id);
+    // Take ownership of the pipes *before* awaiting, so we can
+    // stream-read with a hard byte budget instead of buffering
+    // the entire output in memory via wait_with_output().
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Stream-bounded capture: reads from both pipes concurrently
+    // into a single buffer, hard-capping at `max_output_bytes`.
+    let budget = exec_config.max_output_bytes;
+    let capture_future = async {
+        use tokio::io::AsyncReadExt;
+
+        let mut buf = Vec::with_capacity(std::cmp::min(budget, 256 * 1024));
+        let mut hit_cap = false;
+
+        // Helper: read from a pipe into buf until EOF or budget exhausted.
+        async fn drain(
+            pipe: Option<impl tokio::io::AsyncRead + Unpin>,
+            buf: &mut Vec<u8>,
+            budget: usize,
+            hit_cap: &mut bool,
+        ) {
+            if let Some(mut pipe) = pipe {
+                let mut tmp = [0u8; 8192];
+                loop {
+                    if buf.len() >= budget {
+                        *hit_cap = true;
+                        break;
+                    }
+                    let remaining = budget - buf.len();
+                    let to_read = std::cmp::min(remaining, tmp.len());
+                    match pipe.read(&mut tmp[..to_read]).await {
+                        Ok(0) => break, // EOF
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
                 }
-                return Err(VerifierError::SpawnFailed(e));
             }
-            Err(_) => {
-                // Timeout explicitly hit!
-                if let Some(id) = child_id {
-                    kill_process_tree(id);
-                }
-                (None, Vec::new())
+        }
+
+        // Read stdout first, then stderr into the same buffer.
+        // This keeps ordering deterministic and avoids interleaving.
+        drain(stdout, &mut buf, budget, &mut hit_cap).await;
+        drain(stderr, &mut buf, budget, &mut hit_cap).await;
+
+        (buf, hit_cap)
+    };
+
+    // Wrap the capture + wait in the timeout.
+    let (exit_code, unified_vec, output_capped) = match timeout(exec_config.timeout, async {
+        let (buf, hit_cap) = capture_future.await;
+        // After draining pipes, wait for the child to exit.
+        let status = child.wait().await;
+        (status, buf, hit_cap)
+    })
+    .await
+    {
+        Ok((Ok(status), buf, hit_cap)) => (status.code(), buf, hit_cap),
+        Ok((Err(e), _buf, _hit_cap)) => {
+            if let Some(id) = child_id {
+                kill_process_tree(id);
             }
-        };
+            return Err(VerifierError::SpawnFailed(e));
+        }
+        Err(_) => {
+            // Timeout explicitly hit — kill the process tree.
+            if let Some(id) = child_id {
+                kill_process_tree(id);
+            }
+            (None, Vec::new(), false)
+        }
+    };
 
     let elapsed = start.elapsed();
     let raw_bytes = unified_vec.len();
 
-    // Limit bytes if output blew up excessively by capping processing to the max_bytes slice
-    // Wait, since we buffered unconditionally, we might as well just enforce the cutoff here
-    let slice_len = std::cmp::min(raw_bytes, exec_config.max_output_bytes);
-    let combined_str = String::from_utf8_lossy(&unified_vec[..slice_len]).to_string();
+    let combined_str = String::from_utf8_lossy(&unified_vec).to_string();
 
     // ACI truncation on the safely decoded string
     let aci_result = aci::truncate(&combined_str, aci_config);
@@ -206,8 +257,8 @@ pub async fn execute(
         test_run,
         exit_code,
         captured_output_bytes: raw_bytes,
-        emitted_byte_count: raw_bytes, // We fully emitted what we captured
-        was_truncated: aci_result.was_truncated || raw_bytes > slice_len,
+        emitted_byte_count: raw_bytes,
+        was_truncated: aci_result.was_truncated || output_capped,
     })
 }
 

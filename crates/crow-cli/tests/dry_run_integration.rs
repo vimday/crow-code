@@ -48,8 +48,8 @@ mod tests {
     .unwrap();
 }
 
-#[test]
-fn synthetic_create_plan_passes_verification() {
+#[tokio::test]
+async fn synthetic_create_plan_passes_verification() {
     let workspace = TempDir::new().unwrap();
     scaffold_rust_project(workspace.path());
 
@@ -117,6 +117,7 @@ fn synthetic_create_plan_passes_verification() {
         &exec_config,
         &AciConfig::compact(),
     )
+    .await
     .expect("Verifier execution should succeed");
 
     // The existing test should still pass — adding a marker file does not break the build
@@ -127,8 +128,8 @@ fn synthetic_create_plan_passes_verification() {
     );
 }
 
-#[test]
-fn synthetic_modify_plan_hydrates_and_applies() {
+#[tokio::test]
+async fn synthetic_modify_plan_hydrates_and_applies() {
     let workspace = TempDir::new().unwrap();
     scaffold_rust_project(workspace.path());
 

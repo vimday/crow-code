@@ -27,6 +27,7 @@ assert_cmd = "2.2.0"
 predicates = "3.1.4"
 tempfile = "3.27.0"
 async-trait = "0.1"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 crow-brain = { path = "../crow-brain" }
 crow-materialize = { path = "../crow-materialize" }
 crow-patch = { path = "../crow-patch" }

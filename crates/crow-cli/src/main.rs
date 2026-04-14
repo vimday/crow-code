@@ -237,14 +237,45 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                         paths.iter().map(|s| s.as_str().to_string()).collect();
                     messages.push_file_read(&path_strings, file_contents);
                 }
-                crow_patch::AgentAction::RunCommand { command, rationale } => {
-                    println!("    👾 Agent executed RunCommand: `{}`", command);
+                crow_patch::AgentAction::RunCommand {
+                    program,
+                    args,
+                    rationale,
+                } => {
+                    println!("    👾 Agent RunCommand: `{} {}`", program, args.join(" "));
                     println!("       Rationale: {}", rationale);
 
-                    let v_cmd = crow_probe::VerificationCommand::new("bash", vec!["-c", &command]);
+                    // Allowlist: only read-only reconnaissance programs.
+                    const ALLOWED_PROGRAMS: &[&str] = &[
+                        "ls", "cat", "head", "tail", "find", "wc", "rg", "grep", "awk", "sed",
+                        "cargo", "rustc", "python", "python3", "node", "tree", "file", "stat",
+                        "du",
+                    ];
+
+                    // Extract the basename in case the model passes a path
+                    let prog_basename = std::path::Path::new(&program)
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(&program);
+
+                    if !ALLOWED_PROGRAMS.contains(&prog_basename) {
+                        println!("    ⛔ Blocked: `{}` is not in the allowlist", program);
+                        messages.push_user(format!(
+                            "[RUN COMMAND BLOCKED]\n`{}` is not an allowed reconnaissance command.\nAllowed: {}\nPlease use one of these or proceed to submit_plan.",
+                            program,
+                            ALLOWED_PROGRAMS.join(", ")
+                        ));
+                        continue;
+                    }
+
+                    let v_cmd = crow_probe::VerificationCommand {
+                        program: program.clone(),
+                        args: args.clone(),
+                        cwd: None,
+                    };
                     let exec_config = ExecutionConfig {
-                        timeout: std::time::Duration::from_secs(5),
-                        max_output_bytes: 1 * 1024 * 1024, // 1MB bounds for RunCommand
+                        timeout: std::time::Duration::from_secs(10),
+                        max_output_bytes: 512 * 1024, // 512KB hard cap for recon
                     };
 
                     let result = crow_verifier::executor::execute(
@@ -257,13 +288,19 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
                     match result {
                         Ok(res) => {
-                            let content = format!("[RUN COMMAND RESULT]\nCommand: {}\nStdout/Stderr:\n{}\n\nExit Code: {:?}", command, res.test_run.truncated_log, res.exit_code);
+                            let content = format!(
+                                "[RUN COMMAND RESULT]\nCommand: {} {}\nExit Code: {:?}\nOutput:\n{}",
+                                program,
+                                args.join(" "),
+                                res.exit_code,
+                                res.test_run.truncated_log
+                            );
                             messages.push_user(content);
                         }
                         Err(e) => {
                             messages.push_user(format!(
                                 "[RUN COMMAND ERROR]\nFailed to execute `{}`: {:?}",
-                                command, e
+                                program, e
                             ));
                         }
                     }

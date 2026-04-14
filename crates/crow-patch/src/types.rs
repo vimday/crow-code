@@ -142,7 +142,15 @@ pub enum AgentAction {
         rationale: String,
     },
     #[serde(rename = "run_command")]
-    RunCommand { command: String, rationale: String },
+    RunCommand {
+        /// The program to execute. Must be from the allowlist
+        /// (e.g. "ls", "cat", "head", "find", "rg", "grep", "wc",
+        ///  "cargo", "rustc", "python", "node").
+        program: String,
+        /// Arguments to pass to the program.
+        args: Vec<String>,
+        rationale: String,
+    },
     #[serde(rename = "submit_plan")]
     SubmitPlan { plan: IntentPlan },
 }
