@@ -236,82 +236,64 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                         paths.iter().map(|s| s.as_str().to_string()).collect();
                     messages.push_file_read(&path_strings, file_contents);
                 }
-                crow_patch::AgentAction::RunCommand {
-                    program,
-                    args,
-                    rationale,
-                } => {
-                    println!("    👾 Agent RunCommand: `{} {}`", program, args.join(" "));
+                crow_patch::AgentAction::Recon { tool, rationale } => {
+                    println!("    🔍 Agent Recon: {:?}", tool);
                     println!("       Rationale: {}", rationale);
 
-                    // Allowlist: genuinely read-only reconnaissance programs ONLY.
-                    // Programs that *can* mutate (python, node, cargo, awk, sed)
-                    // or have built-in exec/delete semantics (find) are excluded.
-                    const ALLOWED_PROGRAMS: &[&str] = &[
-                        "ls", "cat", "head", "tail", "wc", "rg", "grep", "tree", "file", "stat",
-                        "du",
-                    ];
-
-                    // Extract the basename in case the model passes a path
-                    let prog_basename = std::path::Path::new(&program)
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or(&program);
-
-                    if !ALLOWED_PROGRAMS.contains(&prog_basename) {
-                        println!("    ⛔ Blocked: `{}` is not in the allowlist", program);
-                        messages.push_user(format!(
-                            "[RUN COMMAND BLOCKED]\n`{}` is not an allowed reconnaissance command.\nAllowed: {}\nPlease use one of these or proceed to submit_plan.",
-                            program,
-                            ALLOWED_PROGRAMS.join(", ")
-                        ));
-                        continue;
-                    }
-
-                    // Argument validation: confine all path-like arguments
-                    // inside the frozen workspace. This prevents the model
-                    // from using allowlisted tools to read host files
-                    // (e.g. `cat /etc/passwd`, `find .. -name '*.key'`).
-                    let bad_arg = args.iter().find(|a| {
-                        let trimmed = a.trim();
-                        // Reject absolute paths
-                        if trimmed.starts_with('/') {
-                            return true;
+                    // Translate each ReconAction variant into safe,
+                    // fully-controlled command invocations.
+                    use crow_patch::ReconAction;
+                    let (program, args, description) = match &tool {
+                        ReconAction::ListDir { path } => (
+                            "ls".to_string(),
+                            vec!["-la".to_string(), path.as_str().to_string()],
+                            format!("ls -la {}", path.as_str()),
+                        ),
+                        ReconAction::Search {
+                            pattern,
+                            path,
+                            glob,
+                        } => {
+                            let mut a = vec!["-rn".to_string(), pattern.clone()];
+                            if let Some(p) = path {
+                                a.push(p.as_str().to_string());
+                            } else {
+                                a.push(".".to_string());
+                            }
+                            if let Some(g) = glob {
+                                a.push("-g".to_string());
+                                a.push(g.clone());
+                            }
+                            let desc = format!("rg {}", a.join(" "));
+                            ("rg".to_string(), a, desc)
                         }
-                        // Reject parent traversal as standalone arg or path component
-                        if trimmed == ".."
-                            || trimmed.starts_with("../")
-                            || trimmed.contains("/../")
-                            || trimmed.ends_with("/..")
-                        {
-                            return true;
+                        ReconAction::FileInfo { path } => (
+                            "file".to_string(),
+                            vec![path.as_str().to_string()],
+                            format!("file {}", path.as_str()),
+                        ),
+                        ReconAction::WordCount { path } => (
+                            "wc".to_string(),
+                            vec![path.as_str().to_string()],
+                            format!("wc {}", path.as_str()),
+                        ),
+                        ReconAction::DirTree { path, max_depth } => {
+                            let depth = max_depth.unwrap_or(3).min(10);
+                            (
+                                "tree".to_string(),
+                                vec![
+                                    "-L".to_string(),
+                                    depth.to_string(),
+                                    path.as_str().to_string(),
+                                ],
+                                format!("tree -L {} {}", depth, path.as_str()),
+                            )
                         }
-                        // Reject home directory expansion
-                        if trimmed.starts_with('~') {
-                            return true;
-                        }
-                        // Reject /dev/ references (e.g. /dev/tcp for network)
-                        if trimmed.contains("/dev/") {
-                            return true;
-                        }
-                        false
-                    });
-
-                    if let Some(offending) = bad_arg {
-                        println!(
-                            "    ⛔ Blocked: argument `{}` escapes workspace boundary",
-                            offending
-                        );
-                        messages.push_user(format!(
-                            "[RUN COMMAND BLOCKED]\nArgument `{}` rejected: paths must be relative to the workspace root.\nDo not use absolute paths, `..` traversal, or `~`. All file arguments are relative to the project root.",
-                            offending
-                        ));
-                        continue;
-                    }
+                    };
 
                     let v_cmd = crow_probe::VerificationCommand {
                         program: program.clone(),
-                        args: args.clone(),
+                        args,
                         cwd: None,
                     };
                     let exec_config = ExecutionConfig {
@@ -329,18 +311,23 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
                     match result {
                         Ok(res) => {
-                            let content = format!(
-                                "[RUN COMMAND RESULT]\nCommand: {} {}\nExit Code: {:?}\nOutput:\n{}",
-                                program,
-                                args.join(" "),
-                                res.exit_code,
-                                res.test_run.truncated_log
+                            // Derive a tool name string for the compression heuristic
+                            let tool_name = match &tool {
+                                ReconAction::ListDir { .. } => "list_dir",
+                                ReconAction::Search { .. } => "search",
+                                ReconAction::FileInfo { .. } => "file_info",
+                                ReconAction::WordCount { .. } => "word_count",
+                                ReconAction::DirTree { .. } => "dir_tree",
+                            };
+                            messages.push_recon_result(
+                                tool_name,
+                                &description,
+                                &res.test_run.truncated_log,
                             );
-                            messages.push_user(content);
                         }
                         Err(e) => {
                             messages.push_user(format!(
-                                "[RUN COMMAND ERROR]\nFailed to execute `{}`: {:?}",
+                                "[RECON ERROR]\nFailed to execute `{}`: {:?}",
                                 program, e
                             ));
                         }

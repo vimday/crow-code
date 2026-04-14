@@ -115,7 +115,23 @@ impl IntentCompiler {
             let cleaned_json = extract_json_block(&response);
 
             match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
-                Ok(plan) => return Ok(plan),
+                Ok(action) => {
+                    // Semantic validation: enforce constraints serde can't check.
+                    if let Err(reason) = action.validate() {
+                        conversation.push(ChatMessage::assistant(response.clone()));
+                        conversation.push(ChatMessage::user(format!(
+                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {}\n\nPlease fix and resubmit.",
+                            reason
+                        )));
+                        // Use a synthetic serde error for the error list
+                        errors.push(
+                            serde_json::from_str::<()>(&format!("\"validation: {}\"", reason))
+                                .unwrap_err(),
+                        );
+                        continue;
+                    }
+                    return Ok(action);
+                }
                 Err(e) => {
                     // Self-healing: append the failed attempt and error as
                     // assistant + user messages for the next retry.

@@ -115,7 +115,7 @@ async fn autonomous_loop_direct_submit() {
     let plan = match action {
         AgentAction::SubmitPlan { plan } => plan,
         AgentAction::ReadFiles { .. } => panic!("Expected SubmitPlan, got ReadFiles"),
-        AgentAction::RunCommand { .. } => panic!("Expected SubmitPlan, got RunCommand"),
+        AgentAction::Recon { .. } => panic!("Expected SubmitPlan, got Recon"),
     };
 
     // Step 3: Hydrate against frozen sandbox
@@ -229,8 +229,8 @@ async fn autonomous_loop_read_then_submit() {
                 file_contents.push_str("Please proceed with your task.");
                 messages.push(ChatMessage::user(file_contents));
             }
-            AgentAction::RunCommand { .. } => {
-                panic!("Unexpected RunCommand in scripted test");
+            AgentAction::Recon { .. } => {
+                panic!("Unexpected Recon in scripted test");
             }
             AgentAction::SubmitPlan { plan } => {
                 break plan;

@@ -83,11 +83,62 @@ impl ConversationManager {
             outcome_str, log
         );
 
-        // When the test log ages out, we retain the fact that there was a failure
+        // Extract first error-like line for a richer pruned summary
+        let first_error = log
+            .lines()
+            .find(|l| {
+                let lower = l.to_lowercase();
+                lower.contains("error") || lower.contains("failed") || lower.contains("panicked")
+            })
+            .unwrap_or("(no error line extracted)");
+        let truncated_error = &first_error[..first_error.len().min(200)];
+
         let summary = format!(
-            "[SYSTEM: Previous verification failed with outcome '{}'. Full logs pruned to save budget. Agent was asked to reflect and fix.]",
-            outcome_str
+            "[SYSTEM: Previous verification failed ({}). First error: {}. Full logs pruned.]",
+            outcome_str, truncated_error
         );
+
+        self.conversation.push_back(Memory {
+            message: ChatMessage::user(content),
+            summary: Some(summary),
+        });
+        self.enforce_budget();
+    }
+
+    /// Appends a reconnaissance result to the conversation with domain-aware compression.
+    /// When the full output ages out, a compact semantic summary is preserved.
+    pub fn push_recon_result(&mut self, tool_name: &str, description: &str, output: &str) {
+        let content = format!(
+            "[RECON RESULT]\nTool: {}\nCommand: {}\nOutput:\n{}",
+            tool_name, description, output
+        );
+
+        // Generate a domain-aware summary based on the tool type
+        let line_count = output.lines().count();
+        let summary = match tool_name {
+            "list_dir" => format!(
+                "[SYSTEM: Listed {} entries via `{}`. Full output pruned.]",
+                line_count, description
+            ),
+            "search" => {
+                let match_count = output
+                    .lines()
+                    .filter(|l| !l.is_empty() && !l.starts_with("--"))
+                    .count();
+                format!(
+                    "[SYSTEM: Search found ~{} matches via `{}`. Full output pruned.]",
+                    match_count, description
+                )
+            }
+            "dir_tree" => format!(
+                "[SYSTEM: Tree showed {} lines via `{}`. Full output pruned.]",
+                line_count, description
+            ),
+            _ => format!(
+                "[SYSTEM: Recon `{}` returned {} lines. Full output pruned.]",
+                description, line_count
+            ),
+        };
 
         self.conversation.push_back(Memory {
             message: ChatMessage::user(content),

@@ -130,29 +130,104 @@ pub struct DiffHunk {
     pub insert_block: String,
 }
 
+// ─── Reconnaissance Actions ─────────────────────────────────────────
+
+/// A structured, schema-validated reconnaissance tool action.
+/// Each variant declares exactly what inputs it accepts, eliminating
+/// the argument-escape problem of the old generic `RunCommand`.
+/// All filesystem paths are `WorkspacePath`, which rejects `..` and
+/// absolute paths at the type level.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "tool")]
+pub enum ReconAction {
+    /// List directory contents (like `ls -la`).
+    #[serde(rename = "list_dir")]
+    ListDir {
+        /// Relative path to the directory. Use "." for workspace root.
+        path: WorkspacePath,
+    },
+    /// Search for a pattern across files (like `rg` / `grep`).
+    #[serde(rename = "search")]
+    Search {
+        /// The pattern to search for (literal string or regex).
+        pattern: String,
+        /// Optional: restrict search to a subdirectory.
+        path: Option<WorkspacePath>,
+        /// Optional: glob filter (e.g. "*.rs", "*.toml").
+        glob: Option<String>,
+    },
+    /// Show file metadata (size, type, permissions).
+    #[serde(rename = "file_info")]
+    FileInfo { path: WorkspacePath },
+    /// Count lines, words, and bytes in a file.
+    #[serde(rename = "word_count")]
+    WordCount { path: WorkspacePath },
+    /// Show directory tree structure with a depth limit.
+    #[serde(rename = "dir_tree")]
+    DirTree {
+        /// Relative path to the root of the tree.
+        path: WorkspacePath,
+        /// Maximum depth to display (default: 3, max: 10).
+        max_depth: Option<u32>,
+    },
+}
+
 // ─── Agent Action ───────────────────────────────────────────────────
 
-/// An action the agent can take. Wraps either an intent plan or a read request.
+/// An action the agent can take during the epistemic/crucible loop.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action")]
 pub enum AgentAction {
+    /// Read one or more files from the workspace.
     #[serde(rename = "read_files")]
     ReadFiles {
         paths: Vec<WorkspacePath>,
         rationale: String,
     },
-    #[serde(rename = "run_command")]
-    RunCommand {
-        /// The program to execute. Must be from the read-only allowlist
-        /// (e.g. "ls", "cat", "head", "tail", "rg", "grep",
-        ///  "wc", "tree", "file", "stat", "du").
-        program: String,
-        /// Arguments to pass to the program.
-        args: Vec<String>,
+    /// Execute a structured reconnaissance tool.
+    #[serde(rename = "recon")]
+    Recon {
+        #[serde(flatten)]
+        tool: ReconAction,
         rationale: String,
     },
+    /// Submit a patch plan for hydration, application, and verification.
     #[serde(rename = "submit_plan")]
     SubmitPlan { plan: IntentPlan },
+}
+
+/// Validate semantic constraints that serde cannot enforce.
+impl AgentAction {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            AgentAction::ReadFiles { paths, .. } => {
+                if paths.is_empty() {
+                    return Err("read_files requires at least one path".into());
+                }
+            }
+            AgentAction::Recon { tool, .. } => match tool {
+                ReconAction::Search { pattern, .. } => {
+                    if pattern.trim().is_empty() {
+                        return Err("search pattern must not be empty".into());
+                    }
+                }
+                ReconAction::DirTree {
+                    max_depth: Some(d), ..
+                } => {
+                    if *d > 10 {
+                        return Err(format!("dir_tree max_depth {} exceeds limit of 10", d));
+                    }
+                }
+                _ => {}
+            },
+            AgentAction::SubmitPlan { plan } => {
+                if plan.operations.is_empty() {
+                    return Err("submit_plan requires at least one operation".into());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ─── Edit Operations ────────────────────────────────────────────────
@@ -387,5 +462,107 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    // --- ReconAction & validation coverage ---
+
+    #[test]
+    fn recon_list_dir_roundtrip() {
+        let json = r#"{"action":"recon","tool":"list_dir","path":"src","rationale":"list"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        match &action {
+            AgentAction::Recon {
+                tool: ReconAction::ListDir { path },
+                ..
+            } => assert_eq!(path.as_str(), "src"),
+            _ => panic!("wrong variant: {:?}", action),
+        }
+        assert!(action.validate().is_ok());
+    }
+
+    #[test]
+    fn recon_search_roundtrip() {
+        let json = r#"{"action":"recon","tool":"search","pattern":"fn main","path":"src","glob":"*.rs","rationale":"find mains"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        match &action {
+            AgentAction::Recon {
+                tool:
+                    ReconAction::Search {
+                        pattern,
+                        path,
+                        glob,
+                    },
+                ..
+            } => {
+                assert_eq!(pattern, "fn main");
+                assert_eq!(path.as_ref().unwrap().as_str(), "src");
+                assert_eq!(glob.as_deref(), Some("*.rs"));
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert!(action.validate().is_ok());
+    }
+
+    #[test]
+    fn recon_search_empty_pattern_rejected() {
+        let action = AgentAction::Recon {
+            tool: ReconAction::Search {
+                pattern: "  ".into(),
+                path: None,
+                glob: None,
+            },
+            rationale: "test".into(),
+        };
+        assert!(action.validate().is_err());
+    }
+
+    #[test]
+    fn recon_dir_tree_roundtrip() {
+        let json =
+            r#"{"action":"recon","tool":"dir_tree","path":".","max_depth":5,"rationale":"tree"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        match &action {
+            AgentAction::Recon {
+                tool: ReconAction::DirTree { max_depth, .. },
+                ..
+            } => assert_eq!(*max_depth, Some(5)),
+            _ => panic!("wrong variant"),
+        }
+        assert!(action.validate().is_ok());
+    }
+
+    #[test]
+    fn recon_dir_tree_excessive_depth_rejected() {
+        let action = AgentAction::Recon {
+            tool: ReconAction::DirTree {
+                path: WorkspacePath::new(".").unwrap(),
+                max_depth: Some(99),
+            },
+            rationale: "test".into(),
+        };
+        assert!(action.validate().is_err());
+    }
+
+    #[test]
+    fn validate_empty_read_files_rejected() {
+        let action = AgentAction::ReadFiles {
+            paths: vec![],
+            rationale: "test".into(),
+        };
+        assert!(action.validate().is_err());
+    }
+
+    #[test]
+    fn validate_empty_submit_plan_rejected() {
+        let action = AgentAction::SubmitPlan {
+            plan: IntentPlan {
+                base_snapshot_id: SnapshotId("s".into()),
+                rationale: "empty".into(),
+                is_partial: false,
+                confidence: Confidence::Low,
+                operations: vec![],
+            },
+        };
+        assert!(action.validate().is_err());
     }
 }
