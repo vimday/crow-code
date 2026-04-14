@@ -99,14 +99,18 @@ impl CrowConfig {
                 model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
             ),
             Some(other) => {
-                let url = base_url.ok_or_else(|| anyhow::anyhow!(
-                    "Custom provider '{}' requires an explicitly set LLM_BASE_URL.",
-                    other
-                ))?;
-                let m = model.ok_or_else(|| anyhow::anyhow!(
-                    "Custom provider '{}' requires an explicitly set LLM_MODEL.",
-                    other
-                ))?;
+                let url = base_url.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Custom provider '{}' requires an explicitly set LLM_BASE_URL.",
+                        other
+                    )
+                })?;
+                let m = model.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Custom provider '{}' requires an explicitly set LLM_MODEL.",
+                        other
+                    )
+                })?;
                 (ProviderKind::Custom(other.to_string()), url, m)
             }
             None => {
@@ -209,7 +213,7 @@ mod tests {
         env::remove_var("LLM_PROVIDER");
         env::remove_var("LLM_BASE_URL");
         env::remove_var("LLM_MODEL");
-        
+
         env::set_var("LLM_PROVIDER", "my_custom_provider");
         // No BASE_URL or MODEL set => should fail fast
         let result = CrowConfig::load();
@@ -225,11 +229,11 @@ mod tests {
         assert!(err_msg.contains("requires an explicitly set LLM_MODEL"));
 
         env::set_var("LLM_MODEL", "llama3");
-        // Now it should pass config load (though it may fail missing API key for OpenAICompatible, 
+        // Now it should pass config load (though it may fail missing API key for OpenAICompatible,
         // but custom doesn't require API key by default)
-        
+
         // Ensure no local .crow config throws off test inside mock environment
-        // Since we are running in the main workspace, it might pick up an openai key. 
+        // Since we are running in the main workspace, it might pick up an openai key.
         // Clean up environment variables for isolation in real test suites.
         env::remove_var("LLM_PROVIDER");
         env::remove_var("LLM_BASE_URL");

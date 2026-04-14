@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 crow-evidence = { path = "../crow-evidence" }
 crow-probe = { path = "../crow-probe" }
+tokio = { version = "1.51.1", features = ["process", "time", "rt-multi-thread", "macros"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

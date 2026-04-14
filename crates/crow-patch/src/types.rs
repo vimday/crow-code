@@ -1,5 +1,6 @@
 //! Core data types for the patch contract.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -7,7 +8,7 @@ use std::path::PathBuf;
 
 /// A workspace-relative path. Never an absolute OS path.
 /// Guarantees: no leading `/`, no `..` traversal, UTF-8 clean.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
 pub struct WorkspacePath(String);
 
 // Custom deserializer that validates through new()
@@ -80,11 +81,11 @@ impl std::error::Error for PathError {}
 // ─── Snapshot & Confidence ──────────────────────────────────────────
 
 /// Opaque identifier for a workspace snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct SnapshotId(pub String);
 
 /// Confidence level attached to an intent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Confidence {
     High,
     Medium,
@@ -95,7 +96,7 @@ pub enum Confidence {
 // ─── Preconditions ──────────────────────────────────────────────────
 
 /// State the file *must* be in before a Modify patch can apply.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PreconditionState {
     /// SHA-256 hex digest of the file content at snapshot time.
     pub content_hash: String,
@@ -106,7 +107,7 @@ pub struct PreconditionState {
 /// Lightweight precondition for non-Modify ops.
 /// Every EditOp variant carries one of these so the apply layer can
 /// reject drift before deleting or overwriting user work.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum FilePrecondition {
     /// The path must NOT exist (used by Create to prevent silent overwrites).
     MustNotExist,
@@ -119,7 +120,7 @@ pub enum FilePrecondition {
 // ─── Diff Hunks ─────────────────────────────────────────────────────
 
 /// A single contiguous change region within a file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DiffHunk {
     /// 1-based start line in the original file.
     pub original_start: usize,
@@ -132,7 +133,7 @@ pub struct DiffHunk {
 // ─── Agent Action ───────────────────────────────────────────────────
 
 /// An action the agent can take. Wraps either an intent plan or a read request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action")]
 pub enum AgentAction {
     #[serde(rename = "read_files")]
@@ -140,6 +141,8 @@ pub enum AgentAction {
         paths: Vec<WorkspacePath>,
         rationale: String,
     },
+    #[serde(rename = "run_command")]
+    RunCommand { command: String, rationale: String },
     #[serde(rename = "submit_plan")]
     SubmitPlan { plan: IntentPlan },
 }
@@ -147,7 +150,7 @@ pub enum AgentAction {
 // ─── Edit Operations ────────────────────────────────────────────────
 
 /// Strategy for handling conflicts on rename/create.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ConflictStrategy {
     /// Fail if the target already exists.
     Fail,
@@ -158,7 +161,7 @@ pub enum ConflictStrategy {
 /// A single atomic filesystem mutation.
 /// Every variant carries preconditions so the apply layer can reject
 /// drift before touching user files.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum EditOp {
     Modify {
         path: WorkspacePath,
@@ -191,7 +194,7 @@ pub enum EditOp {
 
 /// The top-level container: a complete set of intended changes anchored
 /// to a specific workspace snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct IntentPlan {
     /// The snapshot this plan was derived from. The materializer MUST
     /// reject application if the current workspace state diverges.

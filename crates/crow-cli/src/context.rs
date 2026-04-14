@@ -19,9 +19,9 @@ pub struct ConversationManager {
 }
 
 impl ConversationManager {
-    pub fn new(sys_msg: ChatMessage) -> Self {
+    pub fn new(sys_msgs: Vec<ChatMessage>) -> Self {
         Self {
-            system_messages: vec![sys_msg],
+            system_messages: sys_msgs,
             conversation: VecDeque::new(),
             // 768 KB default hard cap on context size.
             max_bytes: 768 * 1024,
@@ -103,18 +103,18 @@ impl ConversationManager {
             self.conversation.pop_front();
         }
 
-        // 2. Semantic Pruning: If we exceed byte budget, downgrade oldest un-summarized 
+        // 2. Semantic Pruning: If we exceed byte budget, downgrade oldest un-summarized
         //    user messages to their summaries.
         let mut idx = 0;
         while self.total_bytes() > self.max_bytes && idx < self.conversation.len() {
             let mem = &mut self.conversation[idx];
-            // If it has a summary and it's not ALREADY a summary 
+            // If it has a summary and it's not ALREADY a summary
             // (we distinguish by just replacing the message and removing the summary Option)
             if let Some(summary) = mem.summary.take() {
                 mem.message = ChatMessage::user(summary);
             } else if mem.message.role == ChatRole::Assistant {
                 // If it's an assistant message without a summary, we can just clear it to save space
-                mem.message.content.clear(); 
+                mem.message.content.clear();
             }
             idx += 1;
         }
@@ -144,7 +144,7 @@ impl ConversationManager {
             self.conversation
                 .iter()
                 .filter(|m| !m.message.content.is_empty()) // Drop empty assistant stubs
-                .map(|m| m.message.clone())
+                .map(|m| m.message.clone()),
         );
         out
     }

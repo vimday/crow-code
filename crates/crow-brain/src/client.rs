@@ -100,7 +100,8 @@ impl ReqwestLlmClient {
 #[async_trait]
 impl LlmClient for ReqwestLlmClient {
     async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, BrainError> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{}/chat/completions", base);
 
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
@@ -114,7 +115,19 @@ impl LlmClient for ReqwestLlmClient {
         });
 
         if self.json_mode {
-            body["response_format"] = json!({ "type": "json_object" });
+            let schema = schemars::schema_for!(crow_patch::AgentAction);
+            body["tools"] = json!([{
+                "type": "function",
+                "function": {
+                    "name": "agent_action",
+                    "description": "Perform an action in the repository.",
+                    "parameters": schema
+                }
+            }]);
+            body["tool_choice"] = json!({
+                "type": "function",
+                "function": { "name": "agent_action" }
+            });
         }
 
         let resp = self.client.post(&url).json(&body).send().await?;
@@ -136,12 +149,32 @@ impl LlmClient for ReqwestLlmClient {
                 raw: trimmed[..trimmed.len().min(500)].to_string(),
             })?;
 
-        let content = data["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| {
-                BrainError::MissingField(trimmed[..trimmed.len().min(500)].to_string())
-            })?;
+        let message = &data["choices"][0]["message"];
 
-        Ok(content.to_string())
+        let content = if self.json_mode {
+            if let Some(tool_calls) = message["tool_calls"].as_array() {
+                if let Some(call) = tool_calls.first() {
+                    call["function"]["arguments"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string()
+                } else {
+                    message["content"].as_str().unwrap_or("").to_string()
+                }
+            } else {
+                // Fallback in case the model ignored tool_choice
+                message["content"].as_str().unwrap_or("").to_string()
+            }
+        } else {
+            message["content"].as_str().unwrap_or("").to_string()
+        };
+
+        if content.is_empty() {
+            return Err(BrainError::MissingField(
+                trimmed[..trimmed.len().min(500)].to_string(),
+            ));
+        }
+
+        Ok(content)
     }
 }

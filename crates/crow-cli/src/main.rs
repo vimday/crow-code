@@ -30,7 +30,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-
 // ─── Compile-Only command ───────────────────────────────────────────
 
 async fn run_compile_only(args: &[String]) -> Result<()> {
@@ -107,7 +106,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
     };
-    let sandbox = materialize(&mat_config).context("Failed to materialize frozen sandbox")?;
+    let mat_config_initial = mat_config.clone();
+    let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config_initial))
+        .await
+        .unwrap()
+        .context("Failed to materialize frozen sandbox")?;
     let frozen_root = sandbox.path().to_path_buf();
     println!(
         "    🛡️  Time-Frozen Sandbox established at: {}",
@@ -140,13 +143,15 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     use context::ConversationManager;
     use crow_brain::ChatMessage;
 
-    let mut messages = ConversationManager::new(ChatMessage::system(
-        "You are an autonomous engineering agent executing the given task.",
-    ));
-    messages.push_user(format!(
-        "Context:\n{}\n\nTask:\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-        repo_map.map_text, prompt
-    ));
+    let mut messages = ConversationManager::new(vec![
+        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
+        ChatMessage::system(format!(
+            "Context (Repository Map):\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+            repo_map.map_text
+        )),
+    ]);
+
+    messages.push_user(format!("Task:\n{}", prompt));
 
     // Outer Crucible Loop (max 3 compile-test cycles).
     // Each attempt re-materializes a fresh sandbox so that retries are
@@ -227,9 +232,42 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     file_contents.push_str(
                         "Please proceed with your task, or read more files if necessary.",
                     );
-                    
-                    let path_strings: Vec<String> = paths.iter().map(|s| s.as_str().to_string()).collect();
+
+                    let path_strings: Vec<String> =
+                        paths.iter().map(|s| s.as_str().to_string()).collect();
                     messages.push_file_read(&path_strings, file_contents);
+                }
+                crow_patch::AgentAction::RunCommand { command, rationale } => {
+                    println!("    👾 Agent executed RunCommand: `{}`", command);
+                    println!("       Rationale: {}", rationale);
+
+                    let v_cmd = crow_probe::VerificationCommand::new("bash", vec!["-c", &command]);
+                    let exec_config = ExecutionConfig {
+                        timeout: std::time::Duration::from_secs(5),
+                        max_output_bytes: 1 * 1024 * 1024, // 1MB bounds for RunCommand
+                    };
+
+                    let result = crow_verifier::executor::execute(
+                        &frozen_root,
+                        &v_cmd,
+                        &exec_config,
+                        &AciConfig::compact(),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(res) => {
+                            let content = format!("[RUN COMMAND RESULT]\nCommand: {}\nStdout/Stderr:\n{}\n\nExit Code: {:?}", command, res.test_run.truncated_log, res.exit_code);
+                            messages.push_user(content);
+                        }
+                        Err(e) => {
+                            messages.push_user(format!(
+                                "[RUN COMMAND ERROR]\nFailed to execute `{}`: {:?}",
+                                command, e
+                            ));
+                        }
+                    }
+                    continue; // Re-prompt LLM with the outputs
                 }
                 crow_patch::AgentAction::SubmitPlan { plan } => {
                     println!("    ✅ Agent submitted IntentPlan!");
@@ -243,14 +281,24 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             "\n[5/6] Re-materializing fresh sandbox for attempt {}...",
             crucible_attempt
         );
-        let attempt_sandbox =
-            materialize(&mat_config).context("Failed to re-materialize attempt sandbox")?;
+        let mat_config_clone = mat_config.clone();
+        let attempt_sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config_clone))
+            .await
+            .unwrap()
+            .context("Failed to re-materialize attempt sandbox")?;
         println!(
             "    🛡️  Fresh attempt sandbox at: {}",
             attempt_sandbox.path().display()
         );
 
-        let hydrated_plan = match PlanHydrator::hydrate(&compiled_plan, attempt_sandbox.path()) {
+        let attempt_sandbox_path = attempt_sandbox.path().to_path_buf();
+        let plan_clone = compiled_plan.clone();
+        let hydrated_plan = match tokio::task::spawn_blocking(move || {
+            PlanHydrator::hydrate(&plan_clone, &attempt_sandbox_path)
+        })
+        .await
+        .unwrap()
+        {
             Ok(p) => p,
             Err(e) => {
                 println!("    ❌ Hydration failed: {:?}", e);
@@ -290,6 +338,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             &exec_config,
             &AciConfig::compact(),
         )
+        .await
         .context("Verification execution failed")?;
 
         let outcome = &result.test_run.outcome;
@@ -308,7 +357,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
             messages.push_verifier_result(
                 &format!("{:?}", result.test_run.outcome),
-                &result.test_run.truncated_log
+                &result.test_run.truncated_log,
             );
         }
         drop(attempt_sandbox);

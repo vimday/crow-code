@@ -88,17 +88,11 @@ impl IntentCompiler {
         &self,
         messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
-        let schema_guide = crate::schema::intent_plan_schema();
-
-        // Build the base message sequence:
-        // 1. System: schema + compiler instructions
-        // 2. All caller-provided messages (context, task, prior conversation)
         let mut conversation: Vec<ChatMessage> = Vec::new();
 
-        conversation.push(ChatMessage::system(format!(
-            "You are the Intelligence Compiler. You must output ONLY valid JSON matching the AgentAction schema.\n\n{}",
-            schema_guide
-        )));
+        conversation.push(ChatMessage::system(
+            "You are the Intelligence Compiler. Use the agent_action tool to read files, run commands, or submit patch plans."
+        ));
 
         conversation.extend(messages.iter().cloned());
 
