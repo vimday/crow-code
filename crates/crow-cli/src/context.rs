@@ -18,6 +18,17 @@ pub struct ConversationManager {
     max_history_turns: usize,
 }
 
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut safe_len = max_bytes;
+    while safe_len > 0 && !s.is_char_boundary(safe_len) {
+        safe_len -= 1;
+    }
+    &s[..safe_len]
+}
+
 impl ConversationManager {
     pub fn new(sys_msgs: Vec<ChatMessage>) -> Self {
         Self {
@@ -50,13 +61,9 @@ impl ConversationManager {
     pub fn push_file_read(&mut self, paths: &[String], content: String) {
         let max_read = 150 * 1024; // Limit single read to 150KB
         let final_content = if content.len() > max_read {
-            let mut safe_len = max_read;
-            while safe_len > 0 && !content.is_char_boundary(safe_len) {
-                safe_len -= 1;
-            }
             format!(
                 "{}...\n\n[SYSTEM: File content truncated at 150KB to preserve context budget]",
-                &content[..safe_len]
+                safe_truncate(&content, max_read)
             )
         } else {
             content
@@ -91,7 +98,7 @@ impl ConversationManager {
                 lower.contains("error") || lower.contains("failed") || lower.contains("panicked")
             })
             .unwrap_or("(no error line extracted)");
-        let truncated_error = &first_error[..first_error.len().min(200)];
+        let truncated_error = safe_truncate(first_error, 200);
 
         let summary = format!(
             "[SYSTEM: Previous verification failed ({}). First error: {}. Full logs pruned.]",
@@ -149,14 +156,9 @@ impl ConversationManager {
 
     /// Enforces size limits by aggressively pruning older messages.
     fn enforce_budget(&mut self) {
-        // 1. Hard bound on absolute history length (prevents infinite loop growth)
-        while self.conversation.len() > self.max_history_turns {
-            self.conversation.pop_front();
-        }
-
-        // 2. Semantic Pruning: If we exceed byte budget, downgrade oldest un-summarized
-        //    user messages to their summaries.
-        let mut idx = 0;
+        // 1. Semantic Pruning: If we exceed byte budget, downgrade oldest un-summarized
+        //    user messages to their summaries. We skip index 0 to anchor the original Task.
+        let mut idx = 1;
         while self.total_bytes() > self.max_bytes && idx < self.conversation.len() {
             let mem = &mut self.conversation[idx];
             // If it has a summary and it's not ALREADY a summary
@@ -170,9 +172,16 @@ impl ConversationManager {
             idx += 1;
         }
 
+        // 2. Hard bound on absolute history length (prevents infinite loop growth)
+        // Keep index 0 alive, so we remove from index 1.
+        while self.conversation.len() > self.max_history_turns && self.conversation.len() > 1 {
+            self.conversation.remove(1);
+        }
+
         // 3. Last Resort: If even after collapsing all summaries we are still over budget, hard pop
-        while self.total_bytes() > self.max_bytes && self.conversation.len() > 2 {
-            self.conversation.pop_front();
+        // Keep index 0 alive, so we remove from index 1.
+        while self.total_bytes() > self.max_bytes && self.conversation.len() > 1 {
+            self.conversation.remove(1);
         }
     }
 

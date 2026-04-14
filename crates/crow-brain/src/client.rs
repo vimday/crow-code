@@ -97,6 +97,17 @@ impl ReqwestLlmClient {
     }
 }
 
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut safe_len = max_bytes;
+    while safe_len > 0 && !s.is_char_boundary(safe_len) {
+        safe_len -= 1;
+    }
+    &s[..safe_len]
+}
+
 #[async_trait]
 impl LlmClient for ReqwestLlmClient {
     async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, BrainError> {
@@ -143,10 +154,11 @@ impl LlmClient for ReqwestLlmClient {
         }
 
         let trimmed = raw_text.trim();
+
         let data: serde_json::Value =
             serde_json::from_str(trimmed).map_err(|e| BrainError::ParseError {
                 err: e,
-                raw: trimmed[..trimmed.len().min(500)].to_string(),
+                raw: safe_truncate(trimmed, 500).to_string(),
             })?;
 
         let message = &data["choices"][0]["message"];
@@ -171,7 +183,7 @@ impl LlmClient for ReqwestLlmClient {
 
         if content.is_empty() {
             return Err(BrainError::MissingField(
-                trimmed[..trimmed.len().min(500)].to_string(),
+                safe_truncate(trimmed, 500).to_string(),
             ));
         }
 

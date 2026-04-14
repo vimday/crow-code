@@ -246,36 +246,45 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     let (program, args, description) = match &tool {
                         ReconAction::ListDir { path } => (
                             "ls".to_string(),
-                            vec!["-la".to_string(), path.as_str().to_string()],
-                            format!("ls -la {}", path.as_str()),
+                            vec![
+                                "-la".to_string(),
+                                "--".to_string(),
+                                path.as_str().to_string(),
+                            ],
+                            format!("ls -la -- {}", path.as_str()),
                         ),
                         ReconAction::Search {
                             pattern,
                             path,
                             glob,
                         } => {
-                            let mut a = vec!["-rn".to_string(), pattern.clone()];
+                            let mut a = vec![
+                                "-rn".to_string(),
+                                "-e".to_string(), // Explicitly mark pattern so it's not parsed as flag
+                                pattern.clone(),
+                            ];
+                            if let Some(g) = glob {
+                                a.push("-g".to_string());
+                                a.push(g.clone());
+                            }
+                            a.push("--".to_string()); // Terminate options before path
                             if let Some(p) = path {
                                 a.push(p.as_str().to_string());
                             } else {
                                 a.push(".".to_string());
-                            }
-                            if let Some(g) = glob {
-                                a.push("-g".to_string());
-                                a.push(g.clone());
                             }
                             let desc = format!("rg {}", a.join(" "));
                             ("rg".to_string(), a, desc)
                         }
                         ReconAction::FileInfo { path } => (
                             "file".to_string(),
-                            vec![path.as_str().to_string()],
-                            format!("file {}", path.as_str()),
+                            vec!["--".to_string(), path.as_str().to_string()],
+                            format!("file -- {}", path.as_str()),
                         ),
                         ReconAction::WordCount { path } => (
                             "wc".to_string(),
-                            vec![path.as_str().to_string()],
-                            format!("wc {}", path.as_str()),
+                            vec!["--".to_string(), path.as_str().to_string()],
+                            format!("wc -- {}", path.as_str()),
                         ),
                         ReconAction::DirTree { path, max_depth } => {
                             let depth = max_depth.unwrap_or(3).min(10);
@@ -284,9 +293,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                                 vec![
                                     "-L".to_string(),
                                     depth.to_string(),
+                                    "--".to_string(),
                                     path.as_str().to_string(),
                                 ],
-                                format!("tree -L {} {}", depth, path.as_str()),
+                                format!("tree -L {} -- {}", depth, path.as_str()),
                             )
                         }
                     };
