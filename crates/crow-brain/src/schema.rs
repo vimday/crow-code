@@ -14,6 +14,7 @@ pub fn intent_plan_schema() -> &'static str {
 
 You may choose ONE of the following actions.
 If you need to see the exact code of a file before modifying it, use "read_files".
+If you need to run a read-only command (e.g. grep, ls, cargo check) to understand the codebase, use "run_command".
 If you are ready to apply changes, use "submit_plan".
 
 ACTION TYPE 1: Read Files
@@ -23,7 +24,15 @@ ACTION TYPE 1: Read Files
   "rationale": "I need to see the function body to correctly replace it."
 }
 
-ACTION TYPE 2: Submit Plan
+ACTION TYPE 2: Run Command (reconnaissance only, allowlisted programs)
+{
+  "action": "run_command",
+  "program": "grep",
+  "args": ["-rn", "fn main", "src/"],
+  "rationale": "I need to find all main functions in the project."
+}
+
+ACTION TYPE 3: Submit Plan
 {
   "action": "submit_plan",
   "plan": {
@@ -49,8 +58,8 @@ ACTION TYPE 2: Submit Plan
           "hunks": [
             {
               "original_start": 1,
-              "remove_block": "exact lines to remove\\nas a single string",
-              "insert_block": "replacement lines\\nas a single string"
+              "remove_block": "exact lines to remove\nas a single string",
+              "insert_block": "replacement lines\nas a single string"
             }
           ]
         }
@@ -82,5 +91,6 @@ Rules:
 - Each hunk's original_start is 1-based.
 - `remove_block` and `insert_block` must be single strings using `\n` for line breaks. Do NOT use arrays for lines.
 - IMPORTANT: `remove_block` must NEVER be empty. For insertions, include at least one existing line as anchor context in `remove_block` and repeat that line alongside your new lines in `insert_block`. Example: to insert "new_line" after "line 2", set remove_block="line 2\n" and insert_block="line 2\nnew_line\n".
+- For run_command, `program` must be from the allowlist (ls, cat, head, tail, find, wc, rg, grep, awk, sed, cargo, rustc, python, python3, node, tree, file, stat, du). `args` is a list of argument strings.
 - Output ONLY valid JSON. No markdown, no explanation."#
 }

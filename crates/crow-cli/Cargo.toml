@@ -21,6 +21,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 similar = "2.6"
 anyhow = "1"
+crow-evidence = { version = "0.1.0", path = "../crow-evidence" }
 
 [dev-dependencies]
 assert_cmd = "2.2.0"

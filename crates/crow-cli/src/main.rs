@@ -106,8 +106,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
     };
-    let mat_config_initial = mat_config.clone();
-    let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config_initial))
+    let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config))
         .await
         .unwrap()
         .context("Failed to materialize frozen sandbox")?;
@@ -313,13 +312,20 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             }
         };
 
-        // Re-materialize a fresh sandbox for each crucible attempt.
+        // Re-materialize from the FROZEN baseline, not the live workspace.
+        // This ensures every crucible attempt starts from the same immutable
+        // snapshot, even if the live workspace changes between attempts.
         println!(
-            "\n[5/6] Re-materializing fresh sandbox for attempt {}...",
+            "\n[5/6] Re-materializing fresh sandbox for attempt {} (from frozen baseline)...",
             crucible_attempt
         );
-        let mat_config_clone = mat_config.clone();
-        let attempt_sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config_clone))
+        let attempt_mat_config = MaterializeConfig {
+            source: frozen_root.clone(),
+            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+            allow_hardlinks: true, // safe: cloning from our own frozen snapshot
+        };
+        let attempt_sandbox = tokio::task::spawn_blocking(move || materialize(&attempt_mat_config))
             .await
             .unwrap()
             .context("Failed to re-materialize attempt sandbox")?;
@@ -384,7 +390,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         println!("╚══════════════════════════════════════╝");
         println!("Evidence:\n{}", result.test_run.truncated_log);
 
-        if format!("{:?}", result.test_run.outcome) == "Passed" {
+        if result.test_run.outcome == crow_evidence::TestOutcome::Passed {
             println!(
                 "\n[🎉] Autonomous execution successful on attempt {}!",
                 crucible_attempt
