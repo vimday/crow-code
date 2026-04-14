@@ -150,75 +150,91 @@ pub async fn execute(
 
     let child_id = child.id();
 
-    // Take ownership of the pipes *before* awaiting, so we can
-    // stream-read with a hard byte budget instead of buffering
-    // the entire output in memory via wait_with_output().
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    // Take ownership of the pipes so child stays alive for reaping.
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
 
-    // Stream-bounded capture: reads from both pipes concurrently
-    // into a single buffer, hard-capping at `max_output_bytes`.
+    // Drain both pipes CONCURRENTLY under a shared byte budget.
+    // Using tokio::select! ensures neither pipe can block the other —
+    // whichever has data ready first gets read. This prevents the
+    // deadlock where stderr fills its kernel buffer while we wait
+    // for stdout EOF.
     let budget = exec_config.max_output_bytes;
-    let capture_future = async {
+
+    let drain_result = timeout(exec_config.timeout, async {
         use tokio::io::AsyncReadExt;
 
         let mut buf = Vec::with_capacity(std::cmp::min(budget, 256 * 1024));
         let mut hit_cap = false;
+        let mut stdout_done = stdout_pipe.is_none();
+        let mut stderr_done = stderr_pipe.is_none();
 
-        // Helper: read from a pipe into buf until EOF or budget exhausted.
-        async fn drain(
-            pipe: Option<impl tokio::io::AsyncRead + Unpin>,
-            buf: &mut Vec<u8>,
-            budget: usize,
-            hit_cap: &mut bool,
-        ) {
-            if let Some(mut pipe) = pipe {
-                let mut tmp = [0u8; 8192];
-                loop {
-                    if buf.len() >= budget {
-                        *hit_cap = true;
-                        break;
-                    }
-                    let remaining = budget - buf.len();
-                    let to_read = std::cmp::min(remaining, tmp.len());
-                    match pipe.read(&mut tmp[..to_read]).await {
-                        Ok(0) => break, // EOF
-                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                        Err(_) => break,
-                    }
-                }
+        while !(hit_cap || (stdout_done && stderr_done)) {
+            let remaining = budget.saturating_sub(buf.len());
+            if remaining == 0 {
+                hit_cap = true;
+                break;
+            }
+            let to_read = std::cmp::min(remaining, 8192);
+
+            // Tag each read result so we know which pipe it came from.
+            enum Chunk {
+                Stdout(std::io::Result<Vec<u8>>),
+                Stderr(std::io::Result<Vec<u8>>),
+            }
+
+            let chunk = tokio::select! {
+                // Both branches allocate a small temp buffer and return
+                // the data by value, avoiding cross-borrow issues.
+                v = async {
+                    let pipe = stdout_pipe.as_mut().unwrap();
+                    let mut tmp = vec![0u8; to_read];
+                    pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
+                }, if !stdout_done => Chunk::Stdout(v),
+                v = async {
+                    let pipe = stderr_pipe.as_mut().unwrap();
+                    let mut tmp = vec![0u8; to_read];
+                    pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
+                }, if !stderr_done => Chunk::Stderr(v),
+            };
+
+            match chunk {
+                Chunk::Stdout(Ok(d)) if d.is_empty() => stdout_done = true,
+                Chunk::Stdout(Ok(d)) => buf.extend_from_slice(&d),
+                Chunk::Stdout(Err(_)) => stdout_done = true,
+                Chunk::Stderr(Ok(d)) if d.is_empty() => stderr_done = true,
+                Chunk::Stderr(Ok(d)) => buf.extend_from_slice(&d),
+                Chunk::Stderr(Err(_)) => stderr_done = true,
             }
         }
-
-        // Read stdout first, then stderr into the same buffer.
-        // This keeps ordering deterministic and avoids interleaving.
-        drain(stdout, &mut buf, budget, &mut hit_cap).await;
-        drain(stderr, &mut buf, budget, &mut hit_cap).await;
 
         (buf, hit_cap)
-    };
-
-    // Wrap the capture + wait in the timeout.
-    let (exit_code, unified_vec, output_capped) = match timeout(exec_config.timeout, async {
-        let (buf, hit_cap) = capture_future.await;
-        // After draining pipes, wait for the child to exit.
-        let status = child.wait().await;
-        (status, buf, hit_cap)
     })
-    .await
-    {
-        Ok((Ok(status), buf, hit_cap)) => (status.code(), buf, hit_cap),
-        Ok((Err(e), _buf, _hit_cap)) => {
-            if let Some(id) = child_id {
-                kill_process_tree(id);
+    .await;
+
+    // Determine outcome and ALWAYS reap the child to prevent zombies.
+    // Because pipes were taken before the timeout future, `child` is
+    // still alive here regardless of whether the drain timed out.
+    let (exit_code, unified_vec, output_capped) = match drain_result {
+        Ok((buf, hit_cap)) => {
+            if hit_cap {
+                // Child may be blocked writing to full pipe buffers;
+                // kill it so wait() returns promptly.
+                if let Some(id) = child_id {
+                    kill_process_tree(id);
+                }
             }
-            return Err(VerifierError::SpawnFailed(e));
+            match child.wait().await {
+                Ok(status) => (status.code(), buf, hit_cap),
+                Err(e) => return Err(VerifierError::SpawnFailed(e)),
+            }
         }
         Err(_) => {
-            // Timeout explicitly hit — kill the process tree.
+            // Timeout — kill process group and explicitly reap.
             if let Some(id) = child_id {
                 kill_process_tree(id);
             }
+            let _ = child.wait().await;
             (None, Vec::new(), false)
         }
     };

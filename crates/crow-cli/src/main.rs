@@ -244,11 +244,12 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                     println!("    👾 Agent RunCommand: `{} {}`", program, args.join(" "));
                     println!("       Rationale: {}", rationale);
 
-                    // Allowlist: only read-only reconnaissance programs.
+                    // Allowlist: genuinely read-only reconnaissance programs ONLY.
+                    // Programs that *can* mutate (python, node, cargo, awk, sed)
+                    // are excluded because they run directly against frozen_root.
                     const ALLOWED_PROGRAMS: &[&str] = &[
-                        "ls", "cat", "head", "tail", "find", "wc", "rg", "grep", "awk", "sed",
-                        "cargo", "rustc", "python", "python3", "node", "tree", "file", "stat",
-                        "du",
+                        "ls", "cat", "head", "tail", "find", "wc", "rg", "grep", "tree", "file",
+                        "stat", "du",
                     ];
 
                     // Extract the basename in case the model passes a path

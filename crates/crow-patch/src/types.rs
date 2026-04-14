@@ -143,9 +143,9 @@ pub enum AgentAction {
     },
     #[serde(rename = "run_command")]
     RunCommand {
-        /// The program to execute. Must be from the allowlist
-        /// (e.g. "ls", "cat", "head", "find", "rg", "grep", "wc",
-        ///  "cargo", "rustc", "python", "node").
+        /// The program to execute. Must be from the read-only allowlist
+        /// (e.g. "ls", "cat", "head", "tail", "find", "rg", "grep",
+        ///  "wc", "tree", "file", "stat", "du").
         program: String,
         /// Arguments to pass to the program.
         args: Vec<String>,
