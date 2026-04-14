@@ -88,11 +88,18 @@ impl IntentCompiler {
         &self,
         messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
+        let schema_guide = crate::schema::intent_plan_schema();
         let mut conversation: Vec<ChatMessage> = Vec::new();
 
-        conversation.push(ChatMessage::system(
-            "You are the Intelligence Compiler. Use the agent_action tool to read files, run commands, or submit patch plans."
-        ));
+        // Always inject the schema guide into the system prompt.
+        // - When json_mode=true (native tool calling): the transport sends
+        //   the formal tool schema; this prompt guide is belt-and-suspenders.
+        // - When json_mode=false (plain chat): this is the model's ONLY
+        //   contract for producing valid AgentAction JSON.
+        conversation.push(ChatMessage::system(format!(
+            "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
+            schema_guide
+        )));
 
         conversation.extend(messages.iter().cloned());
 

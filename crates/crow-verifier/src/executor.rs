@@ -27,7 +27,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::process::Command;
-use tokio::time::timeout;
 
 /// Safe environment variables that are allowed to pass through
 /// to the sandbox process. All other variables are cleared.
@@ -159,90 +158,94 @@ pub async fn execute(
     // whichever has data ready first gets read. This prevents the
     // deadlock where stderr fills its kernel buffer while we wait
     // for stdout EOF.
+    //
+    // The timeout is a deadline branch *inside* the select loop,
+    // so partial output captured before the deadline is preserved
+    // and returned to the caller for evidence-based retry.
     let budget = exec_config.max_output_bytes;
+    let deadline = tokio::time::Instant::now() + exec_config.timeout;
 
-    let drain_result = timeout(exec_config.timeout, async {
-        use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncReadExt;
 
-        let mut buf = Vec::with_capacity(std::cmp::min(budget, 256 * 1024));
-        let mut hit_cap = false;
-        let mut stdout_done = stdout_pipe.is_none();
-        let mut stderr_done = stderr_pipe.is_none();
+    let mut buf = Vec::with_capacity(std::cmp::min(budget, 256 * 1024));
+    let mut hit_cap = false;
+    let mut timed_out = false;
+    let mut stdout_done = stdout_pipe.is_none();
+    let mut stderr_done = stderr_pipe.is_none();
 
-        while !(hit_cap || (stdout_done && stderr_done)) {
-            let remaining = budget.saturating_sub(buf.len());
-            if remaining == 0 {
-                hit_cap = true;
-                break;
-            }
-            let to_read = std::cmp::min(remaining, 8192);
+    while !(hit_cap || timed_out || (stdout_done && stderr_done)) {
+        let remaining = budget.saturating_sub(buf.len());
+        if remaining == 0 {
+            hit_cap = true;
+            break;
+        }
+        let to_read = std::cmp::min(remaining, 8192);
 
-            // Tag each read result so we know which pipe it came from.
-            enum Chunk {
-                Stdout(std::io::Result<Vec<u8>>),
-                Stderr(std::io::Result<Vec<u8>>),
-            }
-
-            let chunk = tokio::select! {
-                // Both branches allocate a small temp buffer and return
-                // the data by value, avoiding cross-borrow issues.
-                v = async {
-                    let pipe = stdout_pipe.as_mut().unwrap();
-                    let mut tmp = vec![0u8; to_read];
-                    pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
-                }, if !stdout_done => Chunk::Stdout(v),
-                v = async {
-                    let pipe = stderr_pipe.as_mut().unwrap();
-                    let mut tmp = vec![0u8; to_read];
-                    pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
-                }, if !stderr_done => Chunk::Stderr(v),
-            };
-
-            match chunk {
-                Chunk::Stdout(Ok(d)) if d.is_empty() => stdout_done = true,
-                Chunk::Stdout(Ok(d)) => buf.extend_from_slice(&d),
-                Chunk::Stdout(Err(_)) => stdout_done = true,
-                Chunk::Stderr(Ok(d)) if d.is_empty() => stderr_done = true,
-                Chunk::Stderr(Ok(d)) => buf.extend_from_slice(&d),
-                Chunk::Stderr(Err(_)) => stderr_done = true,
-            }
+        // Tag each read result so we know which pipe it came from.
+        enum Chunk {
+            Stdout(std::io::Result<Vec<u8>>),
+            Stderr(std::io::Result<Vec<u8>>),
+            Deadline,
         }
 
-        (buf, hit_cap)
-    })
-    .await;
+        let chunk = tokio::select! {
+            // Both branches allocate a small temp buffer and return
+            // the data by value, avoiding cross-borrow issues.
+            v = async {
+                let pipe = stdout_pipe.as_mut().unwrap();
+                let mut tmp = vec![0u8; to_read];
+                pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
+            }, if !stdout_done => Chunk::Stdout(v),
+            v = async {
+                let pipe = stderr_pipe.as_mut().unwrap();
+                let mut tmp = vec![0u8; to_read];
+                pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
+            }, if !stderr_done => Chunk::Stderr(v),
+            // Wall-clock deadline — preserves buf with partial output.
+            _ = tokio::time::sleep_until(deadline) => Chunk::Deadline,
+        };
 
-    // Determine outcome and ALWAYS reap the child to prevent zombies.
-    // Because pipes were taken before the timeout future, `child` is
-    // still alive here regardless of whether the drain timed out.
-    let (exit_code, unified_vec, output_capped) = match drain_result {
-        Ok((buf, hit_cap)) => {
-            if hit_cap {
-                // Child may be blocked writing to full pipe buffers;
-                // kill it so wait() returns promptly.
-                if let Some(id) = child_id {
-                    kill_process_tree(id);
-                }
-            }
-            match child.wait().await {
-                Ok(status) => (status.code(), buf, hit_cap),
-                Err(e) => return Err(VerifierError::SpawnFailed(e)),
+        match chunk {
+            Chunk::Stdout(Ok(d)) if d.is_empty() => stdout_done = true,
+            Chunk::Stdout(Ok(d)) => buf.extend_from_slice(&d),
+            Chunk::Stdout(Err(_)) => stdout_done = true,
+            Chunk::Stderr(Ok(d)) if d.is_empty() => stderr_done = true,
+            Chunk::Stderr(Ok(d)) => buf.extend_from_slice(&d),
+            Chunk::Stderr(Err(_)) => stderr_done = true,
+            Chunk::Deadline => {
+                timed_out = true;
             }
         }
-        Err(_) => {
-            // Timeout — kill process group and explicitly reap.
-            if let Some(id) = child_id {
-                kill_process_tree(id);
-            }
-            let _ = child.wait().await;
-            (None, Vec::new(), false)
+    }
+
+    // Drop the pipes so the child gets SIGPIPE if it tries to write more.
+    drop(stdout_pipe);
+    drop(stderr_pipe);
+
+    // Kill the child if we didn't drain to natural completion.
+    if timed_out || hit_cap {
+        if let Some(id) = child_id {
+            kill_process_tree(id);
+        }
+    }
+
+    // ALWAYS reap the child to prevent zombies.
+    let exit_code = if timed_out {
+        // On timeout, force None → TestOutcome::TimedOut regardless
+        // of what the killed process reports.
+        let _ = child.wait().await;
+        None
+    } else {
+        match child.wait().await {
+            Ok(status) => status.code(),
+            Err(e) => return Err(VerifierError::SpawnFailed(e)),
         }
     };
 
     let elapsed = start.elapsed();
-    let raw_bytes = unified_vec.len();
+    let raw_bytes = buf.len();
 
-    let combined_str = String::from_utf8_lossy(&unified_vec).to_string();
+    let combined_str = String::from_utf8_lossy(&buf).to_string();
 
     // ACI truncation on the safely decoded string
     let aci_result = aci::truncate(&combined_str, aci_config);
@@ -274,7 +277,7 @@ pub async fn execute(
         exit_code,
         captured_output_bytes: raw_bytes,
         emitted_byte_count: raw_bytes,
-        was_truncated: aci_result.was_truncated || output_capped,
+        was_truncated: aci_result.was_truncated || hit_cap || timed_out,
     })
 }
 
