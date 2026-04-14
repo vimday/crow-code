@@ -30,12 +30,32 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 }
 
 impl ConversationManager {
-    pub fn new(sys_msgs: Vec<ChatMessage>) -> Self {
+    pub fn new(mut sys_msgs: Vec<ChatMessage>) -> Self {
+        let max_bytes: usize = 768 * 1024; // 768 KB default hard cap on context size.
+        let max_sys_bytes = max_bytes.saturating_sub(64_usize * 1024); // Reserve 64KB for conversation.
+
+        let sys_bytes: usize = sys_msgs.iter().map(|s| s.content.len()).sum();
+        if sys_bytes > max_sys_bytes {
+            // If system context is too large, truncate the largest message (typically the repo map)
+            if let Some(largest) = sys_msgs.iter_mut().max_by_key(|s| s.content.len()) {
+                let orig_len = largest.content.len();
+                // Because there are multiple system messages, we give the largest one whatever
+                // space is left after accounting for the other system messages.
+                let other_bytes = sys_bytes - orig_len;
+                let allowed_len = max_sys_bytes.saturating_sub(other_bytes);
+                
+                let truncated = safe_truncate(&largest.content, allowed_len);
+                largest.content = format!(
+                    "{}...\n\n[SYSTEM: Anchor context truncated (original size {} bytes) to preserve conversation budget]",
+                    truncated, orig_len
+                );
+            }
+        }
+
         Self {
             system_messages: sys_msgs,
             conversation: VecDeque::new(),
-            // 768 KB default hard cap on context size.
-            max_bytes: 768 * 1024,
+            max_bytes,
             max_history_turns: 30, // 30 messages max
         }
     }
@@ -218,5 +238,57 @@ impl ConversationManager {
                 .map(|m| m.message.clone()),
         );
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_manager_truncates_oversized_system_context() {
+        // Create an enormously large system message (approx 1 MB)
+        let large_repo_map = "a".repeat(1024 * 1024);
+        let sys_msgs = vec![
+            ChatMessage::system("You are an agent"),
+            ChatMessage::system(&large_repo_map),
+        ];
+
+        let manager = ConversationManager::new(sys_msgs);
+
+        // Max sys bytes is 768KB - 64KB = 704KB
+        let total_sys_len: usize = manager.system_messages.iter().map(|m| m.content.len()).sum();
+        
+        assert!(
+            total_sys_len <= 704 * 1024 + 1000, // Allowance for formatting overhead
+            "System messages should be strictly truncated to budget bounds. Found: {}",
+            total_sys_len
+        );
+
+        let anchor = &manager.system_messages[1].content;
+        assert!(anchor.contains("[SYSTEM: Anchor context truncated"));
+    }
+
+    #[test]
+    fn enforce_budget_preserves_anchor_when_budget_maxed() {
+        let sys_msgs = vec![ChatMessage::system("Sys")];
+        let mut manager = ConversationManager::new(sys_msgs);
+
+        // Add task anchor (index 0)
+        manager.push_user("TASK: Write a web server");
+
+        // Force a bloat in history
+        let blob = "b".repeat(80 * 1024);
+        for i in 0..15 {
+            manager.push_assistant(format!("Response iteration {}", i));
+            manager.push_file_read(&[format!("file_{}.rs", i)], blob.clone());
+        }
+
+        manager.enforce_budget();
+
+        // History shouldn't be completely wiped. Should retain the task anchor (index 0).
+        let conv = &manager.conversation;
+        assert_eq!(conv[0].message.content, "TASK: Write a web server");
+        assert!(conv.len() > 1, "Should keep at least some condensed history");
     }
 }
