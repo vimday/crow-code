@@ -52,15 +52,21 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
         cfg.llm.model
     );
 
-    let messages = vec![ChatMessage::user(format!(
-        "Context:\n{}\n\nTask:\n{}",
-        repo_map.map_text, prompt
-    ))];
-
     let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
-    match compiler.compile_action(&messages).await {
+    use crate::context::ConversationManager;
+    let mut messages = ConversationManager::new(vec![
+        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
+        ChatMessage::system(format!(
+            "Context (Repository Map):\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
+            repo_map.map_text
+        )),
+    ]);
+
+    messages.push_user(format!("Task:\n{}", prompt));
+
+    match compiler.compile_action(&messages.as_messages()).await {
         Ok(action) => {
             println!("\n[✓] Compilation Successful!");
             println!("--- Parsed AgentAction ---");

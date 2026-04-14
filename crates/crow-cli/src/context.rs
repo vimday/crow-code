@@ -159,7 +159,7 @@ impl ConversationManager {
         // 1. Semantic Pruning: If we exceed byte budget, downgrade oldest un-summarized
         //    user messages to their summaries. We skip index 0 to anchor the original Task.
         let mut idx = 1;
-        while self.total_bytes() > self.max_bytes && idx < self.conversation.len() {
+        while self.check_over_budget() && idx < self.conversation.len() {
             let mem = &mut self.conversation[idx];
             // If it has a summary and it's not ALREADY a summary
             // (we distinguish by just replacing the message and removing the summary Option)
@@ -180,21 +180,32 @@ impl ConversationManager {
 
         // 3. Last Resort: If even after collapsing all summaries we are still over budget, hard pop
         // Keep index 0 alive, so we remove from index 1.
-        while self.total_bytes() > self.max_bytes && self.conversation.len() > 1 {
+        while self.check_over_budget() && self.conversation.len() > 1 {
             self.conversation.remove(1);
         }
     }
 
-    fn total_bytes(&self) -> usize {
+    fn history_bytes(&self) -> usize {
+        self.conversation
+            .iter()
+            .map(|m| m.message.content.len())
+            .sum::<usize>()
+    }
+
+    fn system_bytes(&self) -> usize {
         self.system_messages
             .iter()
             .map(|s| s.content.len())
             .sum::<usize>()
-            + self
-                .conversation
-                .iter()
-                .map(|m| m.message.content.len())
-                .sum::<usize>()
+    }
+
+    fn check_over_budget(&self) -> bool {
+        // We are over budget if total bytes exceeds max_bytes AND the history itself
+        // is taking up a meaningful amount of space (e.g. > 64KB).
+        // This prevents an oversized system message from permanently clamping history
+        // to exactly 1 message and effectively lobotomizing the agent.
+        let total = self.system_bytes() + self.history_bytes();
+        total > self.max_bytes && self.history_bytes() > 64 * 1024
     }
 
     /// Export the bounded context window for the LLM client.
