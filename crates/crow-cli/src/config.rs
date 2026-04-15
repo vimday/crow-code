@@ -172,16 +172,14 @@ impl CrowConfig {
         };
 
         // Clamp map_budget so it can never exceed the conversation manager's
-        // system-message allocation (768KB total - 64KB reserved = 704KB max).
-        // This avoids wasted tree-sitter work generating a map that would just
-        // be truncated at ConversationManager construction time.
-        const MAX_MAP_BUDGET: usize = 704 * 1024;
+        // system-message allocation. This avoids wasted tree-sitter work
+        // generating a map that would just be truncated at init time.
         let map_budget = env::var("CROW_MAP_BUDGET")
             .ok()
             .and_then(|v| v.parse().ok())
             .or(file_ws.map_budget)
             .unwrap_or(500 * 1024)
-            .min(MAX_MAP_BUDGET);
+            .min(crate::budget::MAX_SYSTEM_BYTES);
 
         Ok(Self {
             workspace: workspace_dir,

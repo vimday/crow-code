@@ -1,3 +1,4 @@
+mod budget;
 mod config;
 mod context;
 mod diff;

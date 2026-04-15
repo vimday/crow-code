@@ -31,11 +31,10 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 
 impl ConversationManager {
     pub fn new(mut sys_msgs: Vec<ChatMessage>) -> Self {
-        let max_bytes: usize = 768 * 1024; // 768 KB default hard cap on context size.
-        let max_sys_bytes = max_bytes.saturating_sub(64_usize * 1024); // Reserve 64KB for conversation.
+        use crate::budget::{MAX_CONTEXT_BYTES, MAX_HISTORY_TURNS, MAX_SYSTEM_BYTES};
 
         let sys_bytes: usize = sys_msgs.iter().map(|s| s.content.len()).sum();
-        if sys_bytes > max_sys_bytes {
+        if sys_bytes > MAX_SYSTEM_BYTES {
             // If system context is too large, truncate the largest message (typically the repo map)
             if let Some(largest) = sys_msgs.iter_mut().max_by_key(|s| s.content.len()) {
                 let orig_len = largest.content.len();
@@ -44,12 +43,12 @@ impl ConversationManager {
                 let other_bytes = sys_bytes - orig_len;
 
                 // Pre-compute the suffix so we can subtract its length from the content budget.
-                // This prevents the formatted result from overshooting max_sys_bytes.
+                // This prevents the formatted result from overshooting MAX_SYSTEM_BYTES.
                 let suffix = format!(
                     "...\n\n[SYSTEM: Anchor context truncated (original size {} bytes) to preserve conversation budget]",
                     orig_len
                 );
-                let content_budget = max_sys_bytes
+                let content_budget = MAX_SYSTEM_BYTES
                     .saturating_sub(other_bytes)
                     .saturating_sub(suffix.len());
 
@@ -61,8 +60,8 @@ impl ConversationManager {
         Self {
             system_messages: sys_msgs,
             conversation: VecDeque::new(),
-            max_bytes,
-            max_history_turns: 30, // 30 messages max
+            max_bytes: MAX_CONTEXT_BYTES,
+            max_history_turns: MAX_HISTORY_TURNS,
         }
     }
 
@@ -227,11 +226,11 @@ impl ConversationManager {
 
     fn check_over_budget(&self) -> bool {
         // We are over budget if total bytes exceeds max_bytes AND the history itself
-        // is taking up a meaningful amount of space (e.g. > 64KB).
+        // is taking up a meaningful amount of space (> MIN_HISTORY_RESERVE).
         // This prevents an oversized system message from permanently clamping history
         // to exactly 1 message and effectively lobotomizing the agent.
         let total = self.system_bytes() + self.history_bytes();
-        total > self.max_bytes && self.history_bytes() > 64 * 1024
+        total > self.max_bytes && self.history_bytes() > crate::budget::MIN_HISTORY_RESERVE
     }
 
     /// Export the bounded context window for the LLM client.
@@ -264,7 +263,6 @@ mod tests {
 
         // Max sys bytes is 768KB - 64KB = 704KB.
         // The suffix is now pre-budgeted, so the total must be strictly within bounds.
-        let max_sys_bytes = 704 * 1024;
         let total_sys_len: usize = manager
             .system_messages
             .iter()
@@ -272,10 +270,10 @@ mod tests {
             .sum();
 
         assert!(
-            total_sys_len <= max_sys_bytes,
+            total_sys_len <= crate::budget::MAX_SYSTEM_BYTES,
             "System messages must fit within budget. Found: {} bytes, limit: {} bytes",
             total_sys_len,
-            max_sys_bytes
+            crate::budget::MAX_SYSTEM_BYTES
         );
 
         let anchor = &manager.system_messages[1].content;
