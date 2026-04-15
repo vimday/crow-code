@@ -42,13 +42,19 @@ impl ConversationManager {
                 // Because there are multiple system messages, we give the largest one whatever
                 // space is left after accounting for the other system messages.
                 let other_bytes = sys_bytes - orig_len;
-                let allowed_len = max_sys_bytes.saturating_sub(other_bytes);
 
-                let truncated = safe_truncate(&largest.content, allowed_len);
-                largest.content = format!(
-                    "{}...\n\n[SYSTEM: Anchor context truncated (original size {} bytes) to preserve conversation budget]",
-                    truncated, orig_len
+                // Pre-compute the suffix so we can subtract its length from the content budget.
+                // This prevents the formatted result from overshooting max_sys_bytes.
+                let suffix = format!(
+                    "...\n\n[SYSTEM: Anchor context truncated (original size {} bytes) to preserve conversation budget]",
+                    orig_len
                 );
+                let content_budget = max_sys_bytes
+                    .saturating_sub(other_bytes)
+                    .saturating_sub(suffix.len());
+
+                let truncated = safe_truncate(&largest.content, content_budget);
+                largest.content = format!("{}{}", truncated, suffix);
             }
         }
 
@@ -256,7 +262,9 @@ mod tests {
 
         let manager = ConversationManager::new(sys_msgs);
 
-        // Max sys bytes is 768KB - 64KB = 704KB
+        // Max sys bytes is 768KB - 64KB = 704KB.
+        // The suffix is now pre-budgeted, so the total must be strictly within bounds.
+        let max_sys_bytes = 704 * 1024;
         let total_sys_len: usize = manager
             .system_messages
             .iter()
@@ -264,9 +272,10 @@ mod tests {
             .sum();
 
         assert!(
-            total_sys_len <= 704 * 1024 + 1000, // Allowance for formatting overhead
-            "System messages should be strictly truncated to budget bounds. Found: {}",
-            total_sys_len
+            total_sys_len <= max_sys_bytes,
+            "System messages must fit within budget. Found: {} bytes, limit: {} bytes",
+            total_sys_len,
+            max_sys_bytes
         );
 
         let anchor = &manager.system_messages[1].content;
