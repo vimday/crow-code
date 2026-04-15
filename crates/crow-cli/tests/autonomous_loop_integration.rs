@@ -143,6 +143,7 @@ async fn autonomous_loop_direct_submit() {
         &verify_cmd,
         &exec_config,
         &AciConfig::compact(),
+        None,
     )
     .await
     .expect("Verifier should succeed");

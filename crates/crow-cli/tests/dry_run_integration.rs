@@ -116,6 +116,7 @@ async fn synthetic_create_plan_passes_verification() {
         &verify_cmd,
         &exec_config,
         &AciConfig::compact(),
+        None,
     )
     .await
     .expect("Verifier execution should succeed");

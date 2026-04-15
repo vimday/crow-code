@@ -322,6 +322,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                         &v_cmd,
                         &exec_config,
                         &AciConfig::compact(),
+                        None, // Recon: ephemeral, no cache reuse needed
                     )
                     .await;
 
@@ -425,6 +426,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             &candidate.command,
             &exec_config,
             &AciConfig::compact(),
+            Some(&frozen_root), // Stable cache key: reuse build artifacts across crucible retries
         )
         .await
         .context("Verification execution failed")?;

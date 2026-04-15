@@ -43,7 +43,7 @@ impl ConversationManager {
                 // space is left after accounting for the other system messages.
                 let other_bytes = sys_bytes - orig_len;
                 let allowed_len = max_sys_bytes.saturating_sub(other_bytes);
-                
+
                 let truncated = safe_truncate(&largest.content, allowed_len);
                 largest.content = format!(
                     "{}...\n\n[SYSTEM: Anchor context truncated (original size {} bytes) to preserve conversation budget]",
@@ -257,8 +257,12 @@ mod tests {
         let manager = ConversationManager::new(sys_msgs);
 
         // Max sys bytes is 768KB - 64KB = 704KB
-        let total_sys_len: usize = manager.system_messages.iter().map(|m| m.content.len()).sum();
-        
+        let total_sys_len: usize = manager
+            .system_messages
+            .iter()
+            .map(|m| m.content.len())
+            .sum();
+
         assert!(
             total_sys_len <= 704 * 1024 + 1000, // Allowance for formatting overhead
             "System messages should be strictly truncated to budget bounds. Found: {}",
@@ -289,6 +293,9 @@ mod tests {
         // History shouldn't be completely wiped. Should retain the task anchor (index 0).
         let conv = &manager.conversation;
         assert_eq!(conv[0].message.content, "TASK: Write a web server");
-        assert!(conv.len() > 1, "Should keep at least some condensed history");
+        assert!(
+            conv.len() > 1,
+            "Should keep at least some condensed history"
+        );
     }
 }

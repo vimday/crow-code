@@ -61,11 +61,18 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 /// Execute a verification command async inside an isolated workspace context.
+///
+/// `cache_root` optionally specifies a stable path to derive the build cache
+/// directory from. When multiple sandbox attempts share the same frozen baseline,
+/// passing the frozen root here ensures `CARGO_TARGET_DIR` is reused across
+/// retries, avoiding full rebuilds. When `None`, the `sandbox_root` is used
+/// (suitable for one-shot runs and tests).
 pub async fn execute(
     sandbox_root: &Path,
     command: &VerificationCommand,
     exec_config: &ExecutionConfig,
     aci_config: &AciConfig,
+    cache_root: Option<&Path>,
 ) -> Result<VerificationResult, VerifierError> {
     // Validate inputs
     if !sandbox_root.is_dir() {
@@ -123,12 +130,14 @@ pub async fn execute(
         }
     }
 
-    // Isolate build output per sandbox to avoid Cargo file-lock
-    // contention once multiple verification sandboxes run concurrently.
+    // Isolate build output to avoid Cargo file-lock contention.
+    // When `cache_root` is provided (e.g. the frozen baseline), the hash
+    // is stable across crucible retries so incremental builds are reused.
+    let hash_source = cache_root.unwrap_or(sandbox_root);
     let mut hasher = DefaultHasher::new();
-    sandbox_root.hash(&mut hasher);
-    let sandbox_hash = format!("{:016x}", hasher.finish());
-    let isolated_target = std::env::temp_dir().join(format!("crow_target_{}", sandbox_hash));
+    hash_source.hash(&mut hasher);
+    let cache_hash = format!("{:016x}", hasher.finish());
+    let isolated_target = std::env::temp_dir().join(format!("crow_target_{}", cache_hash));
     let _ = std::fs::create_dir_all(&isolated_target);
     cmd.env("CARGO_TARGET_DIR", &isolated_target);
 
@@ -333,7 +342,7 @@ mod tests {
         let exec = ExecutionConfig::default_config();
         let aci = AciConfig::default_config();
 
-        let result = execute(&sandbox, &cmd, &exec, &aci).await.unwrap();
+        let result = execute(&sandbox, &cmd, &exec, &aci, None).await.unwrap();
 
         assert_eq!(result.test_run.outcome, TestOutcome::Passed);
         assert_eq!(result.exit_code, Some(0));
@@ -348,7 +357,7 @@ mod tests {
         let exec = ExecutionConfig::default_config();
         let aci = AciConfig::default_config();
 
-        let result = execute(&sandbox, &cmd, &exec, &aci).await.unwrap();
+        let result = execute(&sandbox, &cmd, &exec, &aci, None).await.unwrap();
 
         assert_eq!(result.test_run.outcome, TestOutcome::Failed);
         assert_ne!(result.exit_code, Some(0));
@@ -365,7 +374,7 @@ mod tests {
         };
         let aci = AciConfig::default_config();
 
-        let result = execute(&sandbox, &cmd, &exec, &aci).await.unwrap();
+        let result = execute(&sandbox, &cmd, &exec, &aci, None).await.unwrap();
 
         assert_eq!(result.test_run.outcome, TestOutcome::TimedOut);
         assert_eq!(result.exit_code, None);

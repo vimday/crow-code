@@ -76,6 +76,7 @@ pub async fn run_god_pipeline() -> Result<()> {
         &candidate.command,
         &exec_config,
         &AciConfig::compact(),
+        None,
     )
     .await
     .context("Verification execution failed")?;
