@@ -26,6 +26,7 @@ struct LlmConfigFile {
     connect_timeout: Option<u64>,
     request_timeout: Option<u64>,
     json_mode: Option<bool>,
+    prompt_caching: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -161,23 +162,13 @@ impl CrowConfig {
             .unwrap_or(300);
 
         // Prompt caching (Anthropic-style cache_control markers).
-        // Only auto-enable when the provider is explicitly Anthropic — the
-        // structured content block format is NOT part of the generic OpenAI
-        // /chat/completions contract, so custom providers must opt in.
-        let prompt_caching = match env::var("CROW_PROMPT_CACHE") {
-            Ok(v) => matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"),
-            Err(_) => {
-                // Heuristic: provider name contains "anthropic" or base_url
-                // points to the Anthropic API.
-                match &provider_kind {
-                    ProviderKind::Custom(name) => {
-                        name.to_lowercase().contains("anthropic")
-                            || final_base_url.to_lowercase().contains("anthropic")
-                    }
-                    ProviderKind::OpenAICompatible => false,
-                }
-            }
-        };
+        // This must be explicitly enabled, as injecting structured content blocks
+        // is NOT supported by standard OpenAI-compatible endpoints.
+        let prompt_caching = env::var("CROW_PROMPT_CACHE")
+            .ok()
+            .map(|v| matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"))
+            .or(file_llm.prompt_caching)
+            .unwrap_or(false);
 
         let llm = LlmProviderConfig {
             provider_kind,
