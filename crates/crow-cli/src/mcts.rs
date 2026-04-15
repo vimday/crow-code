@@ -15,7 +15,6 @@ use crow_brain::ChatMessage;
 use crow_evidence::TestOutcome;
 use crow_materialize::{materialize, MaterializeConfig, SandboxHandle};
 use crow_patch::IntentPlan;
-use crow_verifier::types::{AciConfig, ExecutionConfig};
 use std::path::Path;
 
 // ─── Configuration ──────────────────────────────────────────────────
@@ -103,6 +102,7 @@ pub struct BranchOutcome {
 /// Returns the first passing branch, or all branch outcomes if none pass.
 pub async fn explore_round(
     config: &MctsConfig,
+    compiler: &crow_brain::IntentCompiler,
     messages: &[ChatMessage],
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
@@ -115,13 +115,16 @@ pub async fn explore_round(
     // Launch N branches concurrently.
     for branch_id in 0..config.branch_factor {
         // Each branch gets its own cloned context.
-        let _msgs = messages.to_vec();
+        let msgs = messages.to_vec();
         let frozen = frozen_root.to_path_buf();
         let mat_cfg = mat_config.clone();
         let cmd = verify_command.clone();
-        let _temperature = config.temperature;
+        let comp = compiler.clone();
+        let temperature = config.temperature;
 
-        join_set.spawn(async move { run_branch(branch_id, &frozen, &mat_cfg, &cmd).await });
+        join_set.spawn(async move {
+            run_branch(branch_id, &comp, &msgs, temperature, &frozen, &mat_cfg, &cmd).await
+        });
     }
 
     // Collect results as they complete.
@@ -141,6 +144,9 @@ pub async fn explore_round(
 /// Execute a single MCTS branch: materialize → compile → hydrate → apply → verify.
 async fn run_branch(
     branch_id: usize,
+    compiler: &crow_brain::IntentCompiler,
+    messages: &[ChatMessage],
+    temperature: f64,
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
@@ -173,19 +179,95 @@ async fn run_branch(
         }
     };
 
-    // NOTE: In the full implementation, steps 2-5 would be:
-    //   2. LLM generate with temperature (compiler.compile_action_with_temp)
-    //   3. Hydrate the plan against the sandbox
-    //   4. Apply the plan to the sandbox
-    //   5. Run preflight + verification
-    //
-    // For now, this is the structural skeleton. The actual LLM call integration
-    // requires threading the compiler (which holds `Box<dyn LlmClient>` — not
-    // Send across spawn boundaries without `Arc`). This will be wired up when
-    // the compiler is refactored to use `Arc<dyn LlmClient>` in a follow-up.
+    // Step 2: Compile action with temperature
+    let action = match compiler.compile_action_with_temperature(messages, temperature).await {
+        Ok(a) => a,
+        Err(e) => {
+            return BranchOutcome {
+                branch_id,
+                plan: empty_plan(),
+                sandbox,
+                passed: false,
+                log: format!("LLM generation failed: {:?}", e),
+            };
+        }
+    };
 
-    // Placeholder: run verification on the unmodified sandbox to validate the pipeline.
-    let exec_config = ExecutionConfig {
+    let plan = match action {
+        crow_patch::AgentAction::SubmitPlan { plan } => plan,
+        res => {
+            return BranchOutcome {
+                branch_id,
+                plan: empty_plan(),
+                sandbox,
+                passed: false,
+                log: format!("MCTS branch produced ReconAction instead of SubmitPlan: {:?}", res),
+            };
+        }
+    };
+
+    // Step 3: Hydrate plan
+    let sandbox_path = sandbox.path().to_path_buf();
+    let plan_clone = plan.clone();
+    let hydrated_plan = match tokio::task::spawn_blocking(move || {
+        crow_workspace::PlanHydrator::hydrate(&plan_clone, &sandbox_path)
+    })
+    .await
+    .unwrap()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return BranchOutcome {
+                branch_id,
+                plan,
+                sandbox,
+                passed: false,
+                log: format!("Hydration failed: {:?}", e),
+            };
+        }
+    };
+
+    // Step 4: Apply plan
+    {
+        let plan_for_apply = hydrated_plan.clone();
+        let sandbox_view = sandbox.non_owning_view();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            crow_workspace::applier::apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
+        })
+        .await
+        .unwrap()
+        {
+            return BranchOutcome {
+                branch_id,
+                plan: hydrated_plan,
+                sandbox,
+                passed: false,
+                log: format!("Sandbox patch injection failed: {:?}", e),
+            };
+        }
+    }
+
+    // Step 5: Preflight cargo check
+    let preflight_result = crow_verifier::preflight::cargo_check_preflight(
+        sandbox.path(),
+        Some(frozen_root),
+        std::time::Duration::from_secs(30),
+    )
+    .await;
+
+    if let crow_verifier::preflight::PreflightResult::Errors(diags) = preflight_result {
+        let summary = crow_verifier::preflight::format_diagnostics(&diags);
+        return BranchOutcome {
+            branch_id,
+            plan: hydrated_plan,
+            sandbox,
+            passed: false,
+            log: format!("Preflight compile failed:\n{}", summary),
+        };
+    }
+
+    // Step 6: Full Verification
+    let exec_config = crow_verifier::ExecutionConfig {
         timeout: std::time::Duration::from_secs(60),
         max_output_bytes: 5 * 1024 * 1024,
     };
@@ -194,7 +276,7 @@ async fn run_branch(
         sandbox.path(),
         verify_command,
         &exec_config,
-        &AciConfig::compact(),
+        &crow_verifier::types::AciConfig::compact(),
         Some(frozen_root),
     )
     .await;
@@ -202,14 +284,14 @@ async fn run_branch(
     match result {
         Ok(r) => BranchOutcome {
             branch_id,
-            plan: empty_plan(),
+            plan: hydrated_plan,
             sandbox,
             passed: r.test_run.outcome == TestOutcome::Passed,
             log: r.test_run.truncated_log,
         },
         Err(e) => BranchOutcome {
             branch_id,
-            plan: empty_plan(),
+            plan: hydrated_plan,
             sandbox,
             passed: false,
             log: format!("Verification error: {:?}", e),

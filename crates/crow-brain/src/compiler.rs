@@ -73,13 +73,14 @@ pub trait LlmClient: Send + Sync {
 
 /// The Intelligence Compiler.
 /// Translates natural language directives into strictly validated IntentPlans.
+#[derive(Clone)]
 pub struct IntentCompiler {
-    client: Box<dyn LlmClient>,
+    client: std::sync::Arc<dyn LlmClient>,
     max_retries: usize,
 }
 
 impl IntentCompiler {
-    pub fn new(client: Box<dyn LlmClient>) -> Self {
+    pub fn new(client: std::sync::Arc<dyn LlmClient>) -> Self {
         Self {
             client,
             max_retries: 3,
@@ -145,6 +146,66 @@ impl IntentCompiler {
                 Err(e) => {
                     // Self-healing: append the failed attempt and error as
                     // assistant + user messages for the next retry.
+                    conversation.push(ChatMessage::assistant(response.clone()));
+                    conversation.push(ChatMessage::user(format!(
+                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
+                        e
+                    )));
+                    errors.push(e);
+                }
+            }
+        }
+
+        Err(CompilerError::MaxRetriesExceeded(errors))
+    }
+
+    /// Compiles a task directive into a strict `AgentAction`, using the specified temperature
+    /// for diversity (used primarily by the MCTS parallel crucible).
+    pub async fn compile_action_with_temperature(
+        &self,
+        messages: &[ChatMessage],
+        temperature: f64,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
+        let schema_guide = crate::schema::intent_plan_schema();
+        let mut conversation: Vec<ChatMessage> = Vec::new();
+
+        // Always inject the schema guide into the system prompt.
+        conversation.push(ChatMessage::system(format!(
+            "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
+            schema_guide
+        )));
+
+        conversation.extend(messages.iter().cloned());
+
+        let mut errors = Vec::new();
+
+        for _attempt in 0..=self.max_retries {
+            let response = self
+                .client
+                .generate_with_temperature(&conversation, temperature)
+                .await
+                .map_err(CompilerError::PromptFailed)?;
+
+            let cleaned_json = extract_json_block(&response);
+
+            match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
+                Ok(action) => {
+                    // Semantic validation: enforce constraints serde can't check.
+                    if let Err(reason) = action.validate() {
+                        conversation.push(ChatMessage::assistant(response.clone()));
+                        conversation.push(ChatMessage::user(format!(
+                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {}\n\nPlease fix and resubmit.",
+                            reason
+                        )));
+                        errors.push(
+                            serde_json::from_str::<()>(&format!("\"validation: {}\"", reason))
+                                .unwrap_err(),
+                        );
+                        continue;
+                    }
+                    return Ok(action);
+                }
+                Err(e) => {
                     conversation.push(ChatMessage::assistant(response.clone()));
                     conversation.push(ChatMessage::user(format!(
                         "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
@@ -228,7 +289,7 @@ mod tests {
 
     #[tokio::test]
     async fn compiler_succeeds_first_try() {
-        let client = Box::new(MockLlm {
+        let client = std::sync::Arc::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![valid_plan_json()])),
         });
         let compiler = IntentCompiler::new(client);
@@ -248,7 +309,7 @@ mod tests {
     async fn compiler_self_heals_on_serde_error() {
         let bad_json = r#"{ "invalid": yes }"#.into();
 
-        let client = Box::new(MockLlm {
+        let client = std::sync::Arc::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![bad_json, valid_plan_json()])),
         });
         let compiler = IntentCompiler::new(client);
@@ -268,7 +329,7 @@ mod tests {
     async fn compiler_fails_after_max_retries() {
         let bad_json = String::from(r#"{ "still_bad": true }"#);
 
-        let client = Box::new(MockLlm {
+        let client = std::sync::Arc::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![
                 bad_json.clone(),
                 bad_json.clone(),
@@ -319,7 +380,7 @@ mod tests {
     async fn compiler_handles_provider_leading_newline_in_content() {
         let with_newline = format!("\n{}", valid_plan_json());
 
-        let client = Box::new(MockLlm {
+        let client = std::sync::Arc::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![with_newline])),
         });
         let compiler = IntentCompiler::new(client);
@@ -339,7 +400,7 @@ mod tests {
     async fn compiler_handles_markdown_wrapped_response() {
         let wrapped = format!("```json\n{}\n```", valid_plan_json());
 
-        let client = Box::new(MockLlm {
+        let client = std::sync::Arc::new(MockLlm {
             responses: Arc::new(Mutex::new(vec![wrapped])),
         });
         let compiler = IntentCompiler::new(client);

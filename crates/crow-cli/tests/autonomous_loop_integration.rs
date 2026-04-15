@@ -91,7 +91,7 @@ async fn autonomous_loop_direct_submit() {
         }
     }"#;
 
-    let client = Box::new(ScriptedLlm {
+    let client = std::sync::Arc::new(ScriptedLlm {
         responses: Arc::new(Mutex::new(vec![submit_json.into()])),
     });
     let compiler = IntentCompiler::new(client);
@@ -187,7 +187,7 @@ async fn autonomous_loop_read_then_submit() {
         }
     }"#;
 
-    let client = Box::new(ScriptedLlm {
+    let client = std::sync::Arc::new(ScriptedLlm {
         responses: Arc::new(Mutex::new(vec![read_files_json.into(), submit_json.into()])),
     });
     let compiler = IntentCompiler::new(client);

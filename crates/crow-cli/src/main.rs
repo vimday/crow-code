@@ -55,7 +55,7 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
         cfg.llm.model
     );
 
-    let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
+    let client = std::sync::Arc::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
     use crate::context::ConversationManager;
@@ -142,7 +142,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         cfg.llm.model
     );
 
-    let client = Box::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
+    let client = std::sync::Arc::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
     let compiler = IntentCompiler::new(client);
 
     // Structured message history with proper role separation.
