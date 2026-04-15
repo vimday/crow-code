@@ -160,6 +160,17 @@ impl CrowConfig {
             .or(file_llm.request_timeout)
             .unwrap_or(300);
 
+        // Prompt caching (Anthropic-style cache_control markers).
+        // Default: enabled for non-OpenAI providers (they benefit most).
+        let prompt_caching = match env::var("CROW_PROMPT_CACHE") {
+            Ok(v) => matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"),
+            Err(_) => {
+                // Auto-enable for Anthropic-compatible endpoints
+                // (base_url contains "anthropic" or provider is custom)
+                !matches!(provider_kind, ProviderKind::OpenAICompatible)
+            }
+        };
+
         let llm = LlmProviderConfig {
             provider_kind,
             api_key,
@@ -169,6 +180,7 @@ impl CrowConfig {
             connect_timeout_secs,
             request_timeout_secs,
             json_mode,
+            prompt_caching,
         };
 
         // Clamp map_budget so it can never exceed the conversation manager's

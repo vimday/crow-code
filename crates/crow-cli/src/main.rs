@@ -3,6 +3,8 @@ mod config;
 mod context;
 mod diff;
 mod legacy_god;
+#[allow(dead_code)]
+mod mcts;
 
 use anyhow::{Context, Result};
 use config::CrowConfig;
@@ -424,6 +426,45 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         // Diff baseline: frozen_root (pre-patch) → attempt_sandbox (post-patch).
         println!("\n--- Sandbox Diff (frozen baseline → patched) ---");
         diff::render_plan_diff(&frozen_root, attempt_sandbox.path(), &hydrated_plan);
+
+        // ── Preflight micro-loop: catch compile errors in seconds ────
+        // Run `cargo check --message-format=json` before the expensive full
+        // test suite. If compile errors are found, feed them back to the LLM
+        // for a quick fix attempt without consuming a crucible retry.
+        {
+            use crow_verifier::preflight::{self, PreflightResult};
+
+            println!("\n    🔍 Running preflight compile check...");
+            let preflight_result = preflight::cargo_check_preflight(
+                attempt_sandbox.path(),
+                Some(&frozen_root),
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+
+            match preflight_result {
+                PreflightResult::Clean => {
+                    println!("    ✅ Preflight: code compiles cleanly");
+                }
+                PreflightResult::Errors(diags) => {
+                    let summary = preflight::format_diagnostics(&diags);
+                    println!("    ❌ Preflight: {} compile error(s) found", diags.len());
+                    println!("{}", summary);
+                    // Feed diagnostics back to the LLM — this does NOT consume
+                    // a crucible attempt, it's a free micro-correction.
+                    messages.push_user(format!(
+                        "[PREFLIGHT COMPILE CHECK FAILED]\n{}\n\nPlease fix these compile errors and resubmit your plan.",
+                        summary
+                    ));
+                    drop(attempt_sandbox);
+                    continue;
+                }
+                PreflightResult::Skipped(reason) => {
+                    println!("    ⚠️  Preflight skipped: {}", reason);
+                    // Fall through to full verification
+                }
+            }
+        }
 
         println!(
             "\n[6/6] Verifying Sandbox with '{}'...",

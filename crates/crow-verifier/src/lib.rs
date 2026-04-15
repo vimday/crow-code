@@ -23,6 +23,7 @@
 
 pub mod aci;
 pub mod executor;
+pub mod preflight;
 pub mod types;
 
 pub use types::*;

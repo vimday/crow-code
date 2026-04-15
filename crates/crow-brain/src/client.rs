@@ -40,6 +40,11 @@ pub struct LlmProviderConfig {
     pub request_timeout_secs: u64,
     /// Whether this provider requires and supports strict JSON object output.
     pub json_mode: bool,
+    /// Whether to inject Anthropic-style `cache_control` markers on system
+    /// messages for prompt caching. When enabled, system messages use
+    /// structured content blocks and the last system message gets a
+    /// `cache_control: {"type": "ephemeral"}` breakpoint.
+    pub prompt_caching: bool,
 }
 
 impl Default for LlmProviderConfig {
@@ -53,6 +58,7 @@ impl Default for LlmProviderConfig {
             connect_timeout_secs: 10,
             request_timeout_secs: 300,
             json_mode: false,
+            prompt_caching: false,
         }
     }
 }
@@ -65,6 +71,7 @@ pub struct ReqwestLlmClient {
     base_url: String,
     max_tokens: u32,
     json_mode: bool,
+    prompt_caching: bool,
 }
 
 impl ReqwestLlmClient {
@@ -93,6 +100,7 @@ impl ReqwestLlmClient {
             base_url: config.base_url.clone(),
             max_tokens: config.max_tokens,
             json_mode: config.json_mode,
+            prompt_caching: config.prompt_caching,
         })
     }
 }
@@ -108,22 +116,61 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     &s[..safe_len]
 }
 
-#[async_trait]
-impl LlmClient for ReqwestLlmClient {
-    async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, BrainError> {
+impl ReqwestLlmClient {
+    /// Core generation logic shared by both `generate()` and `generate_with_temperature()`.
+    async fn _generate(
+        &self,
+        messages: &[crate::ChatMessage],
+        temperature: Option<f64>,
+    ) -> Result<String, BrainError> {
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{}/chat/completions", base);
 
-        let api_messages: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|m| json!({ "role": m.role, "content": m.content }))
-            .collect();
+        // Build message array, optionally with Anthropic-style prompt caching.
+        // When prompt_caching is enabled, system messages use structured content
+        // blocks and the LAST system message gets a cache_control breakpoint.
+        let api_messages: Vec<serde_json::Value> = if self.prompt_caching {
+            // Find the index of the last system message for the cache breakpoint.
+            let last_sys_idx = messages
+                .iter()
+                .rposition(|m| m.role == crate::ChatRole::System);
+
+            messages
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    if m.role == crate::ChatRole::System {
+                        // System messages use structured content blocks.
+                        let mut block = json!({
+                            "type": "text",
+                            "text": m.content
+                        });
+                        // Only the last system message gets the cache breakpoint.
+                        if Some(i) == last_sys_idx {
+                            block["cache_control"] = json!({"type": "ephemeral"});
+                        }
+                        json!({ "role": "system", "content": [block] })
+                    } else {
+                        json!({ "role": m.role, "content": m.content })
+                    }
+                })
+                .collect()
+        } else {
+            messages
+                .iter()
+                .map(|m| json!({ "role": m.role, "content": m.content }))
+                .collect()
+        };
 
         let mut body = json!({
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": api_messages
         });
+
+        if let Some(temp) = temperature {
+            body["temperature"] = json!(temp);
+        }
 
         if self.json_mode {
             let schema = schemars::schema_for!(crow_patch::AgentAction);
@@ -188,5 +235,20 @@ impl LlmClient for ReqwestLlmClient {
         }
 
         Ok(content)
+    }
+}
+
+#[async_trait]
+impl LlmClient for ReqwestLlmClient {
+    async fn generate(&self, messages: &[crate::ChatMessage]) -> Result<String, BrainError> {
+        self._generate(messages, None).await
+    }
+
+    async fn generate_with_temperature(
+        &self,
+        messages: &[crate::ChatMessage],
+        temperature: f64,
+    ) -> Result<String, BrainError> {
+        self._generate(messages, Some(temperature)).await
     }
 }

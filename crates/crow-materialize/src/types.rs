@@ -139,6 +139,18 @@ impl SandboxHandle {
             owned: false,
         }
     }
+
+    /// Create a non-owning handle from raw components.
+    ///
+    /// The returned handle will **not** clean up the directory on drop.
+    /// Use this for test/placeholder handles where no real sandbox exists.
+    pub fn non_owning_view_from(path: std::path::PathBuf, driver: MaterializationDriver) -> Self {
+        Self {
+            path,
+            driver,
+            owned: false,
+        }
+    }
 }
 
 impl Drop for SandboxHandle {

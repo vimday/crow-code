@@ -59,6 +59,16 @@ pub trait LlmClient: Send + Sync {
     /// Send a structured conversation to the LLM and get the assistant's response.
     async fn generate(&self, messages: &[ChatMessage])
         -> Result<String, crate::client::BrainError>;
+
+    /// Generate with an explicit temperature for diversity (used by MCTS).
+    /// Default implementation ignores temperature and delegates to `generate()`.
+    async fn generate_with_temperature(
+        &self,
+        messages: &[ChatMessage],
+        _temperature: f64,
+    ) -> Result<String, crate::client::BrainError> {
+        self.generate(messages).await
+    }
 }
 
 /// The Intelligence Compiler.

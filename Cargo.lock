@@ -252,6 +252,7 @@ dependencies = [
  "crow-evidence",
  "crow-probe",
  "libc",
+ "serde_json",
  "tokio",
 ]
 
