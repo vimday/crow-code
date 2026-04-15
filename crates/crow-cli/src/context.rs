@@ -191,8 +191,12 @@ impl ConversationManager {
             if let Some(summary) = mem.summary.take() {
                 mem.message = ChatMessage::user(summary);
             } else if mem.message.role == ChatRole::Assistant {
-                // If it's an assistant message without a summary, we can just clear it to save space
-                mem.message.content.clear();
+                // Replace with a minimal placeholder to maintain strict
+                // User→Assistant→User role alternation required by some
+                // providers (e.g. Anthropic). Never clear() — that causes
+                // the filter in as_messages() to drop the message entirely,
+                // creating consecutive User messages and triggering HTTP 400.
+                mem.message.content = "[pruned]".into();
             }
             idx += 1;
         }
@@ -234,14 +238,12 @@ impl ConversationManager {
     }
 
     /// Export the bounded context window for the LLM client.
+    ///
+    /// All messages are emitted — even pruned ones with placeholder content —
+    /// to preserve the strict role alternation that providers like Anthropic require.
     pub fn as_messages(&self) -> Vec<ChatMessage> {
         let mut out = self.system_messages.clone();
-        out.extend(
-            self.conversation
-                .iter()
-                .filter(|m| !m.message.content.is_empty()) // Drop empty assistant stubs
-                .map(|m| m.message.clone()),
-        );
+        out.extend(self.conversation.iter().map(|m| m.message.clone()));
         out
     }
 }

@@ -133,6 +133,7 @@ pub async fn execute(
     // Isolate build output to avoid Cargo file-lock contention.
     // When `cache_root` is provided (e.g. the frozen baseline), the hash
     // is stable across crucible retries so incremental builds are reused.
+    let is_ephemeral = cache_root.is_none();
     let hash_source = cache_root.unwrap_or(sandbox_root);
     let mut hasher = DefaultHasher::new();
     hash_source.hash(&mut hasher);
@@ -280,6 +281,14 @@ pub async fn execute(
         duration: elapsed,
         truncated_log: aci_result.output,
     };
+
+    // Best-effort cleanup of ephemeral target dirs.
+    // When cache_root was None (one-shot recon, tests), the target dir is
+    // keyed to a throwaway sandbox path and will never be reused. Clean it
+    // up to prevent /tmp accumulation over many runs.
+    if is_ephemeral {
+        let _ = std::fs::remove_dir_all(&isolated_target);
+    }
 
     Ok(VerificationResult {
         test_run,

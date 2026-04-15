@@ -128,7 +128,8 @@ fn verify_file_precondition(
 /// Key properties:
 /// - Hunks are applied from bottom to top, so lower-file edits never
 ///   perturb the anchoring of earlier hunks.
-/// - Matching is elastic with respect to trailing whitespace only.
+/// - Matching is elastic with respect to leading and trailing whitespace,
+///   tolerating common LLM indentation hallucinations during anchoring.
 /// - Each hunk may drift within a small bounded window (±10 lines).
 /// - Multiple matches inside that window are treated as ambiguous and
 ///   rejected rather than guessed.
@@ -234,7 +235,11 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                 let probe_idx = probe_idx as usize;
                 let mut is_match = true;
                 for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
-                    if lines[probe_idx + i].trim_end() != expected_line.trim_end() {
+                    // Use trim() (both ends) so that LLM indentation
+                    // hallucinations (e.g. 4-space vs 8-space) don't waste
+                    // a retry. The probe only needs semantic identity;
+                    // the actual insert uses the LLM's exact output.
+                    if lines[probe_idx + i].trim() != expected_line.trim() {
                         is_match = false;
                         break;
                     }

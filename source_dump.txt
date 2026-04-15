@@ -1441,8 +1441,12 @@ impl ConversationManager {
             if let Some(summary) = mem.summary.take() {
                 mem.message = ChatMessage::user(summary);
             } else if mem.message.role == ChatRole::Assistant {
-                // If it's an assistant message without a summary, we can just clear it to save space
-                mem.message.content.clear();
+                // Replace with a minimal placeholder to maintain strict
+                // User→Assistant→User role alternation required by some
+                // providers (e.g. Anthropic). Never clear() — that causes
+                // the filter in as_messages() to drop the message entirely,
+                // creating consecutive User messages and triggering HTTP 400.
+                mem.message.content = "[pruned]".into();
             }
             idx += 1;
         }
@@ -1484,14 +1488,12 @@ impl ConversationManager {
     }
 
     /// Export the bounded context window for the LLM client.
+    ///
+    /// All messages are emitted — even pruned ones with placeholder content —
+    /// to preserve the strict role alternation that providers like Anthropic require.
     pub fn as_messages(&self) -> Vec<ChatMessage> {
         let mut out = self.system_messages.clone();
-        out.extend(
-            self.conversation
-                .iter()
-                .filter(|m| !m.message.content.is_empty()) // Drop empty assistant stubs
-                .map(|m| m.message.clone()),
-        );
+        out.extend(self.conversation.iter().map(|m| m.message.clone()));
         out
     }
 }
@@ -1522,7 +1524,8 @@ mod tests {
         assert!(
             total_sys_len <= crate::budget::MAX_SYSTEM_BYTES,
             "System messages must fit within budget. Found: {} bytes, limit: {} bytes",
-            total_sys_len, crate::budget::MAX_SYSTEM_BYTES
+            total_sys_len,
+            crate::budget::MAX_SYSTEM_BYTES
         );
 
         let anchor = &manager.system_messages[1].content;
@@ -2138,8 +2141,20 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&hydrated_plan)?
         );
 
-        apply_plan_to_sandbox(&hydrated_plan, &attempt_sandbox)
+        {
+            let plan_for_apply = hydrated_plan.clone();
+            // Create a non-owning view that won't clean up on drop.
+            // The original attempt_sandbox retains ownership.
+            let sandbox_view = attempt_sandbox.non_owning_view();
+            // Offload synchronous filesystem I/O (fs::write, fs::rename, etc.)
+            // to a blocking thread to avoid starving the tokio reactor.
+            tokio::task::spawn_blocking(move || {
+                apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
+            })
+            .await
+            .unwrap()
             .context("Failed to apply plan to sandbox")?;
+        }
         println!("    💉 Sandbox injection successful!");
 
         // Diff baseline: frozen_root (pre-patch) → attempt_sandbox (post-patch).
@@ -4358,6 +4373,19 @@ impl SandboxHandle {
         self.owned = false;
         self.path.clone()
     }
+
+    /// Create a non-owning view of this sandbox for use in blocking tasks.
+    ///
+    /// The returned handle points to the same path and reports the same driver,
+    /// but will **not** clean up the directory on drop. The original handle
+    /// retains ownership and cleanup responsibility.
+    pub fn non_owning_view(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            driver: self.driver,
+            owned: false,
+        }
+    }
 }
 
 impl Drop for SandboxHandle {
@@ -6033,6 +6061,7 @@ pub async fn execute(
     // Isolate build output to avoid Cargo file-lock contention.
     // When `cache_root` is provided (e.g. the frozen baseline), the hash
     // is stable across crucible retries so incremental builds are reused.
+    let is_ephemeral = cache_root.is_none();
     let hash_source = cache_root.unwrap_or(sandbox_root);
     let mut hasher = DefaultHasher::new();
     hash_source.hash(&mut hasher);
@@ -6180,6 +6209,14 @@ pub async fn execute(
         duration: elapsed,
         truncated_log: aci_result.output,
     };
+
+    // Best-effort cleanup of ephemeral target dirs.
+    // When cache_root was None (one-shot recon, tests), the target dir is
+    // keyed to a throwaway sandbox path and will never be reused. Clean it
+    // up to prevent /tmp accumulation over many runs.
+    if is_ephemeral {
+        let _ = std::fs::remove_dir_all(&isolated_target);
+    }
 
     Ok(VerificationResult {
         test_run,
@@ -6636,7 +6673,8 @@ fn verify_file_precondition(
 /// Key properties:
 /// - Hunks are applied from bottom to top, so lower-file edits never
 ///   perturb the anchoring of earlier hunks.
-/// - Matching is elastic with respect to trailing whitespace only.
+/// - Matching is elastic with respect to leading and trailing whitespace,
+///   tolerating common LLM indentation hallucinations during anchoring.
 /// - Each hunk may drift within a small bounded window (±10 lines).
 /// - Multiple matches inside that window are treated as ambiguous and
 ///   rejected rather than guessed.
@@ -6742,7 +6780,11 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                 let probe_idx = probe_idx as usize;
                 let mut is_match = true;
                 for (i, expected_line) in hunk.remove_lines.iter().enumerate() {
-                    if lines[probe_idx + i].trim_end() != expected_line.trim_end() {
+                    // Use trim() (both ends) so that LLM indentation
+                    // hallucinations (e.g. 4-space vs 8-space) don't waste
+                    // a retry. The probe only needs semantic identity;
+                    // the actual insert uses the LLM's exact output.
+                    if lines[probe_idx + i].trim() != expected_line.trim() {
                         is_match = false;
                         break;
                     }

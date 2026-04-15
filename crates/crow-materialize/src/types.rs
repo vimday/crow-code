@@ -126,6 +126,19 @@ impl SandboxHandle {
         self.owned = false;
         self.path.clone()
     }
+
+    /// Create a non-owning view of this sandbox for use in blocking tasks.
+    ///
+    /// The returned handle points to the same path and reports the same driver,
+    /// but will **not** clean up the directory on drop. The original handle
+    /// retains ownership and cleanup responsibility.
+    pub fn non_owning_view(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            driver: self.driver,
+            owned: false,
+        }
+    }
 }
 
 impl Drop for SandboxHandle {

@@ -405,8 +405,20 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&hydrated_plan)?
         );
 
-        apply_plan_to_sandbox(&hydrated_plan, &attempt_sandbox)
+        {
+            let plan_for_apply = hydrated_plan.clone();
+            // Create a non-owning view that won't clean up on drop.
+            // The original attempt_sandbox retains ownership.
+            let sandbox_view = attempt_sandbox.non_owning_view();
+            // Offload synchronous filesystem I/O (fs::write, fs::rename, etc.)
+            // to a blocking thread to avoid starving the tokio reactor.
+            tokio::task::spawn_blocking(move || {
+                apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
+            })
+            .await
+            .unwrap()
             .context("Failed to apply plan to sandbox")?;
+        }
         println!("    💉 Sandbox injection successful!");
 
         // Diff baseline: frozen_root (pre-patch) → attempt_sandbox (post-patch).
