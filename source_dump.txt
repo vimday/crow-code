@@ -1235,13 +1235,21 @@ impl CrowConfig {
             .unwrap_or(300);
 
         // Prompt caching (Anthropic-style cache_control markers).
-        // Default: enabled for non-OpenAI providers (they benefit most).
+        // Only auto-enable when the provider is explicitly Anthropic — the
+        // structured content block format is NOT part of the generic OpenAI
+        // /chat/completions contract, so custom providers must opt in.
         let prompt_caching = match env::var("CROW_PROMPT_CACHE") {
             Ok(v) => matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"),
             Err(_) => {
-                // Auto-enable for Anthropic-compatible endpoints
-                // (base_url contains "anthropic" or provider is custom)
-                !matches!(provider_kind, ProviderKind::OpenAICompatible)
+                // Heuristic: provider name contains "anthropic" or base_url
+                // points to the Anthropic API.
+                match &provider_kind {
+                    ProviderKind::Custom(name) => {
+                        name.to_lowercase().contains("anthropic")
+                            || final_base_url.to_lowercase().contains("anthropic")
+                    }
+                    ProviderKind::OpenAICompatible => false,
+                }
             }
         };
 
@@ -2457,9 +2465,7 @@ pub async fn explore_round(
         let cmd = verify_command.clone();
         let _temperature = config.temperature;
 
-        join_set.spawn(async move {
-            run_branch(branch_id, &frozen, &mat_cfg, &cmd).await
-        });
+        join_set.spawn(async move { run_branch(branch_id, &frozen, &mat_cfg, &cmd).await });
     }
 
     // Collect results as they complete.
@@ -2568,20 +2574,33 @@ pub fn select_winner(outcomes: &mut Vec<BranchOutcome>) -> Option<BranchOutcome>
 pub fn merge_diagnostics(outcomes: &[BranchOutcome]) -> String {
     let mut out = String::from("[MCTS: All branches failed]\n\n");
     for o in outcomes {
+        let snippet = safe_truncate(&o.log, 500);
+        let ellipsis = if snippet.len() < o.log.len() {
+            "..."
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            "Branch {}: {}\n",
-            o.branch_id,
-            if o.log.len() > 500 {
-                format!("{}...", &o.log[..500])
-            } else {
-                o.log.clone()
-            }
+            "Branch {}: {}{}\n",
+            o.branch_id, snippet, ellipsis
         ));
     }
     out
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
+
+/// UTF-8 safe truncation — never panics on multibyte boundaries.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 fn empty_plan() -> IntentPlan {
     IntentPlan {
@@ -6929,14 +6948,13 @@ pub async fn cargo_check_preflight(
     };
     let aci_config = AciConfig::default_config();
 
-    let result = match executor::execute(sandbox_root, &cmd, &exec_config, &aci_config, cache_root)
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return PreflightResult::Skipped(format!("cargo check failed to execute: {}", e));
-        }
-    };
+    let result =
+        match executor::execute(sandbox_root, &cmd, &exec_config, &aci_config, cache_root).await {
+            Ok(r) => r,
+            Err(e) => {
+                return PreflightResult::Skipped(format!("cargo check failed to execute: {}", e));
+            }
+        };
 
     // Exit code 0 → compilation succeeded
     if result.exit_code == Some(0) {
@@ -6959,13 +6977,19 @@ pub async fn cargo_check_preflight(
 }
 
 /// Format a list of compile diagnostics into a concise string for the LLM.
+///
+/// Caps output at 10 errors to avoid flooding the context window.
 pub fn format_diagnostics(diags: &[CompileDiagnostic]) -> String {
+    const MAX_SHOWN: usize = 10;
     let mut out = String::from("[COMPILE ERRORS — fix these before resubmitting]\n\n");
-    for (i, d) in diags.iter().enumerate() {
+    for (i, d) in diags.iter().take(MAX_SHOWN).enumerate() {
         out.push_str(&format!("  {}. {}\n", i + 1, d));
     }
-    if diags.len() > 10 {
-        out.push_str(&format!("\n  ... and {} more errors\n", diags.len() - 10));
+    if diags.len() > MAX_SHOWN {
+        out.push_str(&format!(
+            "\n  ... and {} more error(s) not shown\n",
+            diags.len() - MAX_SHOWN
+        ));
     }
     out
 }
@@ -7004,11 +7028,17 @@ fn parse_cargo_diagnostics(output: &str) -> Vec<CompileDiagnostic> {
             continue;
         }
 
-        let message = msg["message"].as_str().unwrap_or("unknown error").to_string();
+        let message = msg["message"]
+            .as_str()
+            .unwrap_or("unknown error")
+            .to_string();
 
         // Extract the primary span location
         let (file, line_num, column) = if let Some(spans) = msg["spans"].as_array() {
-            if let Some(primary) = spans.iter().find(|s| s["is_primary"].as_bool() == Some(true)) {
+            if let Some(primary) = spans
+                .iter()
+                .find(|s| s["is_primary"].as_bool() == Some(true))
+            {
                 (
                     primary["file_name"].as_str().map(String::from),
                     primary["line_start"].as_u64().map(|n| n as usize),
@@ -7082,6 +7112,27 @@ mod tests {
         let formatted = format_diagnostics(&diags);
         assert!(formatted.contains("COMPILE ERRORS"));
         assert!(formatted.contains("src/main.rs:3: error: expected `;`"));
+    }
+
+    #[test]
+    fn format_diagnostics_caps_at_ten() {
+        let diags: Vec<CompileDiagnostic> = (0..15)
+            .map(|i| CompileDiagnostic {
+                level: "error".into(),
+                message: format!("error number {}", i),
+                file: Some("src/lib.rs".into()),
+                line: Some(i + 1),
+                column: None,
+            })
+            .collect();
+        let formatted = format_diagnostics(&diags);
+        // Should show errors 1-10
+        assert!(formatted.contains("1. src/lib.rs:1: error: error number 0"));
+        assert!(formatted.contains("10. src/lib.rs:10: error: error number 9"));
+        // Should NOT show error 11
+        assert!(!formatted.contains("11."));
+        // Should show remainder
+        assert!(formatted.contains("5 more error(s) not shown"));
     }
 }
 

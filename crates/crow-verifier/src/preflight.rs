@@ -98,13 +98,19 @@ pub async fn cargo_check_preflight(
 }
 
 /// Format a list of compile diagnostics into a concise string for the LLM.
+///
+/// Caps output at 10 errors to avoid flooding the context window.
 pub fn format_diagnostics(diags: &[CompileDiagnostic]) -> String {
+    const MAX_SHOWN: usize = 10;
     let mut out = String::from("[COMPILE ERRORS — fix these before resubmitting]\n\n");
-    for (i, d) in diags.iter().enumerate() {
+    for (i, d) in diags.iter().take(MAX_SHOWN).enumerate() {
         out.push_str(&format!("  {}. {}\n", i + 1, d));
     }
-    if diags.len() > 10 {
-        out.push_str(&format!("\n  ... and {} more errors\n", diags.len() - 10));
+    if diags.len() > MAX_SHOWN {
+        out.push_str(&format!(
+            "\n  ... and {} more error(s) not shown\n",
+            diags.len() - MAX_SHOWN
+        ));
     }
     out
 }
@@ -227,5 +233,26 @@ mod tests {
         let formatted = format_diagnostics(&diags);
         assert!(formatted.contains("COMPILE ERRORS"));
         assert!(formatted.contains("src/main.rs:3: error: expected `;`"));
+    }
+
+    #[test]
+    fn format_diagnostics_caps_at_ten() {
+        let diags: Vec<CompileDiagnostic> = (0..15)
+            .map(|i| CompileDiagnostic {
+                level: "error".into(),
+                message: format!("error number {}", i),
+                file: Some("src/lib.rs".into()),
+                line: Some(i + 1),
+                column: None,
+            })
+            .collect();
+        let formatted = format_diagnostics(&diags);
+        // Should show errors 1-10
+        assert!(formatted.contains("1. src/lib.rs:1: error: error number 0"));
+        assert!(formatted.contains("10. src/lib.rs:10: error: error number 9"));
+        // Should NOT show error 11
+        assert!(!formatted.contains("11."));
+        // Should show remainder
+        assert!(formatted.contains("5 more error(s) not shown"));
     }
 }

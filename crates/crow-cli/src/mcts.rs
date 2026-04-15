@@ -230,20 +230,33 @@ pub fn select_winner(outcomes: &mut Vec<BranchOutcome>) -> Option<BranchOutcome>
 pub fn merge_diagnostics(outcomes: &[BranchOutcome]) -> String {
     let mut out = String::from("[MCTS: All branches failed]\n\n");
     for o in outcomes {
+        let snippet = safe_truncate(&o.log, 500);
+        let ellipsis = if snippet.len() < o.log.len() {
+            "..."
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            "Branch {}: {}\n",
-            o.branch_id,
-            if o.log.len() > 500 {
-                format!("{}...", &o.log[..500])
-            } else {
-                o.log.clone()
-            }
+            "Branch {}: {}{}\n",
+            o.branch_id, snippet, ellipsis
         ));
     }
     out
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
+
+/// UTF-8 safe truncation — never panics on multibyte boundaries.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 fn empty_plan() -> IntentPlan {
     IntentPlan {

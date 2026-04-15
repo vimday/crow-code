@@ -161,13 +161,21 @@ impl CrowConfig {
             .unwrap_or(300);
 
         // Prompt caching (Anthropic-style cache_control markers).
-        // Default: enabled for non-OpenAI providers (they benefit most).
+        // Only auto-enable when the provider is explicitly Anthropic — the
+        // structured content block format is NOT part of the generic OpenAI
+        // /chat/completions contract, so custom providers must opt in.
         let prompt_caching = match env::var("CROW_PROMPT_CACHE") {
             Ok(v) => matches!(v.to_lowercase().as_str(), "on" | "true" | "1" | "yes"),
             Err(_) => {
-                // Auto-enable for Anthropic-compatible endpoints
-                // (base_url contains "anthropic" or provider is custom)
-                !matches!(provider_kind, ProviderKind::OpenAICompatible)
+                // Heuristic: provider name contains "anthropic" or base_url
+                // points to the Anthropic API.
+                match &provider_kind {
+                    ProviderKind::Custom(name) => {
+                        name.to_lowercase().contains("anthropic")
+                            || final_base_url.to_lowercase().contains("anthropic")
+                    }
+                    ProviderKind::OpenAICompatible => false,
+                }
             }
         };
 
