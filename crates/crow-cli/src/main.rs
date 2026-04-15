@@ -164,6 +164,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     // Outer Crucible Loop (max 3 compile-test cycles).
     // Each attempt re-materializes a fresh sandbox so that retries are
     // independent timelines against the same frozen baseline.
+    let mcts_config = crate::mcts::MctsConfig::from_env();
+    if !mcts_config.is_serial() {
+        return run_mcts_crucible(&mcts_config, &profile, &candidate, &frozen_root, &compiler, &mut messages).await;
+    }
+
     for crucible_attempt in 1..=3 {
         println!("\n▶️ Crucible Attempt {}/3", crucible_attempt);
 
@@ -508,5 +513,153 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     }
 
     drop(sandbox);
+    Ok(())
+}
+
+async fn run_mcts_crucible(
+    mcts_config: &crate::mcts::MctsConfig,
+    profile: &crow_probe::types::ProjectProfile,
+    candidate: &crow_probe::types::VerificationCandidate,
+    frozen_root: &std::path::Path,
+    compiler: &IntentCompiler,
+    messages: &mut context::ConversationManager,
+) -> Result<()> {
+    // 1. Initial Epistemic Loop (Serial Recon)
+    println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
+    const MAX_EPISTEMIC_STEPS: usize = 7;
+    const MAX_FILE_BYTES: u64 = 50 * 1024;
+    const MAX_FILE_LINES: usize = 500;
+    
+    let mut epistemic_step = 0;
+    loop {
+        epistemic_step += 1;
+        if epistemic_step > MAX_EPISTEMIC_STEPS {
+            anyhow::bail!("Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.", MAX_EPISTEMIC_STEPS);
+        }
+
+        println!("  🧠 Epistemic Step {}/{} — Modulating Cognitive Request...", epistemic_step, MAX_EPISTEMIC_STEPS);
+        let action = compiler.compile_action(&messages.as_messages()).await
+            .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
+
+        if let crow_patch::AgentAction::SubmitPlan { plan } = action {
+            println!("    ✅ Agent is ready to submit plan. Branching to MCTS...");
+            // Notice: we do NOT push the AgentAction to messages here.
+            // MCTS will generate its own plans with temperature using the pre-recon context.
+            break;
+        }
+
+        messages.push_assistant(serde_json::to_string(&action)?);
+
+        match action {
+            crow_patch::AgentAction::ReadFiles { paths, rationale } => {
+                println!("    📖 Agent requests to read files: {:?}", paths);
+                println!("       Rationale: {}", rationale);
+
+                let mut file_contents = String::from("[READ FILES RESULT]\n");
+                for path in &paths {
+                    let abs_path = path.to_absolute(frozen_root);
+                    use std::io::{BufRead, BufReader};
+                    let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+
+                    let content = match std::fs::File::open(&abs_path) {
+                        Ok(file) => {
+                            let reader = BufReader::new(file);
+                            let lines: Vec<String> = reader.lines().map_while(Result::ok).take(MAX_FILE_LINES).collect();
+                            let was_truncated = file_size > MAX_FILE_BYTES || lines.len() >= MAX_FILE_LINES;
+                            let text = lines.join("\n");
+                            if was_truncated {
+                                format!("{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]", text, file_size, lines.len())
+                            } else {
+                                text
+                            }
+                        }
+                        Err(_) => "<file not found or unreadable>".into(),
+                    };
+
+                    file_contents.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
+                }
+                file_contents.push_str("Please proceed with your task, or read more files if necessary.");
+                let path_strings: Vec<String> = paths.iter().map(|s| s.as_str().to_string()).collect();
+                messages.push_file_read(&path_strings, file_contents);
+            }
+            crow_patch::AgentAction::Recon { tool, rationale } => {
+                println!("    🔍 Agent Recon: {:?}", tool);
+                println!("       Rationale: {}", rationale);
+
+                use crow_patch::ReconAction;
+                let (program, args, description) = match &tool {
+                    ReconAction::ListDir { path } => ("ls".to_string(), vec!["-la".to_string(), "--".to_string(), path.as_str().to_string()], format!("ls -la -- {}", path.as_str())),
+                    ReconAction::Search { pattern, path, glob } => {
+                        let mut a = vec!["-rn".to_string(), "-e".to_string(), pattern.clone()];
+                        if let Some(g) = glob { a.push("-g".to_string()); a.push(g.clone()); }
+                        a.push("--".to_string());
+                        if let Some(p) = path { a.push(p.as_str().to_string()); } else { a.push(".".to_string()); }
+                        ("rg".to_string(), a, format!("rg -rn -e '{}' {}", pattern, path.as_ref().map(|p| p.as_str()).unwrap_or(".")))
+                    },
+                    ReconAction::FileInfo { path } => ("file".to_string(), vec!["--".to_string(), path.as_str().to_string()], format!("file -- {}", path.as_str())),
+                    ReconAction::WordCount { path } => ("wc".to_string(), vec!["-l".to_string(), "-c".to_string(), "--".to_string(), path.as_str().to_string()], format!("wc -lc -- {}", path.as_str())),
+                    ReconAction::DirTree { path, max_depth } => {
+                        let depth_str = max_depth.map(|d| d.to_string()).unwrap_or_else(|| "3".to_string());
+                        ("tree".to_string(), vec!["-L".to_string(), depth_str.clone(), "--".to_string(), path.as_str().to_string()], format!("tree -L {} -- {}", depth_str, path.as_str()))
+                    },
+                };
+
+                let v_cmd = crow_probe::VerificationCommand { program: program.clone(), args, cwd: None };
+                let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
+
+                let result = crow_verifier::executor::execute(frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await;
+
+                match result {
+                    Ok(res) => {
+                        let tool_name = match &tool {
+                            ReconAction::ListDir { .. } => "list_dir",
+                            ReconAction::Search { .. } => "search",
+                            ReconAction::FileInfo { .. } => "file_info",
+                            ReconAction::WordCount { .. } => "word_count",
+                            ReconAction::DirTree { .. } => "dir_tree",
+                        };
+                        messages.push_recon_result(tool_name, &description, &res.test_run.truncated_log);
+                    }
+                    Err(e) => {
+                        messages.push_user(format!("[RECON ERROR]\nFailed to execute `{}`: {:?}", program, e));
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // 2. MCTS Parallel Explore Rounds
+    let mat_config = MaterializeConfig {
+        source: frozen_root.clone().to_path_buf(),
+        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+        allow_hardlinks: false,
+    };
+
+    println!("\n[6/6] Entering MCTS Parallel Crucible ({} branches, {} max rounds)", mcts_config.branch_factor, mcts_config.max_rounds);
+    for mcts_round in 1..=mcts_config.max_rounds {
+        println!("▶️ MCTS Round {}/{}", mcts_round, mcts_config.max_rounds);
+        
+        let mut outcomes = crate::mcts::explore_round(
+            mcts_config,
+            compiler,
+            &messages.as_messages(),
+            frozen_root,
+            &mat_config,
+            &candidate.command,
+        ).await;
+
+        if let Some(_) = crate::mcts::select_winner(&mut outcomes) {
+            println!("\n[🎉] MCTS autonomous execution successful on round {}!", mcts_round);
+            return Ok(());
+        } else {
+            println!("\n[❗] MCTS Round {} failed! Merging branches and retrying...", mcts_round);
+            let merged = crate::mcts::merge_diagnostics(&outcomes);
+            messages.push_user(merged);
+        }
+    }
+
+    println!("\n[❌] Outputting final failure after {} MCTS rounds.", mcts_config.max_rounds);
     Ok(())
 }
