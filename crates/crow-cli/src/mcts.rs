@@ -182,6 +182,7 @@ async fn run_branch(
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
 ) -> BranchOutcome {
+    let branch_start = std::time::Instant::now();
     let sandbox = match materialize_sandbox(branch_id, mat_config).await {
         Ok(sb) => sb,
         Err(outcome) => return outcome,
@@ -213,8 +214,15 @@ async fn run_branch(
             };
         }
     };
+    println!("    Branch {}: LLM completed in {:.1}s", branch_id, branch_start.elapsed().as_secs_f64());
 
-    evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await
+    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await;
+    println!("    Branch {}: total {:.1}s — {}",
+        branch_id,
+        branch_start.elapsed().as_secs_f64(),
+        if outcome.passed { "✅ PASSED" } else { "❌ FAILED" }
+    );
+    outcome
 }
 
 /// Branch 0 fast-path: use a pre-existing plan (no LLM call).
@@ -225,12 +233,19 @@ async fn run_branch_with_plan(
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
 ) -> BranchOutcome {
+    let branch_start = std::time::Instant::now();
     let sandbox = match materialize_sandbox(branch_id, mat_config).await {
         Ok(sb) => sb,
         Err(outcome) => return outcome,
     };
 
-    evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await
+    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await;
+    println!("    Branch {}: total {:.1}s — {}",
+        branch_id,
+        branch_start.elapsed().as_secs_f64(),
+        if outcome.passed { "✅ PASSED" } else { "❌ FAILED" }
+    );
+    outcome
 }
 
 // ─── Shared Pipeline Stages ─────────────────────────────────────────
