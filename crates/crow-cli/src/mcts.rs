@@ -96,14 +96,17 @@ pub struct BranchOutcome {
 
 /// Run parallel MCTS exploration for a single round.
 ///
-/// Spawns `branch_factor` concurrent pipelines:
-///   LLM generate → hydrate → apply → preflight → verify
+/// `baseline_plan` seeds branch 0 with a plan the epistemic loop already
+/// produced. This avoids the cost of a redundant LLM call and ensures
+/// the first valid idea is never thrown away. Branches 1..N call the
+/// LLM with elevated temperature for diversity.
 ///
-/// Returns the first passing branch, or all branch outcomes if none pass.
+/// Returns outcomes for all branches (callers use `select_winner`).
 pub async fn explore_round(
     config: &MctsConfig,
     compiler: &crow_brain::IntentCompiler,
     messages: &[ChatMessage],
+    baseline_plan: IntentPlan,
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
@@ -112,9 +115,20 @@ pub async fn explore_round(
 
     let mut join_set = JoinSet::new();
 
-    // Launch N branches concurrently.
-    for branch_id in 0..config.branch_factor {
-        // Each branch gets its own cloned context.
+    // Branch 0: use the baseline plan (no LLM call).
+    {
+        let frozen = frozen_root.to_path_buf();
+        let mat_cfg = mat_config.clone();
+        let cmd = verify_command.clone();
+        let plan = baseline_plan;
+
+        join_set.spawn(async move {
+            run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd).await
+        });
+    }
+
+    // Branches 1..N: generate fresh plans with temperature.
+    for branch_id in 1..config.branch_factor {
         let msgs = messages.to_vec();
         let frozen = frozen_root.to_path_buf();
         let mat_cfg = mat_config.clone();
@@ -151,35 +165,12 @@ async fn run_branch(
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
 ) -> BranchOutcome {
-    // Step 1: Materialize a fresh sandbox from the frozen baseline.
-    let sandbox = match tokio::task::spawn_blocking({
-        let cfg = mat_config.clone();
-        move || materialize(&cfg)
-    })
-    .await
-    {
-        Ok(Ok(sb)) => sb,
-        Ok(Err(e)) => {
-            return BranchOutcome {
-                branch_id,
-                plan: empty_plan(),
-                sandbox: dummy_sandbox(),
-                passed: false,
-                log: format!("Materialization failed: {:?}", e),
-            };
-        }
-        Err(e) => {
-            return BranchOutcome {
-                branch_id,
-                plan: empty_plan(),
-                sandbox: dummy_sandbox(),
-                passed: false,
-                log: format!("Materialization panicked: {:?}", e),
-            };
-        }
+    let sandbox = match materialize_sandbox(branch_id, mat_config).await {
+        Ok(sb) => sb,
+        Err(outcome) => return outcome,
     };
 
-    // Step 2: Compile action with temperature
+    // LLM generate with temperature for diversity.
     let action = match compiler.compile_action_with_temperature(messages, temperature).await {
         Ok(a) => a,
         Err(e) => {
@@ -195,18 +186,76 @@ async fn run_branch(
 
     let plan = match action {
         crow_patch::AgentAction::SubmitPlan { plan } => plan,
-        res => {
+        other => {
             return BranchOutcome {
                 branch_id,
                 plan: empty_plan(),
                 sandbox,
                 passed: false,
-                log: format!("MCTS branch produced ReconAction instead of SubmitPlan: {:?}", res),
+                log: format!("Branch produced non-SubmitPlan action: {:?}", other),
             };
         }
     };
 
-    // Step 3: Hydrate plan
+    evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await
+}
+
+/// Branch 0 fast-path: use a pre-existing plan (no LLM call).
+async fn run_branch_with_plan(
+    branch_id: usize,
+    plan: IntentPlan,
+    frozen_root: &Path,
+    mat_config: &MaterializeConfig,
+    verify_command: &crow_probe::VerificationCommand,
+) -> BranchOutcome {
+    let sandbox = match materialize_sandbox(branch_id, mat_config).await {
+        Ok(sb) => sb,
+        Err(outcome) => return outcome,
+    };
+
+    evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await
+}
+
+// ─── Shared Pipeline Stages ─────────────────────────────────────────
+
+/// Materialize a fresh sandbox. Returns Ok(sandbox) or Err(BranchOutcome).
+async fn materialize_sandbox(
+    branch_id: usize,
+    mat_config: &MaterializeConfig,
+) -> Result<SandboxHandle, BranchOutcome> {
+    match tokio::task::spawn_blocking({
+        let cfg = mat_config.clone();
+        move || materialize(&cfg)
+    })
+    .await
+    {
+        Ok(Ok(sb)) => Ok(sb),
+        Ok(Err(e)) => Err(BranchOutcome {
+            branch_id,
+            plan: empty_plan(),
+            sandbox: dummy_sandbox(),
+            passed: false,
+            log: format!("Materialization failed: {:?}", e),
+        }),
+        Err(e) => Err(BranchOutcome {
+            branch_id,
+            plan: empty_plan(),
+            sandbox: dummy_sandbox(),
+            passed: false,
+            log: format!("Materialization panicked: {:?}", e),
+        }),
+    }
+}
+
+/// Hydrate → apply → preflight → verify pipeline shared by all branches.
+async fn evaluate_plan(
+    branch_id: usize,
+    plan: IntentPlan,
+    sandbox: SandboxHandle,
+    frozen_root: &Path,
+    verify_command: &crow_probe::VerificationCommand,
+) -> BranchOutcome {
+    // Hydrate plan
     let sandbox_path = sandbox.path().to_path_buf();
     let plan_clone = plan.clone();
     let hydrated_plan = match tokio::task::spawn_blocking(move || {
@@ -227,7 +276,7 @@ async fn run_branch(
         }
     };
 
-    // Step 4: Apply plan
+    // Apply plan
     {
         let plan_for_apply = hydrated_plan.clone();
         let sandbox_view = sandbox.non_owning_view();
@@ -247,7 +296,7 @@ async fn run_branch(
         }
     }
 
-    // Step 5: Preflight cargo check
+    // Preflight cargo check
     let preflight_result = crow_verifier::preflight::cargo_check_preflight(
         sandbox.path(),
         Some(frozen_root),
@@ -266,7 +315,7 @@ async fn run_branch(
         };
     }
 
-    // Step 6: Full Verification
+    // Full Verification
     let exec_config = crow_verifier::ExecutionConfig {
         timeout: std::time::Duration::from_secs(60),
         max_output_bytes: 5 * 1024 * 1024,

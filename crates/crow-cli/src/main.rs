@@ -166,6 +166,16 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     // independent timelines against the same frozen baseline.
     let mcts_config = crate::mcts::MctsConfig::from_env();
     if !mcts_config.is_serial() {
+        // MCTS multiplies LLM calls by branch_factor. This is only
+        // economically viable when prompt caching is active (~90% input
+        // cost reduction). Enforce this as a hard gate, not a comment.
+        if !cfg.llm.prompt_caching {
+            anyhow::bail!(
+                "MCTS parallel mode (CROW_MCTS_BRANCHES={}) requires prompt caching. \
+                 Set CROW_PROMPT_CACHE=1 or prompt_caching=true in .crow/config.json.",
+                mcts_config.branch_factor
+            );
+        }
         return run_mcts_crucible(&mcts_config, &profile, &candidate, &frozen_root, &compiler, &mut messages).await;
     }
 
@@ -531,7 +541,7 @@ async fn run_mcts_crucible(
     const MAX_FILE_LINES: usize = 500;
     
     let mut epistemic_step = 0;
-    loop {
+    let baseline_plan = loop {
         epistemic_step += 1;
         if epistemic_step > MAX_EPISTEMIC_STEPS {
             anyhow::bail!("Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.", MAX_EPISTEMIC_STEPS);
@@ -542,10 +552,8 @@ async fn run_mcts_crucible(
             .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
-            println!("    ✅ Agent is ready to submit plan. Branching to MCTS...");
-            // Notice: we do NOT push the AgentAction to messages here.
-            // MCTS will generate its own plans with temperature using the pre-recon context.
-            break;
+            println!("    ✅ Agent produced baseline plan. Seeding into MCTS branch 0...");
+            break plan;
         }
 
         messages.push_assistant(serde_json::to_string(&action)?);
@@ -627,11 +635,11 @@ async fn run_mcts_crucible(
             }
             _ => unreachable!(),
         }
-    }
+    };
 
     // 2. MCTS Parallel Explore Rounds
     let mat_config = MaterializeConfig {
-        source: frozen_root.clone().to_path_buf(),
+        source: frozen_root.to_path_buf(),
         artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
@@ -645,12 +653,13 @@ async fn run_mcts_crucible(
             mcts_config,
             compiler,
             &messages.as_messages(),
+            baseline_plan.clone(),
             frozen_root,
             &mat_config,
             &candidate.command,
         ).await;
 
-        if let Some(_) = crate::mcts::select_winner(&mut outcomes) {
+        if crate::mcts::select_winner(&mut outcomes).is_some() {
             println!("\n[🎉] MCTS autonomous execution successful on round {}!", mcts_round);
             return Ok(());
         } else {
