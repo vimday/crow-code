@@ -141,12 +141,29 @@ pub async fn explore_round(
         });
     }
 
-    // Collect results as they complete.
+    // Collect results as they complete. If any branch passes, abort
+    // remaining branches immediately (early termination) to save LLM
+    // and compute costs.
     let mut outcomes = Vec::with_capacity(config.branch_factor);
     while let Some(result) = join_set.join_next().await {
         match result {
-            Ok(outcome) => outcomes.push(outcome),
+            Ok(outcome) => {
+                let is_winner = outcome.passed;
+                outcomes.push(outcome);
+                if is_winner {
+                    let remaining = join_set.len();
+                    if remaining > 0 {
+                        println!("    ⚡ Early termination: aborting {} remaining branch(es)", remaining);
+                        join_set.abort_all();
+                    }
+                    break;
+                }
+            }
             Err(e) => {
+                if e.is_cancelled() {
+                    // Expected from abort_all(); don't report as error.
+                    continue;
+                }
                 eprintln!("    ⚠️  MCTS branch panicked: {:?}", e);
             }
         }
