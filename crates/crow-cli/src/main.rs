@@ -729,8 +729,19 @@ async fn run_mcts_crucible(
             &candidate.command,
         ).await;
 
-        if crate::mcts::select_winner(&mut outcomes).is_some() {
-            println!("\n[🎉] MCTS autonomous execution successful on round {}!", mcts_round);
+        if let Some(winner) = crate::mcts::select_winner(&mut outcomes) {
+            println!("\n[🎉] MCTS Branch {} passed on round {}!", winner.branch_id, mcts_round);
+
+            // Render the diff so the user sees what changed
+            println!("\n─── Winning Patch (Branch {}) ───", winner.branch_id);
+            diff::render_plan_diff(frozen_root, winner.sandbox.path(), &winner.plan);
+
+            println!("\n╔══════════════════════════════════════╗");
+            println!("║  MCTS Verdict: Passed ✅              ║");
+            println!("╚══════════════════════════════════════╝");
+            println!("Evidence:\n{}", winner.log);
+
+            drop(winner.sandbox);
             return Ok(());
         }
 
