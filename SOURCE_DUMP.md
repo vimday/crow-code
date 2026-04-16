@@ -1,6 +1,6 @@
 # crow-code Source Dump
-# Generated: 2026-04-16 HEAD: e3c0b4e
-# Total Rust source files: 36, ~8022 lines
+# Generated: 2026-04-16 HEAD: 63eca0e
+# 37 Rust source files, ~8134 lines
 
 // ============================================================
 // FILE: crates/crow-brain/src/client.rs
@@ -113,14 +113,7 @@ impl ReqwestLlmClient {
 }
 
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut safe_len = max_bytes;
-    while safe_len > 0 && !s.is_char_boundary(safe_len) {
-        safe_len -= 1;
-    }
-    &s[..safe_len]
+    crow_patch::safe_truncate(s, max_bytes)
 }
 
 impl ReqwestLlmClient {
@@ -365,6 +358,25 @@ impl IntentCompiler {
         &self,
         messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
+        self._compile_action(messages, None).await
+    }
+
+    /// Compiles a task directive into a strict `AgentAction`, using the specified temperature
+    /// for diversity (used primarily by the MCTS parallel crucible).
+    pub async fn compile_action_with_temperature(
+        &self,
+        messages: &[ChatMessage],
+        temperature: f64,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
+        self._compile_action(messages, Some(temperature)).await
+    }
+
+    /// Shared implementation for `compile_action` and `compile_action_with_temperature`.
+    async fn _compile_action(
+        &self,
+        messages: &[ChatMessage],
+        temperature: Option<f64>,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
         let mut conversation: Vec<ChatMessage> = Vec::new();
 
@@ -383,11 +395,15 @@ impl IntentCompiler {
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
-            let response = self
-                .client
-                .generate(&conversation)
-                .await
-                .map_err(CompilerError::PromptFailed)?;
+            let response = match temperature {
+                Some(temp) => {
+                    self.client
+                        .generate_with_temperature(&conversation, temp)
+                        .await
+                }
+                None => self.client.generate(&conversation).await,
+            }
+            .map_err(CompilerError::PromptFailed)?;
 
             let cleaned_json = extract_json_block(&response);
 
@@ -412,66 +428,6 @@ impl IntentCompiler {
                 Err(e) => {
                     // Self-healing: append the failed attempt and error as
                     // assistant + user messages for the next retry.
-                    conversation.push(ChatMessage::assistant(response.clone()));
-                    conversation.push(ChatMessage::user(format!(
-                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
-                        e
-                    )));
-                    errors.push(e);
-                }
-            }
-        }
-
-        Err(CompilerError::MaxRetriesExceeded(errors))
-    }
-
-    /// Compiles a task directive into a strict `AgentAction`, using the specified temperature
-    /// for diversity (used primarily by the MCTS parallel crucible).
-    pub async fn compile_action_with_temperature(
-        &self,
-        messages: &[ChatMessage],
-        temperature: f64,
-    ) -> Result<crow_patch::AgentAction, CompilerError> {
-        let schema_guide = crate::schema::intent_plan_schema();
-        let mut conversation: Vec<ChatMessage> = Vec::new();
-
-        // Always inject the schema guide into the system prompt.
-        conversation.push(ChatMessage::system(format!(
-            "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
-            schema_guide
-        )));
-
-        conversation.extend(messages.iter().cloned());
-
-        let mut errors = Vec::new();
-
-        for _attempt in 0..=self.max_retries {
-            let response = self
-                .client
-                .generate_with_temperature(&conversation, temperature)
-                .await
-                .map_err(CompilerError::PromptFailed)?;
-
-            let cleaned_json = extract_json_block(&response);
-
-            match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
-                Ok(action) => {
-                    // Semantic validation: enforce constraints serde can't check.
-                    if let Err(reason) = action.validate() {
-                        conversation.push(ChatMessage::assistant(response.clone()));
-                        conversation.push(ChatMessage::user(format!(
-                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {}\n\nPlease fix and resubmit.",
-                            reason
-                        )));
-                        errors.push(
-                            serde_json::from_str::<()>(&format!("\"validation: {}\"", reason))
-                                .unwrap_err(),
-                        );
-                        continue;
-                    }
-                    return Ok(action);
-                }
-                Err(e) => {
                     conversation.push(ChatMessage::assistant(response.clone()));
                     conversation.push(ChatMessage::user(format!(
                         "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
@@ -1133,9 +1089,9 @@ use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 struct Memory {
-    pub message: ChatMessage,
+    message: ChatMessage,
     /// What this message becomes when it is compressed due to budget constraints.
-    pub summary: Option<String>,
+    summary: Option<String>,
 }
 
 /// Manages the LLM context envelope semantic strategies.
@@ -1149,14 +1105,7 @@ pub struct ConversationManager {
 }
 
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut safe_len = max_bytes;
-    while safe_len > 0 && !s.is_char_boundary(safe_len) {
-        safe_len -= 1;
-    }
-    &s[..safe_len]
+    crow_patch::safe_truncate(s, max_bytes)
 }
 
 impl ConversationManager {
@@ -1785,6 +1734,16 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     // independent timelines against the same frozen baseline.
     let mcts_config = crate::mcts::MctsConfig::from_env();
     if !mcts_config.is_serial() {
+        // MCTS multiplies LLM calls by branch_factor. This is only
+        // economically viable when prompt caching is active (~90% input
+        // cost reduction). Enforce this as a hard gate, not a comment.
+        if !cfg.llm.prompt_caching {
+            anyhow::bail!(
+                "MCTS parallel mode (CROW_MCTS_BRANCHES={}) requires prompt caching. \
+                 Set CROW_PROMPT_CACHE=1 or prompt_caching=true in .crow/config.json.",
+                mcts_config.branch_factor
+            );
+        }
         return run_mcts_crucible(&mcts_config, &profile, &candidate, &frozen_root, &compiler, &mut messages).await;
     }
 
@@ -2150,7 +2109,7 @@ async fn run_mcts_crucible(
     const MAX_FILE_LINES: usize = 500;
     
     let mut epistemic_step = 0;
-    loop {
+    let baseline_plan = loop {
         epistemic_step += 1;
         if epistemic_step > MAX_EPISTEMIC_STEPS {
             anyhow::bail!("Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.", MAX_EPISTEMIC_STEPS);
@@ -2161,10 +2120,8 @@ async fn run_mcts_crucible(
             .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
-            println!("    ✅ Agent is ready to submit plan. Branching to MCTS...");
-            // Notice: we do NOT push the AgentAction to messages here.
-            // MCTS will generate its own plans with temperature using the pre-recon context.
-            break;
+            println!("    ✅ Agent produced baseline plan. Seeding into MCTS branch 0...");
+            break plan;
         }
 
         messages.push_assistant(serde_json::to_string(&action)?);
@@ -2244,13 +2201,16 @@ async fn run_mcts_crucible(
                     }
                 }
             }
-            _ => unreachable!(),
+            crow_patch::AgentAction::SubmitPlan { .. } => {
+                // Already handled above via the `if let` guard; should never reach here.
+                unreachable!("SubmitPlan is intercepted before push_assistant")
+            }
         }
-    }
+    };
 
     // 2. MCTS Parallel Explore Rounds
     let mat_config = MaterializeConfig {
-        source: frozen_root.clone().to_path_buf(),
+        source: frozen_root.to_path_buf(),
         artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
         skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
         allow_hardlinks: false,
@@ -2264,12 +2224,13 @@ async fn run_mcts_crucible(
             mcts_config,
             compiler,
             &messages.as_messages(),
+            baseline_plan.clone(),
             frozen_root,
             &mat_config,
             &candidate.command,
         ).await;
 
-        if let Some(_) = crate::mcts::select_winner(&mut outcomes) {
+        if crate::mcts::select_winner(&mut outcomes).is_some() {
             println!("\n[🎉] MCTS autonomous execution successful on round {}!", mcts_round);
             return Ok(());
         } else {
@@ -2385,14 +2346,17 @@ pub struct BranchOutcome {
 
 /// Run parallel MCTS exploration for a single round.
 ///
-/// Spawns `branch_factor` concurrent pipelines:
-///   LLM generate → hydrate → apply → preflight → verify
+/// `baseline_plan` seeds branch 0 with a plan the epistemic loop already
+/// produced. This avoids the cost of a redundant LLM call and ensures
+/// the first valid idea is never thrown away. Branches 1..N call the
+/// LLM with elevated temperature for diversity.
 ///
-/// Returns the first passing branch, or all branch outcomes if none pass.
+/// Returns outcomes for all branches (callers use `select_winner`).
 pub async fn explore_round(
     config: &MctsConfig,
     compiler: &crow_brain::IntentCompiler,
     messages: &[ChatMessage],
+    baseline_plan: IntentPlan,
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
@@ -2401,9 +2365,20 @@ pub async fn explore_round(
 
     let mut join_set = JoinSet::new();
 
-    // Launch N branches concurrently.
-    for branch_id in 0..config.branch_factor {
-        // Each branch gets its own cloned context.
+    // Branch 0: use the baseline plan (no LLM call).
+    {
+        let frozen = frozen_root.to_path_buf();
+        let mat_cfg = mat_config.clone();
+        let cmd = verify_command.clone();
+        let plan = baseline_plan;
+
+        join_set.spawn(async move {
+            run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd).await
+        });
+    }
+
+    // Branches 1..N: generate fresh plans with temperature.
+    for branch_id in 1..config.branch_factor {
         let msgs = messages.to_vec();
         let frozen = frozen_root.to_path_buf();
         let mat_cfg = mat_config.clone();
@@ -2440,35 +2415,12 @@ async fn run_branch(
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
 ) -> BranchOutcome {
-    // Step 1: Materialize a fresh sandbox from the frozen baseline.
-    let sandbox = match tokio::task::spawn_blocking({
-        let cfg = mat_config.clone();
-        move || materialize(&cfg)
-    })
-    .await
-    {
-        Ok(Ok(sb)) => sb,
-        Ok(Err(e)) => {
-            return BranchOutcome {
-                branch_id,
-                plan: empty_plan(),
-                sandbox: dummy_sandbox(),
-                passed: false,
-                log: format!("Materialization failed: {:?}", e),
-            };
-        }
-        Err(e) => {
-            return BranchOutcome {
-                branch_id,
-                plan: empty_plan(),
-                sandbox: dummy_sandbox(),
-                passed: false,
-                log: format!("Materialization panicked: {:?}", e),
-            };
-        }
+    let sandbox = match materialize_sandbox(branch_id, mat_config).await {
+        Ok(sb) => sb,
+        Err(outcome) => return outcome,
     };
 
-    // Step 2: Compile action with temperature
+    // LLM generate with temperature for diversity.
     let action = match compiler.compile_action_with_temperature(messages, temperature).await {
         Ok(a) => a,
         Err(e) => {
@@ -2484,28 +2436,85 @@ async fn run_branch(
 
     let plan = match action {
         crow_patch::AgentAction::SubmitPlan { plan } => plan,
-        res => {
+        other => {
             return BranchOutcome {
                 branch_id,
                 plan: empty_plan(),
                 sandbox,
                 passed: false,
-                log: format!("MCTS branch produced ReconAction instead of SubmitPlan: {:?}", res),
+                log: format!("Branch produced non-SubmitPlan action: {:?}", other),
             };
         }
     };
 
-    // Step 3: Hydrate plan
-    let sandbox_path = sandbox.path().to_path_buf();
-    let plan_clone = plan.clone();
-    let hydrated_plan = match tokio::task::spawn_blocking(move || {
-        crow_workspace::PlanHydrator::hydrate(&plan_clone, &sandbox_path)
+    evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await
+}
+
+/// Branch 0 fast-path: use a pre-existing plan (no LLM call).
+async fn run_branch_with_plan(
+    branch_id: usize,
+    plan: IntentPlan,
+    frozen_root: &Path,
+    mat_config: &MaterializeConfig,
+    verify_command: &crow_probe::VerificationCommand,
+) -> BranchOutcome {
+    let sandbox = match materialize_sandbox(branch_id, mat_config).await {
+        Ok(sb) => sb,
+        Err(outcome) => return outcome,
+    };
+
+    evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await
+}
+
+// ─── Shared Pipeline Stages ─────────────────────────────────────────
+
+/// Materialize a fresh sandbox. Returns Ok(sandbox) or Err(BranchOutcome).
+async fn materialize_sandbox(
+    branch_id: usize,
+    mat_config: &MaterializeConfig,
+) -> Result<SandboxHandle, BranchOutcome> {
+    match tokio::task::spawn_blocking({
+        let cfg = mat_config.clone();
+        move || materialize(&cfg)
     })
     .await
-    .unwrap()
     {
-        Ok(p) => p,
-        Err(e) => {
+        Ok(Ok(sb)) => Ok(sb),
+        Ok(Err(e)) => Err(BranchOutcome {
+            branch_id,
+            plan: empty_plan(),
+            sandbox: dummy_sandbox(),
+            passed: false,
+            log: format!("Materialization failed: {:?}", e),
+        }),
+        Err(e) => Err(BranchOutcome {
+            branch_id,
+            plan: empty_plan(),
+            sandbox: dummy_sandbox(),
+            passed: false,
+            log: format!("Materialization panicked: {:?}", e),
+        }),
+    }
+}
+
+/// Hydrate → apply → preflight → verify pipeline shared by all branches.
+async fn evaluate_plan(
+    branch_id: usize,
+    plan: IntentPlan,
+    sandbox: SandboxHandle,
+    frozen_root: &Path,
+    verify_command: &crow_probe::VerificationCommand,
+) -> BranchOutcome {
+    // Hydrate plan
+    let sandbox_path = sandbox.path().to_path_buf();
+    let plan_clone = plan.clone();
+    let hydrate_result = tokio::task::spawn_blocking(move || {
+        crow_workspace::PlanHydrator::hydrate(&plan_clone, &sandbox_path)
+    })
+    .await;
+    let hydrated_plan = match hydrate_result {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
             return BranchOutcome {
                 branch_id,
                 plan,
@@ -2514,29 +2523,49 @@ async fn run_branch(
                 log: format!("Hydration failed: {:?}", e),
             };
         }
+        Err(e) => {
+            return BranchOutcome {
+                branch_id,
+                plan,
+                sandbox,
+                passed: false,
+                log: format!("Hydration task panicked: {:?}", e),
+            };
+        }
     };
 
-    // Step 4: Apply plan
+    // Apply plan
     {
         let plan_for_apply = hydrated_plan.clone();
         let sandbox_view = sandbox.non_owning_view();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
+        let apply_result = tokio::task::spawn_blocking(move || {
             crow_workspace::applier::apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
         })
-        .await
-        .unwrap()
-        {
-            return BranchOutcome {
-                branch_id,
-                plan: hydrated_plan,
-                sandbox,
-                passed: false,
-                log: format!("Sandbox patch injection failed: {:?}", e),
-            };
+        .await;
+        match apply_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return BranchOutcome {
+                    branch_id,
+                    plan: hydrated_plan,
+                    sandbox,
+                    passed: false,
+                    log: format!("Sandbox patch injection failed: {:?}", e),
+                };
+            }
+            Err(e) => {
+                return BranchOutcome {
+                    branch_id,
+                    plan: hydrated_plan,
+                    sandbox,
+                    passed: false,
+                    log: format!("Apply task panicked: {:?}", e),
+                };
+            }
         }
     }
 
-    // Step 5: Preflight cargo check
+    // Preflight cargo check
     let preflight_result = crow_verifier::preflight::cargo_check_preflight(
         sandbox.path(),
         Some(frozen_root),
@@ -2555,7 +2584,7 @@ async fn run_branch(
         };
     }
 
-    // Step 6: Full Verification
+    // Full Verification
     let exec_config = crow_verifier::ExecutionConfig {
         timeout: std::time::Duration::from_secs(60),
         max_output_bytes: 5 * 1024 * 1024,
@@ -2617,16 +2646,9 @@ pub fn merge_diagnostics(outcomes: &[BranchOutcome]) -> String {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-/// UTF-8 safe truncation — never panics on multibyte boundaries.
+/// UTF-8 safe truncation — delegates to the shared implementation.
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    crow_patch::safe_truncate(s, max_bytes)
 }
 
 fn empty_plan() -> IntentPlan {
@@ -4353,7 +4375,7 @@ impl SandboxHandle {
     /// Take ownership of the path, preventing automatic cleanup.
     pub fn into_path(mut self) -> PathBuf {
         self.owned = false;
-        self.path.clone()
+        std::mem::take(&mut self.path)
     }
 
     /// Create a non-owning view of this sandbox for use in blocking tasks.
@@ -4550,8 +4572,10 @@ mod tests {
 //! preconditions, base snapshot anchoring, and fuzzy-match hunks.
 
 pub mod types;
+pub mod util;
 
 pub use types::*;
+pub use util::safe_truncate;
 
 
 // ============================================================
@@ -4605,7 +4629,7 @@ impl WorkspacePath {
             }
         }
 
-        Ok(Self(s))
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -5123,6 +5147,62 @@ mod tests {
             },
         };
         assert!(action.validate().is_err());
+    }
+}
+
+
+// ============================================================
+// FILE: crates/crow-patch/src/util.rs
+// ============================================================
+//! Shared utilities for the crow workspace.
+
+/// UTF-8 safe truncation — never panics on multibyte character boundaries.
+///
+/// Returns a string slice of at most `max_bytes` bytes, backing off to the
+/// nearest valid char boundary when the limit falls mid-codepoint.
+pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_within_limit() {
+        assert_eq!(safe_truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_at_exact_limit() {
+        assert_eq!(safe_truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_ascii() {
+        assert_eq!(safe_truncate("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_multibyte_boundary() {
+        // '日' is 3 bytes in UTF-8
+        let s = "日本語";
+        assert_eq!(safe_truncate(s, 3), "日");
+        assert_eq!(safe_truncate(s, 4), "日"); // mid-codepoint: backs off
+        assert_eq!(safe_truncate(s, 6), "日本");
+    }
+
+    #[test]
+    fn truncate_empty() {
+        assert_eq!(safe_truncate("", 10), "");
+        assert_eq!(safe_truncate("hello", 0), "");
     }
 }
 
