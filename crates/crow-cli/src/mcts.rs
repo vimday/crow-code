@@ -376,21 +376,71 @@ pub fn select_winner(outcomes: &mut Vec<BranchOutcome>) -> Option<BranchOutcome>
         .map(|pos| outcomes.remove(pos))
 }
 
-/// Merge failure diagnostics from all branches into a single feedback string.
+/// Merge failure diagnostics from all branches into structured LLM feedback.
+///
+/// Produces a categorized summary so the model can distinguish between
+/// compile errors (fix the syntax), test failures (fix the logic), and
+/// infrastructure issues (ignore and retry).
 pub fn merge_diagnostics(outcomes: &[BranchOutcome]) -> String {
-    let mut out = String::from("[MCTS: All branches failed]\n\n");
+    let total = outcomes.len();
+    let mut out = format!(
+        "[MCTS ROUND FAILED — {}/{} branches failed]\n\n",
+        outcomes.iter().filter(|o| !o.passed).count(),
+        total
+    );
+
+    // Categorize failures by stage for clearer feedback
+    let mut compile_failures = Vec::new();
+    let mut test_failures = Vec::new();
+    let mut infra_failures = Vec::new();
+
     for o in outcomes {
-        let snippet = safe_truncate(&o.log, 500);
-        let ellipsis = if snippet.len() < o.log.len() {
-            "..."
+        if o.passed {
+            continue;
+        }
+        let snippet = safe_truncate(&o.log, 800);
+        let entry = format!("Branch {}: {}", o.branch_id, snippet);
+
+        if o.log.contains("COMPILE ERRORS") || o.log.contains("Preflight compile failed") {
+            compile_failures.push(entry);
+        } else if o.log.contains("Verification error")
+            || o.log.contains("test result: FAILED")
+            || o.log.starts_with("test ")
+        {
+            test_failures.push(entry);
         } else {
-            ""
-        };
-        out.push_str(&format!(
-            "Branch {}: {}{}\n",
-            o.branch_id, snippet, ellipsis
-        ));
+            infra_failures.push(entry);
+        }
     }
+
+    if !compile_failures.is_empty() {
+        out.push_str("── Compile Errors (fix syntax/types first) ──\n");
+        for f in &compile_failures {
+            out.push_str(f);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    if !test_failures.is_empty() {
+        out.push_str("── Test Failures (logic errors) ──\n");
+        for f in &test_failures {
+            out.push_str(f);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    if !infra_failures.is_empty() {
+        out.push_str("── Other (materialization/hydration/infra) ──\n");
+        for f in &infra_failures {
+            out.push_str(f);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    out.push_str("Please analyze the errors above and produce a corrected submit_plan.\n");
     out
 }
 
@@ -509,8 +559,10 @@ mod tests {
         ];
 
         let merged = merge_diagnostics(&outcomes);
-        assert!(merged.contains("All branches failed"));
+        assert!(merged.contains("MCTS ROUND FAILED"));
+        assert!(merged.contains("2/2 branches failed"));
         assert!(merged.contains("Branch 0: error A"));
         assert!(merged.contains("Branch 1: error B"));
+        assert!(merged.contains("produce a corrected submit_plan"));
     }
 }

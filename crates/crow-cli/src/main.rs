@@ -714,6 +714,8 @@ async fn run_mcts_crucible(
     };
 
     println!("\n[6/6] Entering MCTS Parallel Crucible ({} branches, {} max rounds)", mcts_config.branch_factor, mcts_config.max_rounds);
+    let mut current_baseline = baseline_plan;
+
     for mcts_round in 1..=mcts_config.max_rounds {
         println!("▶️ MCTS Round {}/{}", mcts_round, mcts_config.max_rounds);
         
@@ -721,7 +723,7 @@ async fn run_mcts_crucible(
             mcts_config,
             compiler,
             &messages.as_messages(),
-            baseline_plan.clone(),
+            current_baseline.clone(),
             frozen_root,
             &mat_config,
             &candidate.command,
@@ -730,10 +732,38 @@ async fn run_mcts_crucible(
         if crate::mcts::select_winner(&mut outcomes).is_some() {
             println!("\n[🎉] MCTS autonomous execution successful on round {}!", mcts_round);
             return Ok(());
-        } else {
-            println!("\n[❗] MCTS Round {} failed! Merging branches and retrying...", mcts_round);
-            let merged = crate::mcts::merge_diagnostics(&outcomes);
-            messages.push_user(merged);
+        }
+
+        // All branches failed. Feed diagnostics back and re-derive baseline.
+        println!("\n[❗] MCTS Round {} failed! Feeding diagnostics back to LLM...", mcts_round);
+        let merged = crate::mcts::merge_diagnostics(&outcomes);
+        messages.push_verifier_result("MCTS_AllBranchesFailed", &merged);
+
+        // Re-compile a fresh baseline plan that incorporates the failure
+        // feedback. This ensures branch 0 in the next round gets an
+        // informed plan instead of repeating the same stale one.
+        if mcts_round < mcts_config.max_rounds {
+            println!("  🧠 Re-deriving baseline plan from failure feedback...");
+            match compiler.compile_action(&messages.as_messages()).await {
+                Ok(crow_patch::AgentAction::SubmitPlan { plan }) => {
+                    println!("    ✅ New baseline plan generated for next round");
+                    current_baseline = plan;
+                }
+                Ok(other) => {
+                    // Model wants to do more recon — note it but reuse previous baseline
+                    messages.push_assistant(serde_json::to_string(&other).unwrap_or_default());
+                    println!("    ⚠️  Model requested {:?} instead of SubmitPlan — reusing previous baseline",
+                        match &other {
+                            crow_patch::AgentAction::ReadFiles { .. } => "ReadFiles",
+                            crow_patch::AgentAction::Recon { .. } => "Recon",
+                            _ => "unknown",
+                        }
+                    );
+                }
+                Err(e) => {
+                    eprintln!("    ⚠️  Baseline re-derivation failed: {:?} — reusing previous", e);
+                }
+            }
         }
     }
 
