@@ -124,7 +124,7 @@ impl SandboxHandle {
     /// Take ownership of the path, preventing automatic cleanup.
     pub fn into_path(mut self) -> PathBuf {
         self.owned = false;
-        self.path.clone()
+        std::mem::take(&mut self.path)
     }
 
     /// Create a non-owning view of this sandbox for use in blocking tasks.

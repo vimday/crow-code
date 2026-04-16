@@ -5,5 +5,7 @@
 //! preconditions, base snapshot anchoring, and fuzzy-match hunks.
 
 pub mod types;
+pub mod util;
 
 pub use types::*;
+pub use util::safe_truncate;

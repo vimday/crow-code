@@ -99,6 +99,25 @@ impl IntentCompiler {
         &self,
         messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
+        self._compile_action(messages, None).await
+    }
+
+    /// Compiles a task directive into a strict `AgentAction`, using the specified temperature
+    /// for diversity (used primarily by the MCTS parallel crucible).
+    pub async fn compile_action_with_temperature(
+        &self,
+        messages: &[ChatMessage],
+        temperature: f64,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
+        self._compile_action(messages, Some(temperature)).await
+    }
+
+    /// Shared implementation for `compile_action` and `compile_action_with_temperature`.
+    async fn _compile_action(
+        &self,
+        messages: &[ChatMessage],
+        temperature: Option<f64>,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
         let mut conversation: Vec<ChatMessage> = Vec::new();
 
@@ -117,11 +136,15 @@ impl IntentCompiler {
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
-            let response = self
-                .client
-                .generate(&conversation)
-                .await
-                .map_err(CompilerError::PromptFailed)?;
+            let response = match temperature {
+                Some(temp) => {
+                    self.client
+                        .generate_with_temperature(&conversation, temp)
+                        .await
+                }
+                None => self.client.generate(&conversation).await,
+            }
+            .map_err(CompilerError::PromptFailed)?;
 
             let cleaned_json = extract_json_block(&response);
 
@@ -146,66 +169,6 @@ impl IntentCompiler {
                 Err(e) => {
                     // Self-healing: append the failed attempt and error as
                     // assistant + user messages for the next retry.
-                    conversation.push(ChatMessage::assistant(response.clone()));
-                    conversation.push(ChatMessage::user(format!(
-                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
-                        e
-                    )));
-                    errors.push(e);
-                }
-            }
-        }
-
-        Err(CompilerError::MaxRetriesExceeded(errors))
-    }
-
-    /// Compiles a task directive into a strict `AgentAction`, using the specified temperature
-    /// for diversity (used primarily by the MCTS parallel crucible).
-    pub async fn compile_action_with_temperature(
-        &self,
-        messages: &[ChatMessage],
-        temperature: f64,
-    ) -> Result<crow_patch::AgentAction, CompilerError> {
-        let schema_guide = crate::schema::intent_plan_schema();
-        let mut conversation: Vec<ChatMessage> = Vec::new();
-
-        // Always inject the schema guide into the system prompt.
-        conversation.push(ChatMessage::system(format!(
-            "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
-            schema_guide
-        )));
-
-        conversation.extend(messages.iter().cloned());
-
-        let mut errors = Vec::new();
-
-        for _attempt in 0..=self.max_retries {
-            let response = self
-                .client
-                .generate_with_temperature(&conversation, temperature)
-                .await
-                .map_err(CompilerError::PromptFailed)?;
-
-            let cleaned_json = extract_json_block(&response);
-
-            match serde_json::from_str::<crow_patch::AgentAction>(cleaned_json) {
-                Ok(action) => {
-                    // Semantic validation: enforce constraints serde can't check.
-                    if let Err(reason) = action.validate() {
-                        conversation.push(ChatMessage::assistant(response.clone()));
-                        conversation.push(ChatMessage::user(format!(
-                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {}\n\nPlease fix and resubmit.",
-                            reason
-                        )));
-                        errors.push(
-                            serde_json::from_str::<()>(&format!("\"validation: {}\"", reason))
-                                .unwrap_err(),
-                        );
-                        continue;
-                    }
-                    return Ok(action);
-                }
-                Err(e) => {
                     conversation.push(ChatMessage::assistant(response.clone()));
                     conversation.push(ChatMessage::user(format!(
                         "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",

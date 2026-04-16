@@ -3,9 +3,9 @@ use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 struct Memory {
-    pub message: ChatMessage,
+    message: ChatMessage,
     /// What this message becomes when it is compressed due to budget constraints.
-    pub summary: Option<String>,
+    summary: Option<String>,
 }
 
 /// Manages the LLM context envelope semantic strategies.
@@ -19,14 +19,7 @@ pub struct ConversationManager {
 }
 
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut safe_len = max_bytes;
-    while safe_len > 0 && !s.is_char_boundary(safe_len) {
-        safe_len -= 1;
-    }
-    &s[..safe_len]
+    crow_patch::safe_truncate(s, max_bytes)
 }
 
 impl ConversationManager {

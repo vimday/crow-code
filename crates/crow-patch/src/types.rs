@@ -46,7 +46,7 @@ impl WorkspacePath {
             }
         }
 
-        Ok(Self(s))
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {

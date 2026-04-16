@@ -258,14 +258,13 @@ async fn evaluate_plan(
     // Hydrate plan
     let sandbox_path = sandbox.path().to_path_buf();
     let plan_clone = plan.clone();
-    let hydrated_plan = match tokio::task::spawn_blocking(move || {
+    let hydrate_result = tokio::task::spawn_blocking(move || {
         crow_workspace::PlanHydrator::hydrate(&plan_clone, &sandbox_path)
     })
-    .await
-    .unwrap()
-    {
-        Ok(p) => p,
-        Err(e) => {
+    .await;
+    let hydrated_plan = match hydrate_result {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
             return BranchOutcome {
                 branch_id,
                 plan,
@@ -274,25 +273,45 @@ async fn evaluate_plan(
                 log: format!("Hydration failed: {:?}", e),
             };
         }
+        Err(e) => {
+            return BranchOutcome {
+                branch_id,
+                plan,
+                sandbox,
+                passed: false,
+                log: format!("Hydration task panicked: {:?}", e),
+            };
+        }
     };
 
     // Apply plan
     {
         let plan_for_apply = hydrated_plan.clone();
         let sandbox_view = sandbox.non_owning_view();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
+        let apply_result = tokio::task::spawn_blocking(move || {
             crow_workspace::applier::apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
         })
-        .await
-        .unwrap()
-        {
-            return BranchOutcome {
-                branch_id,
-                plan: hydrated_plan,
-                sandbox,
-                passed: false,
-                log: format!("Sandbox patch injection failed: {:?}", e),
-            };
+        .await;
+        match apply_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return BranchOutcome {
+                    branch_id,
+                    plan: hydrated_plan,
+                    sandbox,
+                    passed: false,
+                    log: format!("Sandbox patch injection failed: {:?}", e),
+                };
+            }
+            Err(e) => {
+                return BranchOutcome {
+                    branch_id,
+                    plan: hydrated_plan,
+                    sandbox,
+                    passed: false,
+                    log: format!("Apply task panicked: {:?}", e),
+                };
+            }
         }
     }
 
@@ -377,16 +396,9 @@ pub fn merge_diagnostics(outcomes: &[BranchOutcome]) -> String {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-/// UTF-8 safe truncation — never panics on multibyte boundaries.
+/// UTF-8 safe truncation — delegates to the shared implementation.
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    crow_patch::safe_truncate(s, max_bytes)
 }
 
 fn empty_plan() -> IntentPlan {

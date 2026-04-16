@@ -106,14 +106,7 @@ impl ReqwestLlmClient {
 }
 
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    let mut safe_len = max_bytes;
-    while safe_len > 0 && !s.is_char_boundary(safe_len) {
-        safe_len -= 1;
-    }
-    &s[..safe_len]
+    crow_patch::safe_truncate(s, max_bytes)
 }
 
 impl ReqwestLlmClient {

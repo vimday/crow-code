@@ -633,7 +633,10 @@ async fn run_mcts_crucible(
                     }
                 }
             }
-            _ => unreachable!(),
+            crow_patch::AgentAction::SubmitPlan { .. } => {
+                // Already handled above via the `if let` guard; should never reach here.
+                unreachable!("SubmitPlan is intercepted before push_assistant")
+            }
         }
     };
 
