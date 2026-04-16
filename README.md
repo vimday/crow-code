@@ -61,6 +61,7 @@ cargo run -p crow-cli
 | 3 | Workspace-isolation materialization | ✅ |
 | 4 | ACI log truncation & bounded exec | ✅ |
 | 5 | Probe + Applier + God Pipeline | ✅ |
+| 6 | MCTS Pipeline & Cache Isolation | ✅ |
 
 ## Crate Overview
 

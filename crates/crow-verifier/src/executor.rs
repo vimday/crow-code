@@ -60,6 +60,14 @@ fn normalize_path(path: &Path) -> PathBuf {
     components.iter().collect()
 }
 
+/// Compute the path for the isolated CARGO_TARGET_DIR cache based on a key path.
+pub fn compute_target_dir_path(hash_source: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    hash_source.hash(&mut hasher);
+    let cache_hash = format!("{:016x}", hasher.finish());
+    std::env::temp_dir().join(format!("crow_target_{}", cache_hash))
+}
+
 /// Execute a verification command async inside an isolated workspace context.
 ///
 /// `cache_root` optionally specifies a stable path to derive the build cache
@@ -135,10 +143,7 @@ pub async fn execute(
     // is stable across crucible retries so incremental builds are reused.
     let is_ephemeral = cache_root.is_none();
     let hash_source = cache_root.unwrap_or(sandbox_root);
-    let mut hasher = DefaultHasher::new();
-    hash_source.hash(&mut hasher);
-    let cache_hash = format!("{:016x}", hasher.finish());
-    let isolated_target = std::env::temp_dir().join(format!("crow_target_{}", cache_hash));
+    let isolated_target = compute_target_dir_path(hash_source);
     let _ = std::fs::create_dir_all(&isolated_target);
     cmd.env("CARGO_TARGET_DIR", &isolated_target);
 

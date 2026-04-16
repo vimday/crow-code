@@ -122,9 +122,7 @@ pub async fn explore_round(
         let cmd = verify_command.clone();
         let plan = baseline_plan;
 
-        join_set.spawn(async move {
-            run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd).await
-        });
+        join_set.spawn(async move { run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd).await });
     }
 
     // Branches 1..N: generate fresh plans with temperature.
@@ -137,7 +135,16 @@ pub async fn explore_round(
         let temperature = config.temperature;
 
         join_set.spawn(async move {
-            run_branch(branch_id, &comp, &msgs, temperature, &frozen, &mat_cfg, &cmd).await
+            run_branch(
+                branch_id,
+                &comp,
+                &msgs,
+                temperature,
+                &frozen,
+                &mat_cfg,
+                &cmd,
+            )
+            .await
         });
     }
 
@@ -153,7 +160,10 @@ pub async fn explore_round(
                 if is_winner {
                     let remaining = join_set.len();
                     if remaining > 0 {
-                        println!("    ⚡ Early termination: aborting {} remaining branch(es)", remaining);
+                        println!(
+                            "    ⚡ Early termination: aborting {} remaining branch(es)",
+                            remaining
+                        );
                         join_set.abort_all();
                     }
                     break;
@@ -189,7 +199,10 @@ async fn run_branch(
     };
 
     // LLM generate with temperature for diversity.
-    let action = match compiler.compile_action_with_temperature(messages, temperature).await {
+    let action = match compiler
+        .compile_action_with_temperature(messages, temperature)
+        .await
+    {
         Ok(a) => a,
         Err(e) => {
             return BranchOutcome {
@@ -214,13 +227,22 @@ async fn run_branch(
             };
         }
     };
-    println!("    Branch {}: LLM completed in {:.1}s", branch_id, branch_start.elapsed().as_secs_f64());
+    println!(
+        "    Branch {}: LLM completed in {:.1}s",
+        branch_id,
+        branch_start.elapsed().as_secs_f64()
+    );
 
     let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await;
-    println!("    Branch {}: total {:.1}s — {}",
+    println!(
+        "    Branch {}: total {:.1}s — {}",
         branch_id,
         branch_start.elapsed().as_secs_f64(),
-        if outcome.passed { "✅ PASSED" } else { "❌ FAILED" }
+        if outcome.passed {
+            "✅ PASSED"
+        } else {
+            "❌ FAILED"
+        }
     );
     outcome
 }
@@ -240,15 +262,55 @@ async fn run_branch_with_plan(
     };
 
     let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await;
-    println!("    Branch {}: total {:.1}s — {}",
+    println!(
+        "    Branch {}: total {:.1}s — {}",
         branch_id,
         branch_start.elapsed().as_secs_f64(),
-        if outcome.passed { "✅ PASSED" } else { "❌ FAILED" }
+        if outcome.passed {
+            "✅ PASSED"
+        } else {
+            "❌ FAILED"
+        }
     );
     outcome
 }
 
 // ─── Shared Pipeline Stages ─────────────────────────────────────────
+
+/// Clone the target cache directory to avoid lock contention between parallel branches.
+async fn clone_cache_dir(src: &Path, dst: &Path) {
+    if !src.exists() {
+        return;
+    }
+
+    if dst.exists() {
+        let _ = tokio::fs::remove_dir_all(dst).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Try `cp -cR` for fast APFS clone
+        let status = tokio::process::Command::new("cp")
+            .arg("-cR")
+            .arg(src)
+            .arg(dst)
+            .status()
+            .await;
+        if let Ok(st) = status {
+            if st.success() {
+                return;
+            }
+        }
+    }
+
+    // Fallback: standard recursive copy.
+    let _ = tokio::process::Command::new("cp")
+        .arg("-a")
+        .arg(src)
+        .arg(dst)
+        .status()
+        .await;
+}
 
 /// Materialize a fresh sandbox. Returns Ok(sandbox) or Err(BranchOutcome).
 async fn materialize_sandbox(
@@ -347,10 +409,17 @@ async fn evaluate_plan(
         }
     }
 
+    // NEW: Branch specific cache copying
+    // Clone the `frozen_root`'s baseline cache into the `sandbox.path()`'s unique cache
+    // to avoid Cargo lock contention during parallel evaluation!
+    let baseline_cache = crow_verifier::executor::compute_target_dir_path(frozen_root);
+    let branch_cache = crow_verifier::executor::compute_target_dir_path(sandbox.path());
+    clone_cache_dir(&baseline_cache, &branch_cache).await;
+
     // Preflight cargo check
     let preflight_result = crow_verifier::preflight::cargo_check_preflight(
         sandbox.path(),
-        Some(frozen_root),
+        Some(sandbox.path()), // Use branch cache!
         std::time::Duration::from_secs(30),
     )
     .await;
@@ -377,7 +446,7 @@ async fn evaluate_plan(
         verify_command,
         &exec_config,
         &crow_verifier::types::AciConfig::compact(),
-        Some(frozen_root),
+        Some(sandbox.path()), // Use branch cache!
     )
     .await;
 

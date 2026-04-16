@@ -181,7 +181,15 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         // in every branch hits a cold cache (30-60s); with it, each
         // branch only incrementally recompiles its patched crate (~5s).
         warm_build_cache(&frozen_root, &candidate.command).await;
-        return run_mcts_crucible(&mcts_config, &profile, &candidate, &frozen_root, &compiler, &mut messages).await;
+        return run_mcts_crucible(
+            &mcts_config,
+            &profile,
+            &candidate,
+            &frozen_root,
+            &compiler,
+            &mut messages,
+        )
+        .await;
     }
 
     for crucible_attempt in 1..=3 {
@@ -547,10 +555,7 @@ async fn warm_build_cache(
     println!("\n[4.5/6] Pre-warming build cache for MCTS...");
     let start = Instant::now();
 
-    let cmd = crow_probe::VerificationCommand::new(
-        "cargo",
-        vec!["check", "--color=never"],
-    );
+    let cmd = crow_probe::VerificationCommand::new("cargo", vec!["check", "--color=never"]);
 
     let exec_config = crow_verifier::ExecutionConfig {
         timeout: std::time::Duration::from_secs(120),
@@ -604,16 +609,24 @@ async fn run_mcts_crucible(
     const MAX_EPISTEMIC_STEPS: usize = 7;
     const MAX_FILE_BYTES: u64 = 50 * 1024;
     const MAX_FILE_LINES: usize = 500;
-    
+
     let mut epistemic_step = 0;
     let baseline_plan = loop {
         epistemic_step += 1;
         if epistemic_step > MAX_EPISTEMIC_STEPS {
-            anyhow::bail!("Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.", MAX_EPISTEMIC_STEPS);
+            anyhow::bail!(
+                "Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.",
+                MAX_EPISTEMIC_STEPS
+            );
         }
 
-        println!("  🧠 Epistemic Step {}/{} — Modulating Cognitive Request...", epistemic_step, MAX_EPISTEMIC_STEPS);
-        let action = compiler.compile_action(&messages.as_messages()).await
+        println!(
+            "  🧠 Epistemic Step {}/{} — Modulating Cognitive Request...",
+            epistemic_step, MAX_EPISTEMIC_STEPS
+        );
+        let action = compiler
+            .compile_action(&messages.as_messages())
+            .await
             .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
         if let crow_patch::AgentAction::SubmitPlan { plan } = action {
@@ -637,8 +650,13 @@ async fn run_mcts_crucible(
                     let content = match std::fs::File::open(&abs_path) {
                         Ok(file) => {
                             let reader = BufReader::new(file);
-                            let lines: Vec<String> = reader.lines().map_while(Result::ok).take(MAX_FILE_LINES).collect();
-                            let was_truncated = file_size > MAX_FILE_BYTES || lines.len() >= MAX_FILE_LINES;
+                            let lines: Vec<String> = reader
+                                .lines()
+                                .map_while(Result::ok)
+                                .take(MAX_FILE_LINES)
+                                .collect();
+                            let was_truncated =
+                                file_size > MAX_FILE_BYTES || lines.len() >= MAX_FILE_LINES;
                             let text = lines.join("\n");
                             if was_truncated {
                                 format!("{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]", text, file_size, lines.len())
@@ -651,8 +669,10 @@ async fn run_mcts_crucible(
 
                     file_contents.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
                 }
-                file_contents.push_str("Please proceed with your task, or read more files if necessary.");
-                let path_strings: Vec<String> = paths.iter().map(|s| s.as_str().to_string()).collect();
+                file_contents
+                    .push_str("Please proceed with your task, or read more files if necessary.");
+                let path_strings: Vec<String> =
+                    paths.iter().map(|s| s.as_str().to_string()).collect();
                 messages.push_file_read(&path_strings, file_contents);
             }
             crow_patch::AgentAction::Recon { tool, rationale } => {
@@ -661,26 +681,91 @@ async fn run_mcts_crucible(
 
                 use crow_patch::ReconAction;
                 let (program, args, description) = match &tool {
-                    ReconAction::ListDir { path } => ("ls".to_string(), vec!["-la".to_string(), "--".to_string(), path.as_str().to_string()], format!("ls -la -- {}", path.as_str())),
-                    ReconAction::Search { pattern, path, glob } => {
+                    ReconAction::ListDir { path } => (
+                        "ls".to_string(),
+                        vec![
+                            "-la".to_string(),
+                            "--".to_string(),
+                            path.as_str().to_string(),
+                        ],
+                        format!("ls -la -- {}", path.as_str()),
+                    ),
+                    ReconAction::Search {
+                        pattern,
+                        path,
+                        glob,
+                    } => {
                         let mut a = vec!["-rn".to_string(), "-e".to_string(), pattern.clone()];
-                        if let Some(g) = glob { a.push("-g".to_string()); a.push(g.clone()); }
+                        if let Some(g) = glob {
+                            a.push("-g".to_string());
+                            a.push(g.clone());
+                        }
                         a.push("--".to_string());
-                        if let Some(p) = path { a.push(p.as_str().to_string()); } else { a.push(".".to_string()); }
-                        ("rg".to_string(), a, format!("rg -rn -e '{}' {}", pattern, path.as_ref().map(|p| p.as_str()).unwrap_or(".")))
-                    },
-                    ReconAction::FileInfo { path } => ("file".to_string(), vec!["--".to_string(), path.as_str().to_string()], format!("file -- {}", path.as_str())),
-                    ReconAction::WordCount { path } => ("wc".to_string(), vec!["-l".to_string(), "-c".to_string(), "--".to_string(), path.as_str().to_string()], format!("wc -lc -- {}", path.as_str())),
+                        if let Some(p) = path {
+                            a.push(p.as_str().to_string());
+                        } else {
+                            a.push(".".to_string());
+                        }
+                        (
+                            "rg".to_string(),
+                            a,
+                            format!(
+                                "rg -rn -e '{}' {}",
+                                pattern,
+                                path.as_ref().map(|p| p.as_str()).unwrap_or(".")
+                            ),
+                        )
+                    }
+                    ReconAction::FileInfo { path } => (
+                        "file".to_string(),
+                        vec!["--".to_string(), path.as_str().to_string()],
+                        format!("file -- {}", path.as_str()),
+                    ),
+                    ReconAction::WordCount { path } => (
+                        "wc".to_string(),
+                        vec![
+                            "-l".to_string(),
+                            "-c".to_string(),
+                            "--".to_string(),
+                            path.as_str().to_string(),
+                        ],
+                        format!("wc -lc -- {}", path.as_str()),
+                    ),
                     ReconAction::DirTree { path, max_depth } => {
-                        let depth_str = max_depth.map(|d| d.to_string()).unwrap_or_else(|| "3".to_string());
-                        ("tree".to_string(), vec!["-L".to_string(), depth_str.clone(), "--".to_string(), path.as_str().to_string()], format!("tree -L {} -- {}", depth_str, path.as_str()))
-                    },
+                        let depth_str = max_depth
+                            .map(|d| d.to_string())
+                            .unwrap_or_else(|| "3".to_string());
+                        (
+                            "tree".to_string(),
+                            vec![
+                                "-L".to_string(),
+                                depth_str.clone(),
+                                "--".to_string(),
+                                path.as_str().to_string(),
+                            ],
+                            format!("tree -L {} -- {}", depth_str, path.as_str()),
+                        )
+                    }
                 };
 
-                let v_cmd = crow_probe::VerificationCommand { program: program.clone(), args, cwd: None };
-                let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
+                let v_cmd = crow_probe::VerificationCommand {
+                    program: program.clone(),
+                    args,
+                    cwd: None,
+                };
+                let exec_config = crow_verifier::ExecutionConfig {
+                    timeout: std::time::Duration::from_secs(10),
+                    max_output_bytes: 512 * 1024,
+                };
 
-                let result = crow_verifier::executor::execute(frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await;
+                let result = crow_verifier::executor::execute(
+                    frozen_root,
+                    &v_cmd,
+                    &exec_config,
+                    &crow_verifier::types::AciConfig::compact(),
+                    None,
+                )
+                .await;
 
                 match result {
                     Ok(res) => {
@@ -691,10 +776,17 @@ async fn run_mcts_crucible(
                             ReconAction::WordCount { .. } => "word_count",
                             ReconAction::DirTree { .. } => "dir_tree",
                         };
-                        messages.push_recon_result(tool_name, &description, &res.test_run.truncated_log);
+                        messages.push_recon_result(
+                            tool_name,
+                            &description,
+                            &res.test_run.truncated_log,
+                        );
                     }
                     Err(e) => {
-                        messages.push_user(format!("[RECON ERROR]\nFailed to execute `{}`: {:?}", program, e));
+                        messages.push_user(format!(
+                            "[RECON ERROR]\nFailed to execute `{}`: {:?}",
+                            program, e
+                        ));
                     }
                 }
             }
@@ -713,12 +805,15 @@ async fn run_mcts_crucible(
         allow_hardlinks: false,
     };
 
-    println!("\n[6/6] Entering MCTS Parallel Crucible ({} branches, {} max rounds)", mcts_config.branch_factor, mcts_config.max_rounds);
+    println!(
+        "\n[6/6] Entering MCTS Parallel Crucible ({} branches, {} max rounds)",
+        mcts_config.branch_factor, mcts_config.max_rounds
+    );
     let mut current_baseline = baseline_plan;
 
     for mcts_round in 1..=mcts_config.max_rounds {
         println!("▶️ MCTS Round {}/{}", mcts_round, mcts_config.max_rounds);
-        
+
         let mut outcomes = crate::mcts::explore_round(
             mcts_config,
             compiler,
@@ -727,10 +822,14 @@ async fn run_mcts_crucible(
             frozen_root,
             &mat_config,
             &candidate.command,
-        ).await;
+        )
+        .await;
 
         if let Some(winner) = crate::mcts::select_winner(&mut outcomes) {
-            println!("\n[🎉] MCTS Branch {} passed on round {}!", winner.branch_id, mcts_round);
+            println!(
+                "\n[🎉] MCTS Branch {} passed on round {}!",
+                winner.branch_id, mcts_round
+            );
 
             // Render the diff so the user sees what changed
             println!("\n─── Winning Patch (Branch {}) ───", winner.branch_id);
@@ -746,7 +845,10 @@ async fn run_mcts_crucible(
         }
 
         // All branches failed. Feed diagnostics back and re-derive baseline.
-        println!("\n[❗] MCTS Round {} failed! Feeding diagnostics back to LLM...", mcts_round);
+        println!(
+            "\n[❗] MCTS Round {} failed! Feeding diagnostics back to LLM...",
+            mcts_round
+        );
         let merged = crate::mcts::merge_diagnostics(&outcomes);
         messages.push_verifier_result("MCTS_AllBranchesFailed", &merged);
 
@@ -772,12 +874,18 @@ async fn run_mcts_crucible(
                     );
                 }
                 Err(e) => {
-                    eprintln!("    ⚠️  Baseline re-derivation failed: {:?} — reusing previous", e);
+                    eprintln!(
+                        "    ⚠️  Baseline re-derivation failed: {:?} — reusing previous",
+                        e
+                    );
                 }
             }
         }
     }
 
-    println!("\n[❌] Outputting final failure after {} MCTS rounds.", mcts_config.max_rounds);
+    println!(
+        "\n[❌] Outputting final failure after {} MCTS rounds.",
+        mcts_config.max_rounds
+    );
     Ok(())
 }
