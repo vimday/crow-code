@@ -176,6 +176,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 mcts_config.branch_factor
             );
         }
+        // Pre-warm the build cache so all MCTS branches start with
+        // compiled dependencies. Without this, the first cargo check
+        // in every branch hits a cold cache (30-60s); with it, each
+        // branch only incrementally recompiles its patched crate (~5s).
+        warm_build_cache(&frozen_root, &candidate.command).await;
         return run_mcts_crucible(&mcts_config, &profile, &candidate, &frozen_root, &compiler, &mut messages).await;
     }
 
@@ -524,6 +529,66 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
     drop(sandbox);
     Ok(())
+}
+
+/// Pre-warm the Cargo build cache by running `cargo check` on the frozen
+/// sandbox. This populates the `CARGO_TARGET_DIR` (keyed to `frozen_root`)
+/// with all dependency artifacts so MCTS branches only need incremental
+/// recompilation of the patched crate(s).
+///
+/// Failure is non-fatal: if the warm-up fails (e.g. the project doesn't
+/// compile in its current state), branches will simply cold-build.
+async fn warm_build_cache(
+    frozen_root: &std::path::Path,
+    _verify_command: &crow_probe::VerificationCommand,
+) {
+    use std::time::Instant;
+
+    println!("\n[4.5/6] Pre-warming build cache for MCTS...");
+    let start = Instant::now();
+
+    let cmd = crow_probe::VerificationCommand::new(
+        "cargo",
+        vec!["check", "--color=never"],
+    );
+
+    let exec_config = crow_verifier::ExecutionConfig {
+        timeout: std::time::Duration::from_secs(120),
+        max_output_bytes: 1024 * 1024,
+    };
+    let aci_config = crow_verifier::types::AciConfig::compact();
+
+    match crow_verifier::executor::execute(
+        frozen_root,
+        &cmd,
+        &exec_config,
+        &aci_config,
+        Some(frozen_root), // stable cache key
+    )
+    .await
+    {
+        Ok(result) => {
+            let elapsed = start.elapsed();
+            if result.exit_code == Some(0) {
+                println!(
+                    "    ✅ Build cache warmed in {:.1}s — MCTS branches will use incremental compilation",
+                    elapsed.as_secs_f64()
+                );
+            } else {
+                println!(
+                    "    ⚠️  Warm-up cargo check failed (exit={:?}) in {:.1}s — branches will cold-build",
+                    result.exit_code,
+                    elapsed.as_secs_f64()
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "    ⚠️  Build cache warm-up failed: {:?} — continuing without cache",
+                e
+            );
+        }
+    }
 }
 
 async fn run_mcts_crucible(
