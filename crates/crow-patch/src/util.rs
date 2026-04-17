@@ -15,6 +15,18 @@ pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Compute a hex-encoded SHA-256 digest of the given bytes.
+///
+/// This is the **single source of truth** for content hashing across all
+/// crow crates. Both the hydrator (precondition injection) and the applier
+/// (precondition verification) must use this function to guarantee identical
+/// outputs.
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(data);
+    hex::encode(hash)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

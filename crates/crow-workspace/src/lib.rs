@@ -1,7 +1,9 @@
-//! crow-workspace: Event-sourcing log and O(1) snapshot state machine.
+//! crow-workspace: Plan hydration and sandbox mutation applier.
 //!
-//! Maintains the canonical event ledger for all workspace mutations.
-//! Supports checkpointing, compaction, and deterministic replay.
+//! Bridges the gap between the LLM's intent (`crow-patch::IntentPlan`)
+//! and physical filesystem mutations inside a materialized sandbox.
+//! The hydrator injects ground-truth preconditions; the applier executes
+//! edits with full precondition enforcement and drift-tolerant hunk matching.
 
 pub mod applier;
 pub mod hydrator;

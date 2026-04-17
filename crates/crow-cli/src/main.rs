@@ -117,7 +117,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     };
     let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config))
         .await
-        .unwrap()
+        .context("Materialization task panicked")?
         .context("Failed to materialize frozen sandbox")?;
     let frozen_root = sandbox.path().to_path_buf();
     println!(
@@ -170,9 +170,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         // economically viable when prompt caching is active (~90% input
         // cost reduction). Enforce this as a hard gate, not a comment.
         if !cfg.llm.prompt_caching {
-            anyhow::bail!(
-                "MCTS parallel mode (CROW_MCTS_BRANCHES={}) requires prompt caching. \
-                 Set CROW_PROMPT_CACHE=1 or prompt_caching=true in .crow/config.json.",
+            println!(
+                "    ⚠️  Warning: MCTS parallel mode (CROW_MCTS_BRANCHES={}) is running without prompt_caching enabled. \
+                 This may be expensive on providers that bill for repetitive input tokens. \
+                 Set CROW_PROMPT_CACHE=1 or prompt_caching=true in .crow/config.json if using Anthropic models.",
                 mcts_config.branch_factor
             );
         }
@@ -192,8 +193,18 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         .await;
     }
 
-    for crucible_attempt in 1..=3 {
-        println!("\n▶️ Crucible Attempt {}/3", crucible_attempt);
+    let mut total_attempts = 0;
+    let mut verification_runs = 0;
+    let max_total_attempts = 10;
+    let mut success = false;
+
+    while verification_runs < 3 && total_attempts < max_total_attempts {
+        total_attempts += 1;
+        println!(
+            "\n▶️ Crucible Epoch {} (Verification Run {}/3)",
+            total_attempts,
+            verification_runs + 1
+        );
 
         let compiled_plan =
             epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root).await?;
@@ -201,10 +212,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         // Re-materialize from the FROZEN baseline, not the live workspace.
         // This ensures every crucible attempt starts from the same immutable
         // snapshot, even if the live workspace changes between attempts.
-        println!(
-            "\n[5/6] Re-materializing fresh sandbox for attempt {} (from frozen baseline)...",
-            crucible_attempt
-        );
+        println!("\n[5/6] Re-materializing fresh sandbox (from frozen baseline)...");
         let attempt_mat_config = MaterializeConfig {
             source: frozen_root.clone(),
             artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
@@ -213,7 +221,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         };
         let attempt_sandbox = tokio::task::spawn_blocking(move || materialize(&attempt_mat_config))
             .await
-            .unwrap()
+            .context("Materialization task panicked")?
             .context("Failed to re-materialize attempt sandbox")?;
         println!(
             "    🛡️  Fresh attempt sandbox at: {}",
@@ -226,16 +234,18 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             PlanHydrator::hydrate(&plan_clone, &attempt_sandbox_path)
         })
         .await
-        .unwrap()
         {
-            Ok(p) => p,
-            Err(e) => {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
                 println!("    ❌ Hydration failed: {:?}", e);
                 messages.push_user(format!(
                         "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
                         e
                     ));
                 continue;
+            }
+            Err(e) => {
+                anyhow::bail!("Hydration task panicked: {:?}", e);
             }
         };
 
@@ -255,7 +265,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
             })
             .await
-            .unwrap()
+            .context("Apply task panicked")?
             .context("Failed to apply plan to sandbox")?;
         }
         println!("    💉 Sandbox injection successful!");
@@ -322,17 +332,20 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         .await
         .context("Verification execution failed")?;
 
+        verification_runs += 1;
+
         let outcome = &result.test_run.outcome;
         println!("\n╔══════════════════════════════════════╗");
         println!("║  Dry-Run Verdict: {:?}", outcome);
         println!("╚══════════════════════════════════════╝");
         println!("Evidence:\n{}", result.test_run.truncated_log);
 
-        if result.test_run.outcome == crow_evidence::TestOutcome::Passed {
+        if outcome == &crow_evidence::TestOutcome::Passed {
             println!(
-                "\n[🎉] Autonomous execution successful on attempt {}!",
-                crucible_attempt
+                "\n[🎉] Autonomous execution successful on verification run {}!",
+                verification_runs
             );
+            success = true;
             break;
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
@@ -345,6 +358,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     }
 
     drop(sandbox);
+
+    if !success {
+        anyhow::bail!("All crucible attempts failed to pass verification.");
+    }
+
     Ok(())
 }
 
@@ -415,8 +433,7 @@ async fn run_mcts_crucible(
 ) -> Result<()> {
     // 1. Initial Epistemic Loop (Serial Recon)
     println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
-    let baseline_plan =
-        epistemic::run_epistemic_loop(compiler, messages, frozen_root).await?;
+    let baseline_plan = epistemic::run_epistemic_loop(compiler, messages, frozen_root).await?;
     println!("    Seeding baseline plan into MCTS branch 0...");
 
     // 2. MCTS Parallel Explore Rounds
@@ -505,9 +522,8 @@ async fn run_mcts_crucible(
         }
     }
 
-    println!(
-        "\n[❌] Outputting final failure after {} MCTS rounds.",
+    anyhow::bail!(
+        "MCTS exploration exhausted all {} rounds without finding a passing plan.",
         mcts_config.max_rounds
     );
-    Ok(())
 }

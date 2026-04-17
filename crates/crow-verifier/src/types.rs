@@ -84,11 +84,13 @@ pub struct VerificationResult {
     pub test_run: TestRun,
     /// Process exit code. `None` if killed by timeout or signal.
     pub exit_code: Option<i32>,
-    /// Number of bytes actually retained within the buffer cap.
+    /// Number of bytes captured from stdout+stderr combined.
+    ///
+    /// When the byte budget is hit, this equals `max_output_bytes` and
+    /// `was_truncated` is true. The actual total emitted by the child
+    /// is unknown (we stop reading to bound memory).
     pub captured_output_bytes: usize,
-    /// Number of raw output bytes emitted by the child process before any cap.
-    pub emitted_byte_count: usize,
-    /// Whether the output was truncated by ACI.
+    /// Whether the output was truncated by budget cap, timeout, or ACI.
     pub was_truncated: bool,
 }
 

@@ -299,7 +299,6 @@ pub async fn execute(
         test_run,
         exit_code,
         captured_output_bytes: raw_bytes,
-        emitted_byte_count: raw_bytes,
         was_truncated: aci_result.was_truncated || hit_cap || timed_out,
     })
 }

@@ -20,18 +20,11 @@ mod serde_duration {
 
 // ─── Confidence ─────────────────────────────────────────────────────
 
-/// Confidence tier for intelligence-derived conclusions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Confidence {
-    /// No signal at all (e.g. language not recognized).
-    None,
-    /// Heuristic guess (e.g. grep-based).
-    Low,
-    /// Partial signal (e.g. Tree-sitter parse without LSP).
-    Medium,
-    /// Strong signal (e.g. LSP diagnostic + full parse).
-    High,
-}
+/// Re-export the canonical `Confidence` from `crow-patch`.
+///
+/// Previously duplicated here; now unified to prevent type-incompatibility
+/// bugs when evidence needs to reference patch-level confidence.
+pub use crow_patch::Confidence;
 
 // ─── Test Runs ──────────────────────────────────────────────────────
 

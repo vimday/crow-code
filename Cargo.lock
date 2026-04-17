@@ -203,6 +203,7 @@ dependencies = [
 name = "crow-evidence"
 version = "0.1.0"
 dependencies = [
+ "crow-patch",
  "serde",
  "serde_json",
 ]
@@ -229,9 +230,11 @@ dependencies = [
 name = "crow-patch"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

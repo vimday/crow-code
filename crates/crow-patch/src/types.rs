@@ -85,12 +85,18 @@ impl std::error::Error for PathError {}
 pub struct SnapshotId(pub String);
 
 /// Confidence level attached to an intent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// Variants are ordered `None < Low < Medium < High` so that derived
+/// `PartialOrd`/`Ord` produce semantically correct comparisons.
+/// This is the **canonical definition** — `crow-evidence` re-exports it.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 pub enum Confidence {
-    High,
-    Medium,
-    Low,
     None,
+    Low,
+    Medium,
+    High,
 }
 
 // ─── Preconditions ──────────────────────────────────────────────────

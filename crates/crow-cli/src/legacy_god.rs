@@ -42,7 +42,10 @@ pub async fn run_god_pipeline() -> Result<()> {
         allow_hardlinks: false,
     };
 
-    let sandbox = materialize(&config).context("Failed to materialize sandbox")?;
+    let sandbox = tokio::task::spawn_blocking(move || materialize(&config))
+        .await
+        .context("Materialization task panicked")?
+        .context("Failed to materialize sandbox")?;
     println!(
         "    🛡️  Sandbox established at: {}",
         sandbox.path().display()

@@ -80,7 +80,12 @@ impl RepoWalker {
                 }
 
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if !["rs", "ts", "js", "jsx", "tsx"].contains(&ext) {
+                if ![
+                    "rs", "ts", "js", "jsx", "tsx", "toml", "json", "yaml", "yml", "md", "sh",
+                    "py", "go", "c", "cpp", "h", "txt",
+                ]
+                .contains(&ext)
+                {
                     continue;
                 }
 

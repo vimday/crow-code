@@ -1,5 +1,4 @@
 use crow_patch::{ConflictStrategy, EditOp, FilePrecondition, IntentPlan};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -106,10 +105,7 @@ impl PlanHydrator {
     fn compute_file_state(path: &Path) -> Result<(String, usize), String> {
         let content = fs::read(path).map_err(|e| e.to_string())?;
 
-        let mut hasher = Sha256::new();
-        hasher.update(&content);
-        let hash = hex::encode(hasher.finalize());
-
+        let hash = crow_patch::sha256_hex(&content);
         let lines = std::str::from_utf8(&content).unwrap_or("").lines().count();
 
         Ok((hash, lines))

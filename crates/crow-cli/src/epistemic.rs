@@ -103,10 +103,7 @@ pub async fn run_epistemic_loop(
 ///
 /// Each file is truncated at `MAX_FILE_BYTES` / `MAX_FILE_LINES` (whichever
 /// triggers first). A system warning is appended if truncation occurred.
-fn read_files_to_context(
-    paths: &[crow_patch::WorkspacePath],
-    frozen_root: &Path,
-) -> String {
+fn read_files_to_context(paths: &[crow_patch::WorkspacePath], frozen_root: &Path) -> String {
     use std::io::{BufRead, BufReader};
 
     let mut file_contents = String::from("[READ FILES RESULT]\n");
@@ -118,20 +115,45 @@ fn read_files_to_context(
         let content = match std::fs::File::open(&abs_path) {
             Ok(file) => {
                 let reader = BufReader::new(file);
-                let lines: Vec<String> = reader
-                    .lines()
-                    .map_while(Result::ok)
-                    .take(MAX_FILE_LINES)
-                    .collect();
-                let was_truncated = file_size > MAX_FILE_BYTES || lines.len() >= MAX_FILE_LINES;
-                let text = lines.join("\n");
+                let mut text = String::new();
+                let mut lines_count = 0;
+                let mut bytes_read = 0;
+                let mut was_truncated = false;
+
+                for line_res in reader.lines() {
+                    match line_res {
+                        Ok(line) => {
+                            if bytes_read + line.len() > MAX_FILE_BYTES as usize {
+                                let allowed = (MAX_FILE_BYTES as usize).saturating_sub(bytes_read);
+                                text.push_str(crow_patch::util::safe_truncate(&line, allowed));
+                                was_truncated = true;
+                                lines_count += 1;
+                                break;
+                            }
+                            text.push_str(&line);
+                            text.push('\n');
+                            bytes_read += line.len() + 1;
+                            lines_count += 1;
+
+                            if lines_count >= MAX_FILE_LINES {
+                                // If the file has more data, mark it as truncated
+                                if file_size > bytes_read as u64 {
+                                    was_truncated = true;
+                                }
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
                 if was_truncated {
                     format!(
                         "{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]",
-                        text, file_size, lines.len()
+                        text.trim_end(), file_size, lines_count
                     )
                 } else {
-                    text
+                    text.trim_end().to_string()
                 }
             }
             Err(_) => "<file not found or unreadable>".into(),
@@ -148,11 +170,7 @@ fn read_files_to_context(
 
 /// Translate a `ReconAction` into a safe command invocation, execute it
 /// against the frozen sandbox, and push the result into the conversation.
-async fn execute_recon(
-    tool: &ReconAction,
-    frozen_root: &Path,
-    messages: &mut ConversationManager,
-) {
+async fn execute_recon(tool: &ReconAction, frozen_root: &Path, messages: &mut ConversationManager) {
     let (program, args, description) = build_recon_command(tool);
 
     let v_cmd = VerificationCommand {

@@ -20,13 +20,14 @@ constitution.
 ### Crate Topology (dependency flows downward only)
 
 ```
-Layer 0 — Currencies (zero inter-deps, zero external deps)
-  crow-patch       Unified patch contract (EditOp, IntentPlan)
+Layer 0 — Currencies (std + serde; no runtime deps)
+  crow-patch       Unified patch contract (EditOp, IntentPlan, Confidence)
   crow-evidence    Multidimensional verification evidence (EvidenceMatrix)
+                   Re-exports crow-patch::Confidence as canonical type.
   crow-probe       Repository recon radar (ProjectProfile)
 
 Layer 1 — Runtime
-  crow-workspace   Event-sourcing log & snapshot state machine
+  crow-workspace   Plan hydration & sandbox mutation applier
   crow-materialize Workspace-isolation materialization (CoW / copy)
 
 Layer 2 — Crucible
@@ -67,7 +68,7 @@ cargo build -p crow-cli
 
 ## Code Conventions
 
-- **No external dependencies in Currency crates** (Layer 0). They use only `std`.
+- **Currency crates (L0) use only `std` + `serde` + `schemars`.** No runtime dependencies (HTTP, async, filesystem-heavy crates).
 - **Every public type must derive** at minimum: `Debug, Clone, PartialEq, Eq`.
 - **Ordered enums** (like `Confidence`, `LanguageTier`) must also derive `PartialOrd, Ord`.
 - **Tests live in `#[cfg(test)] mod tests`** inside each types module. No separate test files until integration tests are needed.
@@ -84,7 +85,8 @@ cargo build -p crow-cli
 ## Current Status
 
 - **Step 1** ✅ Workspace genesis — 10 crates, `cargo check` green.
-- **Step 2** ✅ Core data contracts — `crow-patch` (12 tests), `crow-evidence` (10 tests), `crow-probe` (7 tests).
-- **Step 3** ✅ `crow-materialize` — Workspace-isolation physical materialization (20 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
+- **Step 2** ✅ Core data contracts — `crow-patch` (24 tests), `crow-evidence` (10 tests), `crow-probe` (12 tests).
+- **Step 3** ✅ `crow-materialize` — Workspace-isolation physical materialization (21 tests). APFS clonefile, SafeCopy, HardlinkTree (opt-in only). Symlink boundary enforcement, SandboxGuard RAII.
 - **Step 4** ✅ `crow-verifier` — Workspace-isolated execution + ACI log truncation (20 tests). Direct exec (no shell), head+tail truncation, VerificationResult → EvidenceMatrix.
 - **Step 5** ✅ `crow-probe` scanner, `crow-workspace` applier, `crow-cli` God Pipeline.
+- **Step 6** ✅ MCTS Parallel Crucible & Cache Isolation. Epistemic loop, preflight compile checks, ConversationManager, build cache warm-up, early termination.

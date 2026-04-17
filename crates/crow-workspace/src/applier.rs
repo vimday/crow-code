@@ -40,12 +40,9 @@ impl ApplyError {
 
 // ─── SHA-256 Helper ─────────────────────────────────────────────────
 
-/// Compute a hex-encoded SHA-256 digest of the given bytes.
+/// Delegates to the canonical implementation in `crow_patch::sha256_hex`.
 fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(data);
-    // Encode as lowercase hex (64 chars for SHA-256)
-    hash.iter().map(|b| format!("{:02x}", b)).collect()
+    crow_patch::sha256_hex(data)
 }
 
 // ─── Precondition Verification ──────────────────────────────────────
