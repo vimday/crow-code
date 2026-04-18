@@ -218,11 +218,16 @@ impl ReqwestLlmClient {
                         Ok(text) => {
                             final_status = status.as_u16();
                             raw_text = text;
-                            
-                            if status.is_success() || ![429, 500, 502, 503, 529].contains(&final_status) {
+
+                            if status.is_success()
+                                || ![429, 500, 502, 503, 529].contains(&final_status)
+                            {
                                 break; // Not a transient error, move on
                             } else {
-                                println!("    ⚠️ API returned transient error ({}). Retrying...", final_status);
+                                println!(
+                                    "    ⚠️ API returned transient error ({}). Retrying...",
+                                    final_status
+                                );
                             }
                         }
                         Err(e) => {
@@ -244,7 +249,10 @@ impl ReqwestLlmClient {
                 } else {
                     return Err(BrainError::ApiError {
                         status: final_status,
-                        body: format!("Network/transient errors maxed out. Last content: {}", raw_text),
+                        body: format!(
+                            "Network/transient errors maxed out. Last content: {}",
+                            raw_text
+                        ),
                     });
                 }
             }

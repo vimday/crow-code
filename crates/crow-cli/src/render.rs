@@ -751,7 +751,8 @@ mod tests {
     #[test]
     fn renders_markdown_with_styling() {
         let r = TerminalRenderer::new();
-        let out = r.render_markdown("# Hello\n\nThis is **bold** and *italic*.\n\n- item\n\n`code`");
+        let out =
+            r.render_markdown("# Hello\n\nThis is **bold** and *italic*.\n\n- item\n\n`code`");
         assert!(out.contains("Hello"));
         assert!(out.contains("• item"));
         assert!(out.contains('\u{1b}')); // ANSI escape

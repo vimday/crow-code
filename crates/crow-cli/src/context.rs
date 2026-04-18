@@ -218,7 +218,7 @@ impl ConversationManager {
         // If the system prompt is just huge, compacting a 2-turn history won't help much!
         let hist_bytes = self.history_bytes();
         let turns = self.conversation.len();
-        
+
         hist_bytes > (self.max_bytes * 3) / 10 || turns > (self.max_history_turns * 8) / 10
     }
 

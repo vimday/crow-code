@@ -1,6 +1,11 @@
+//! Background memory consolidation for long-term intelligence.
+//!
+//! Provides the `AutoDream` background daemon for indexing, pruning,
+//! and consolidating ledger records into actionable `MemoryFragment`s.
+
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// The structure of a consolidated memory fragment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,10 +46,9 @@ impl<'a> AutoDream<'a> {
     /// Run the background dream daemon
     pub async fn execute_dream_cycle(&self, client: &dyn crate::LlmClient) -> Result<()> {
         println!("  🌙 [AutoDream] Initiating background memory consolidation...");
-        
+
         // 1. Orient: Find all sessions and ledgers for this workspace
-        // For demonstration, we simulate loading the ledger.
-        
+
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         use std::hash::{Hash, Hasher};
         self.workspace.to_string_lossy().hash(&mut hasher);
@@ -54,7 +58,10 @@ impl<'a> AutoDream<'a> {
             .or_else(|_| std::env::var("USERPROFILE"))
             .map(PathBuf::from)
             .context("Could not determine home directory")?;
-        let ledger_path = home.join(".crow").join("ledger").join(format!("{}.jsonl", hash));
+        let ledger_path = home
+            .join(".crow")
+            .join("ledger")
+            .join(format!("{}.jsonl", hash));
 
         if !ledger_path.exists() {
             println!("  🌙 [AutoDream] No recent memories to consolidate.");
@@ -66,7 +73,10 @@ impl<'a> AutoDream<'a> {
         let lines: Vec<&str> = ledger_content.lines().collect();
         let event_count = lines.len();
 
-        println!("  🌙 [AutoDream] Collected {} raw events from the ledger.", event_count);
+        println!(
+            "  🌙 [AutoDream] Collected {} raw events from the ledger.",
+            event_count
+        );
 
         if event_count < 10 {
             // Not enough to justify an LLM call yet.
@@ -76,32 +86,45 @@ impl<'a> AutoDream<'a> {
 
         // 3. Consolidate: Ask LLM to extract meta-knowledge
         println!("  🌙 [AutoDream] Extracting high-value architectural invariants from traces...");
-        
-        let prompt = format!("You are an AutoDream background worker running over `{}`. 
+
+        const PROMPT_TEMPLATE: &str = "\
+You are an AutoDream background worker running over `{workspace}`. 
 Your job is to read raw traces and extract domain invariants, traps to avoid, and structural constraints.
-Trace size: {} records. 
+Trace size: {event_count} records. 
 
 Please output a JSON array of `MemoryFragment` structured objects describing what was learned.
-Limit to 3 critical architectural or context insights.", self.workspace.display(), event_count);
+Limit to 3 critical architectural or context insights.";
+
+        let prompt = PROMPT_TEMPLATE
+            .replace("{workspace}", &self.workspace.display().to_string())
+            .replace("{event_count}", &event_count.to_string());
 
         let messages = vec![crate::compiler::ChatMessage::user(&prompt)];
-        
+
         match client.generate(&messages).await {
             Ok(response) => {
                 println!("  🌙 [AutoDream] Subconscious processing complete.");
-                
+
                 // 4. Prune / Store
                 let cleaned = crate::compiler::extract_json_block(&response);
                 match serde_json::from_str::<Vec<MemoryFragment>>(cleaned) {
                     Ok(fragments) => {
                         let validated = serde_json::to_string_pretty(&fragments)?;
-                        let fragment_path = self.memory_dir.join(format!("memory_{}.json", chrono::Utc::now().timestamp()));
+                        let fragment_path = self
+                            .memory_dir
+                            .join(format!("memory_{}.json", chrono::Utc::now().timestamp()));
                         std::fs::write(&fragment_path, validated)?;
-                        
-                        println!("  🌙 [AutoDream] Deep long-term memory written to: {}", fragment_path.display());
+
+                        println!(
+                            "  🌙 [AutoDream] Deep long-term memory written to: {}",
+                            fragment_path.display()
+                        );
                     }
                     Err(e) => {
-                        eprintln!("  🌙 [AutoDream] Discarded malformed memory fragment: {}", e);
+                        eprintln!(
+                            "  🌙 [AutoDream] Discarded malformed memory fragment: {}",
+                            e
+                        );
                     }
                 }
 

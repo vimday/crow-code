@@ -39,11 +39,14 @@ const MAX_EPISTEMIC_STEPS: usize = 30;
 /// `IntentPlan` when the LLM submits one.
 ///
 /// Used by both the serial crucible and MCTS pre-exploration.
+use crate::epistemic_ui::EpistemicObserver;
+
 pub async fn run_epistemic_loop(
     compiler: &IntentCompiler,
     messages: &mut ConversationManager,
     frozen_root: &Path,
     mcp_manager: Option<&crate::mcp::McpManager>,
+    observer: &mut dyn EpistemicObserver,
 ) -> Result<IntentPlan> {
     let mut epistemic_step = 0;
     // Track action signatures to detect duplicate recon loops.
@@ -59,30 +62,11 @@ pub async fn run_epistemic_loop(
             );
         }
 
-        let spinner = indicatif::ProgressBar::new_spinner();
-        spinner.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-                .template("{spinner:.cyan} {msg}")
-                .unwrap(),
-        );
-        spinner.set_message(format!(
-            "🧠 Epistemic Step {}/{} — Modulating Cognitive Request...",
-            epistemic_step, MAX_EPISTEMIC_STEPS
-        ));
-        
-        if console::Term::stdout().is_term() && std::env::var("CI").is_err() {
-            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-        }
+        observer.on_step(epistemic_step, MAX_EPISTEMIC_STEPS);
 
-        let action_result = compiler
-            .compile_action(&messages.as_messages())
-            .await;
-            
-        spinner.finish_and_clear();
-        
-        let action = action_result
-            .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
+        let action_result = compiler.compile_action(&messages.as_messages()).await;
+
+        let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
         // If it's a SubmitPlan, return immediately before pushing to history.
         if let AgentAction::SubmitPlan { plan } = action {
@@ -95,7 +79,10 @@ pub async fn run_epistemic_loop(
         if !seen_actions.insert(dedup_key) {
             consecutive_dupes += 1;
             if consecutive_dupes >= 2 {
-                println!("    ⚠️  Duplicate action detected ({} times). Nudging agent to submit plan...", consecutive_dupes + 1);
+                println!(
+                    "    ⚠️  Duplicate action detected ({} times). Nudging agent to submit plan...",
+                    consecutive_dupes + 1
+                );
                 messages.push_assistant(serde_json::to_string(&action)?);
                 messages.push_user(
                     "[SYSTEM: DUPLICATE ACTION DETECTED]\n\
@@ -233,7 +220,12 @@ async fn execute_recon(
     mcp_manager: Option<&crate::mcp::McpManager>,
 ) {
     // Intercept MCP calls and execute via the manager.
-    if let ReconAction::McpCall { server_name, tool_name, arguments } = tool {
+    if let ReconAction::McpCall {
+        server_name,
+        tool_name,
+        arguments,
+    } = tool
+    {
         if let Some(mcp) = mcp_manager {
             match mcp.call(server_name, tool_name, arguments.clone()).await {
                 Ok(res) => {
@@ -243,31 +235,44 @@ async fn execute_recon(
                         // Very naive formatter for now
                         format!("{:?}", res.content)
                     };
-                    messages.push_recon_result("mcp_call", &format!("{} / {}", server_name, tool_name), &formatted_res);
+                    messages.push_recon_result(
+                        "mcp_call",
+                        &format!("{} / {}", server_name, tool_name),
+                        &formatted_res,
+                    );
                 }
                 Err(e) => {
-                    messages.push_user(format!("[MCP ERROR]\nFailed to execute {}/{}: {:?}", server_name, tool_name, e));
+                    messages.push_user(format!(
+                        "[MCP ERROR]\nFailed to execute {}/{}: {:?}",
+                        server_name, tool_name, e
+                    ));
                 }
             }
         } else {
-            messages.push_user(format!("[MCP ERROR]\nMCP is not enabled or MCP manager unavailable, cannot call {}/{}", server_name, tool_name));
+            messages.push_user(format!(
+                "[MCP ERROR]\nMCP is not enabled or MCP manager unavailable, cannot call {}/{}",
+                server_name, tool_name
+            ));
         }
         return;
     }
 
     if let ReconAction::FetchUrl { url } = tool {
         let max_fetch_bytes = 1024 * 50; // max 50KB to protect context
-        
+
         let client_res = reqwest::Client::builder()
             .no_proxy()
             .timeout(std::time::Duration::from_secs(10))
             .user_agent("crow-code-agent/1.0")
             .build();
-            
+
         let client = match client_res {
             Ok(c) => c,
             Err(e) => {
-                messages.push_user(format!("[WEB FETCH ERROR]\nFailed to initialize HTTP client: {:?}", e));
+                messages.push_user(format!(
+                    "[WEB FETCH ERROR]\nFailed to initialize HTTP client: {:?}",
+                    e
+                ));
                 return;
             }
         };
@@ -276,7 +281,10 @@ async fn execute_recon(
             Ok(res) => {
                 let status = res.status();
                 if !status.is_success() {
-                    messages.push_user(format!("[WEB FETCH ERROR]\n{} returned HTTP {}", url, status));
+                    messages.push_user(format!(
+                        "[WEB FETCH ERROR]\n{} returned HTTP {}",
+                        url, status
+                    ));
                 } else {
                     if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE) {
                         let ct_str = ct.to_str().unwrap_or("");
@@ -290,20 +298,29 @@ async fn execute_recon(
                         Ok(mut text) => {
                             let truncated = if text.len() > max_fetch_bytes {
                                 text.truncate(max_fetch_bytes);
-                                format!("{}...\n\n[SYSTEM WARNING: Response truncated to 50KB]", text)
+                                format!(
+                                    "{}...\n\n[SYSTEM WARNING: Response truncated to 50KB]",
+                                    text
+                                )
                             } else {
                                 text
                             };
                             messages.push_recon_result("fetch_url", url, &truncated);
                         }
                         Err(e) => {
-                            messages.push_user(format!("[WEB FETCH ERROR]\nFailed to decode response from {}: {:?}", url, e));
+                            messages.push_user(format!(
+                                "[WEB FETCH ERROR]\nFailed to decode response from {}: {:?}",
+                                url, e
+                            ));
                         }
                     }
                 }
             }
             Err(e) => {
-                messages.push_user(format!("[WEB FETCH ERROR]\nFailed to fetch {}: {:?}", url, e));
+                messages.push_user(format!(
+                    "[WEB FETCH ERROR]\nFailed to fetch {}: {:?}",
+                    url, e
+                ));
             }
         }
         return;
@@ -418,10 +435,14 @@ fn build_recon_command(tool: &ReconAction) -> (String, Vec<String>, String) {
             )
         }
         ReconAction::McpCall { .. } => {
-            unreachable!("McpCall is intercepted and executed via mcp_manager before command building");
+            unreachable!(
+                "McpCall is intercepted and executed via mcp_manager before command building"
+            );
         }
         ReconAction::FetchUrl { .. } => {
-            unreachable!("FetchUrl is intercepted and executed via reqwest before command building");
+            unreachable!(
+                "FetchUrl is intercepted and executed via reqwest before command building"
+            );
         }
     }
 }

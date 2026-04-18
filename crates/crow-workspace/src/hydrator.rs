@@ -163,7 +163,8 @@ mod tests {
             hunks: vec![],
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).expect("Hydration must succeed");
+        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path())
+            .expect("Hydration must succeed");
 
         if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
             assert_ne!(preconditions.content_hash, "hallucinated");
@@ -183,7 +184,8 @@ mod tests {
             precondition: FilePrecondition::MustExist, // model guessed weak precondition
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
+        let hydrated =
+            PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Delete { precondition, .. } = &hydrated.operations[0] {
             match precondition {
@@ -208,7 +210,8 @@ mod tests {
             dest_precondition: FilePrecondition::MustExist,   // model guessed wrong
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
+        let hydrated =
+            PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Rename {
             source_precondition,
@@ -242,7 +245,8 @@ mod tests {
             dest_precondition: FilePrecondition::MustNotExist, // hallucinated — wrong!
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
+        let hydrated =
+            PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Rename {
             source_precondition,
@@ -278,7 +282,8 @@ mod tests {
             dest_precondition: FilePrecondition::MustExist, // hallucinated — wrong!
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
+        let hydrated =
+            PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Rename {
             dest_precondition, ..

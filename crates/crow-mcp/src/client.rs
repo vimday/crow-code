@@ -38,7 +38,7 @@ impl McpClient {
         };
 
         let params_json = serde_json::to_value(&params)?;
-        
+
         let response = self
             .transport
             .send_request("initialize", Some(params_json))
@@ -47,7 +47,7 @@ impl McpClient {
         let result = response
             .result
             .context("Missing result in initialize response")?;
-            
+
         let init_result: InitializeResult = serde_json::from_value(result)?;
 
         // Send the initialized notification
@@ -68,7 +68,7 @@ impl McpClient {
         let result = response
             .result
             .context("Missing result in tools/list response")?;
-            
+
         let tools_result: ListToolsResult = serde_json::from_value(result)?;
         Ok(tools_result)
     }

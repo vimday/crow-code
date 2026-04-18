@@ -12,8 +12,8 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
-use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::{io, path::PathBuf, time::Duration};
 
 use crow_workspace::ledger::{EventLedger, LedgerEvent};
@@ -46,7 +46,10 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."));
 
-        let ledger_path = home.join(".crow").join("ledger").join(format!("{}.jsonl", hash));
+        let ledger_path = home
+            .join(".crow")
+            .join("ledger")
+            .join(format!("{}.jsonl", hash));
         let memory_dir = home.join(".crow").join("memory").join(&hash);
 
         self.ledger_events.clear();
@@ -71,7 +74,7 @@ impl App {
 
 pub async fn run_dashboard(workspace: PathBuf) -> Result<()> {
     println!("Initializing Ratatui Dashboard...");
-    
+
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -120,26 +123,24 @@ fn ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(size);
 
     let header = Paragraph::new(format!(
         "🦅 Crow Code Dashboard | Workspace: {} | Press 'q' to quit",
         app.workspace.display()
     ))
-    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    .style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
     .block(Block::default().borders(Borders::ALL).title("Status"));
     f.render_widget(header, chunks[0]);
 
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
 
     // Format Ledger Events
@@ -150,31 +151,52 @@ fn ui(f: &mut Frame, app: &App) {
         .take(50)
         .map(|e| {
             let (label, color, ts) = match e {
-                LedgerEvent::SnapshotCreated { timestamp, .. } => ("SnapshotCreated", Color::Blue, timestamp),
-                LedgerEvent::PlanHydrated { timestamp, .. } => ("PlanHydrated", Color::Magenta, timestamp),
-                LedgerEvent::PreflightStarted { timestamp, .. } => ("PreflightStarted", Color::Yellow, timestamp),
-                LedgerEvent::PreflightTested { passed, timestamp, .. } => {
+                LedgerEvent::SnapshotCreated { timestamp, .. } => {
+                    ("SnapshotCreated", Color::Blue, timestamp)
+                }
+                LedgerEvent::PlanHydrated { timestamp, .. } => {
+                    ("PlanHydrated", Color::Magenta, timestamp)
+                }
+                LedgerEvent::PreflightStarted { timestamp, .. } => {
+                    ("PreflightStarted", Color::Yellow, timestamp)
+                }
+                LedgerEvent::PreflightTested {
+                    passed, timestamp, ..
+                } => {
                     if *passed {
                         ("PreflightTested (Pass)", Color::Green, timestamp)
                     } else {
                         ("PreflightTested (Fail)", Color::Red, timestamp)
                     }
                 }
-                LedgerEvent::PlanApplied { timestamp, .. } => ("PlanApplied", Color::Green, timestamp),
-                LedgerEvent::PlanRolledBack { timestamp, .. } => ("PlanRolledBack", Color::Red, timestamp),
+                LedgerEvent::PlanApplied { timestamp, .. } => {
+                    ("PlanApplied", Color::Green, timestamp)
+                }
+                LedgerEvent::PlanRolledBack { timestamp, .. } => {
+                    ("PlanRolledBack", Color::Red, timestamp)
+                }
             };
-            
+
             let time_str = ts.format("%H:%M:%S").to_string();
             let content = Line::from(vec![
-                Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::DarkGray)),
-                Span::styled(label, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("[{}] ", time_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    label,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
             ]);
             ListItem::new(content)
         })
         .collect();
 
-    let events_list = List::new(events)
-        .block(Block::default().borders(Borders::ALL).title("Event Ledger (Decisions & Rollbacks)"));
+    let events_list = List::new(events).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Event Ledger (Decisions & Rollbacks)"),
+    );
     f.render_widget(events_list, body_chunks[0]);
 
     // Format Memories
@@ -188,7 +210,10 @@ fn ui(f: &mut Frame, app: &App) {
         }
     }
 
-    let memory_widget = Paragraph::new(memory_text)
-        .block(Block::default().borders(Borders::ALL).title("AutoDream (Subconscious Fragments)"));
+    let memory_widget = Paragraph::new(memory_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("AutoDream (Subconscious Fragments)"),
+    );
     f.render_widget(memory_widget, body_chunks[1]);
 }

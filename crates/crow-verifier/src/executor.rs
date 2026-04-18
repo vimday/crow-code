@@ -135,16 +135,18 @@ pub async fn execute(
             cmd.env(var, val);
         }
     }
-    
-    // [Security] Explicitly re-route HOME and USER to the sandbox root 
+
+    // [Security] Explicitly re-route HOME and USER to the sandbox root
     // to prevent leakage of user credentials (e.g. ~/.aws, ~/.ssh).
     cmd.env("HOME", sandbox_root);
     cmd.env("USER", "crow-agent");
 
     // Rustup fallback: since we scrubbed HOME, rustup wrapper will fail unless it knows where its settings are
     if let Ok(real_home) = std::env::var("HOME") {
-        let rustup_home = std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{}/.rustup", real_home));
-        let cargo_home = std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{}/.cargo", real_home));
+        let rustup_home =
+            std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{}/.rustup", real_home));
+        let cargo_home =
+            std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{}/.cargo", real_home));
         cmd.env("RUSTUP_HOME", rustup_home);
         cmd.env("CARGO_HOME", cargo_home);
     }
@@ -274,11 +276,12 @@ pub async fn execute(
     let combined_str = String::from_utf8_lossy(&buf).to_string();
 
     // Semantic Phase: Try to extract errors gracefully so context isn't lost
-    let semantically_compressed = if command.program.contains("cargo") || command.program.contains("rustc") {
-        crate::semantic_compress::compress_rust_logs(&combined_str)
-    } else {
-        combined_str.clone()
-    };
+    let semantically_compressed =
+        if command.program.contains("cargo") || command.program.contains("rustc") {
+            crate::semantic_compress::compress_rust_logs(&combined_str)
+        } else {
+            combined_str.clone()
+        };
 
     // ACI truncation as a hard physical guard limit
     let aci_result = aci::truncate(&semantically_compressed, aci_config);

@@ -80,14 +80,14 @@ impl EventLedger {
     /// Append a new event to the ledger synchronously.
     pub fn append(&mut self, event: LedgerEvent) -> std::io::Result<()> {
         let serialized = serde_json::to_string(&event)?;
-        
+
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_path)?;
-            
+
         writeln!(file, "{}", serialized)?;
-        
+
         self.events.push(event);
         Ok(())
     }

@@ -60,7 +60,7 @@ async fn synthetic_create_plan_passes_verification() {
         is_partial: false,
         confidence: Confidence::High,
         requires_mcts: true,
-            operations: vec![EditOp::Create {
+        operations: vec![EditOp::Create {
             path: WorkspacePath::new("MARKER.txt").unwrap(),
             content: "Created by integration test.\n".into(),
             precondition: FilePrecondition::MustNotExist,
@@ -142,7 +142,7 @@ async fn synthetic_modify_plan_hydrates_and_applies() {
         is_partial: false,
         confidence: Confidence::High,
         requires_mcts: true,
-            operations: vec![EditOp::Modify {
+        operations: vec![EditOp::Modify {
             path: WorkspacePath::new("src/lib.rs").unwrap(),
             preconditions: PreconditionState {
                 content_hash: "will-be-replaced-by-hydrator".into(),
@@ -166,7 +166,8 @@ async fn synthetic_modify_plan_hydrates_and_applies() {
     let sandbox = materialize(&config).unwrap();
 
     // ── 3. Hydrate against sandbox ──
-    let hydrated = PlanHydrator::hydrate(&plan, &plan.base_snapshot_id, sandbox.path()).expect("Hydration should succeed");
+    let hydrated = PlanHydrator::hydrate(&plan, &plan.base_snapshot_id, sandbox.path())
+        .expect("Hydration should succeed");
 
     if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
         assert_ne!(preconditions.content_hash, "will-be-replaced-by-hydrator");

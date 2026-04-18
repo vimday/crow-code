@@ -1,9 +1,7 @@
-//! Evidence Report — the user-facing proof bundle.
+//! Evidence Report.
 //!
-//! This module turns crow's internal safety pipeline (snapshot anchoring,
-//! plan hydration, preflight verification, evidence matrix) into a
-//! structured, human-readable report. This is crow's primary product
-//! differentiator: making trust *visible*.
+//! Formats the internal pipeline (snapshot anchoring, plan hydration, 
+//! preflight verification, evidence matrix) into a structured report for CLI output.
 
 use crow_evidence::types::{EvidenceMatrix, RiskKind};
 use crow_patch::{Confidence, EditOp, IntentPlan, SnapshotId};
@@ -94,9 +92,7 @@ pub struct PreflightSummary {
 #[derive(Debug)]
 pub enum Verdict {
     /// All evidence is green. Safe for automatic application.
-    AutoApply {
-        evidence: EvidenceMatrix,
-    },
+    AutoApply { evidence: EvidenceMatrix },
     /// Evidence is mixed. Human review recommended before application.
     ReviewRequired {
         reason: String,
@@ -165,11 +161,18 @@ impl Verdict {
 impl fmt::Display for EvidenceReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\n🦅 crow — Evidence Report")?;
-        writeln!(f, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")?;
+        writeln!(
+            f,
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )?;
 
         // Recon
         writeln!(f, "\n[1/5] Workspace Recon")?;
-        writeln!(f, "  Language: {} ({})", self.recon.language, self.recon.tier)?;
+        writeln!(
+            f,
+            "  Language: {} ({})",
+            self.recon.language, self.recon.tier
+        )?;
         writeln!(f, "  Snapshot: {} (anchored)", self.recon.snapshot_id.0)?;
         writeln!(f, "  Files scanned: {}", self.recon.files_scanned)?;
         if !self.recon.manifests.is_empty() {
@@ -178,7 +181,11 @@ impl fmt::Display for EvidenceReport {
 
         // Compilation
         writeln!(f, "\n[2/5] Intent Compilation")?;
-        writeln!(f, "  Rationale: \"{}\"", truncate_str(&self.compilation.rationale, 60))?;
+        writeln!(
+            f,
+            "  Rationale: \"{}\"",
+            truncate_str(&self.compilation.rationale, 60)
+        )?;
         writeln!(f, "  Confidence: {:?}", self.compilation.confidence)?;
         writeln!(
             f,
@@ -206,10 +213,18 @@ impl fmt::Display for EvidenceReport {
         }
 
         // Preflight
-        writeln!(f, "\n[4/5] Preflight Verification ({})", self.preflight.language)?;
+        writeln!(
+            f,
+            "\n[4/5] Preflight Verification ({})",
+            self.preflight.language
+        )?;
         match &self.preflight.outcome {
             PreflightOutcome::Clean { duration_secs } => {
-                writeln!(f, "  ✅ Passed in {:.1}s (0 errors, 0 warnings)", duration_secs)?;
+                writeln!(
+                    f,
+                    "  ✅ Passed in {:.1}s (0 errors, 0 warnings)",
+                    duration_secs
+                )?;
             }
             PreflightOutcome::Errors { count, summary } => {
                 writeln!(f, "  ❌ {} error(s) detected", count)?;
@@ -225,7 +240,9 @@ impl fmt::Display for EvidenceReport {
         // Verdict
         writeln!(f, "\n[5/5] Evidence Summary")?;
         writeln!(f, "  ┌─────────────────────────────────────────────┐")?;
-        writeln!(f, "  │  Verdict: {} {}",
+        writeln!(
+            f,
+            "  │  Verdict: {} {}",
             self.verdict.label(),
             self.verdict.emoji(),
         )?;
@@ -236,9 +253,16 @@ impl fmt::Display for EvidenceReport {
             Verdict::Escalate { evidence, .. } => evidence,
         };
         let compile_ok = !evidence.compile_runs.is_empty()
-            && evidence.compile_runs.iter().all(|r| r.outcome == crow_evidence::types::TestOutcome::Passed);
+            && evidence
+                .compile_runs
+                .iter()
+                .all(|r| r.outcome == crow_evidence::types::TestOutcome::Passed);
         let lint_ok = evidence.lints_clean;
-        let risk_label = if evidence.risk_flags.is_empty() { "Low" } else { "Present" };
+        let risk_label = if evidence.risk_flags.is_empty() {
+            "Low"
+        } else {
+            "Present"
+        };
 
         writeln!(
             f,
@@ -258,7 +282,10 @@ impl fmt::Display for EvidenceReport {
         }
 
         writeln!(f, "  └─────────────────────────────────────────────┘")?;
-        writeln!(f, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")?;
+        writeln!(
+            f,
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )?;
 
         Ok(())
     }

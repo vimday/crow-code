@@ -12,9 +12,9 @@ use std::process::Command;
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
     cmd.env_remove("GIT_DIR")
-       .env_remove("GIT_INDEX_FILE")
-       .env_remove("GIT_WORK_TREE")
-       .env_remove("GIT_PREFIX");
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_PREFIX");
     cmd
 }
 
@@ -31,7 +31,10 @@ pub fn resolve_snapshot_id(workspace_root: &Path) -> SnapshotId {
     }
 
     if let Some(content_hash) = manifest_hash(workspace_root) {
-        return SnapshotId(format!("hash-{}", &content_hash[..12.min(content_hash.len())]));
+        return SnapshotId(format!(
+            "hash-{}",
+            &content_hash[..12.min(content_hash.len())]
+        ));
     }
 
     // Last resort: timestamp
@@ -54,9 +57,7 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
         return None;
     }
 
-    let hash = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_string();
+    let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     if hash.is_empty() || hash.len() < 7 {
         return None;
@@ -78,13 +79,16 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
 
 /// Automatically commit applied changes to the workspace if it's a git repository.
 /// Scopes the commit strictly to the files modified by the plan.
-pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan) -> std::io::Result<()> {
+pub fn commit_applied_plan(
+    workspace_root: &Path,
+    plan: &crow_patch::IntentPlan,
+) -> std::io::Result<()> {
     // Check if it's a git repo
     let status = git_cmd()
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(workspace_root)
         .output()?;
-    
+
     if !status.status.success() {
         return Ok(()); // Not a git repo, skip quietly
     }
@@ -126,7 +130,7 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
     if !status.success() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
-            "Failed to execute git add. Git workspace may be corrupted."
+            "Failed to execute git add. Git workspace may be corrupted.",
         ));
     }
 
@@ -135,24 +139,30 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
     status_cmd.args(["status", "--porcelain", "--"]);
     status_cmd.args(&files_to_stage);
     let changes = status_cmd.current_dir(workspace_root).output()?;
-        
+
     if changes.stdout.is_empty() {
         return Ok(()); // Nothing actually changed for these files
     }
 
-    let commit_msg = format!("crow: {}", plan.rationale.split('\n').next().unwrap_or("Autonomous verification applied"));
-    
+    let commit_msg = format!(
+        "crow: {}",
+        plan.rationale
+            .split('\n')
+            .next()
+            .unwrap_or("Autonomous verification applied")
+    );
+
     // Commit strictly only our target files to avoid scooping up manual stages.
     let mut commit_cmd = git_cmd();
     commit_cmd.args(["commit", "-m", &commit_msg, "--only", "--"]);
     commit_cmd.args(&files_to_stage);
-    
+
     let commit_status = commit_cmd.current_dir(workspace_root).status()?;
 
     if !commit_status.success() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
-            "git commit failed. The applied changes remain uncommitted."
+            "git commit failed. The applied changes remain uncommitted.",
         ));
     }
 
@@ -254,16 +264,32 @@ mod tests {
         // 1. Init git repo
         git_cmd().args(["init"]).current_dir(path).status().unwrap();
         // Setup identity
-        git_cmd().args(["config", "user.name", "Test"]).current_dir(path).status().unwrap();
-        git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(path).status().unwrap();
+        git_cmd()
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .status()
+            .unwrap();
+        git_cmd()
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .status()
+            .unwrap();
 
         // 2. Create unrelated untracked and tracked files
         std::fs::write(path.join("unrelated_untracked.txt"), b"1").unwrap();
         std::fs::write(path.join("unrelated_tracked.txt"), b"1").unwrap();
         std::fs::write(path.join("target.txt"), b"1").unwrap();
-        
-        git_cmd().args(["add", "unrelated_tracked.txt", "target.txt"]).current_dir(path).status().unwrap();
-        git_cmd().args(["commit", "-m", "init"]).current_dir(path).status().unwrap();
+
+        git_cmd()
+            .args(["add", "unrelated_tracked.txt", "target.txt"])
+            .current_dir(path)
+            .status()
+            .unwrap();
+        git_cmd()
+            .args(["commit", "-m", "init"])
+            .current_dir(path)
+            .status()
+            .unwrap();
 
         // Modify files
         std::fs::write(path.join("unrelated_tracked.txt"), b"2").unwrap();
@@ -275,16 +301,14 @@ mod tests {
             confidence: crow_patch::Confidence::High,
             is_partial: false,
             requires_mcts: true,
-            operations: vec![
-                crow_patch::EditOp::Modify {
-                    path: crow_patch::WorkspacePath::new("target.txt").unwrap(),
-                    preconditions: crow_patch::types::PreconditionState {
-                        content_hash: String::new(),
-                        expected_line_count: None,
-                    },
-                    hunks: vec![],
-                }
-            ],
+            operations: vec![crow_patch::EditOp::Modify {
+                path: crow_patch::WorkspacePath::new("target.txt").unwrap(),
+                preconditions: crow_patch::types::PreconditionState {
+                    content_hash: String::new(),
+                    expected_line_count: None,
+                },
+                hunks: vec![],
+            }],
         };
 
         // 4. Run commit_applied_plan
@@ -296,7 +320,7 @@ mod tests {
             .current_dir(path)
             .output()
             .unwrap();
-            
+
         let out = String::from_utf8_lossy(&status.stdout);
         // unrelated_untracked should still be untracked (?)
         assert!(out.contains("?? unrelated_untracked.txt"));

@@ -48,8 +48,8 @@ if notify:
     let tmp_path = tmp_file.path().to_str().unwrap();
 
     // Spawn the client targeting our dummy Python MCP server
-    let client = McpClient::spawn("python3", &[tmp_path])
-        .expect("Failed to spawn dummy python server");
+    let client =
+        McpClient::spawn("python3", &[tmp_path]).expect("Failed to spawn dummy python server");
 
     // Perform initialize handshake
     let result = client.initialize().await.expect("Initialize failed");

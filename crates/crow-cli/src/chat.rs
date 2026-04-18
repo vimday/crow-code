@@ -9,7 +9,9 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
-use rustyline::{Cmd, CompletionType, Config, Context, EditMode, Editor, Helper, KeyCode, KeyEvent, Modifiers};
+use rustyline::{
+    Cmd, CompletionType, Config, Context, EditMode, Editor, Helper, KeyCode, KeyEvent, Modifiers,
+};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::time::Instant;
@@ -157,13 +159,11 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
     );
     println!(
         "  {}",
-        "Type /help for commands. Ctrl+J or Shift+Enter for newlines."
-            .with(Color::DarkGrey)
+        "Type /help for commands. Ctrl+J or Shift+Enter for newlines.".with(Color::DarkGrey)
     );
     println!(
         "  {}",
-        "───────────────────────────────────────────────"
-            .with(Color::DarkGrey)
+        "───────────────────────────────────────────────".with(Color::DarkGrey)
     );
     println!();
 
@@ -172,8 +172,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
         .completion_type(CompletionType::List)
         .edit_mode(EditMode::Emacs)
         .build();
-    let mut rl =
-        Editor::<CrowHelper, DefaultHistory>::with_config(editor_config)?;
+    let mut rl = Editor::<CrowHelper, DefaultHistory>::with_config(editor_config)?;
     rl.set_helper(Some(CrowHelper::new(SlashCommand::all_names())));
     // Ctrl+J inserts a newline (multi-line input)
     rl.bind_sequence(KeyEvent(KeyCode::Char('J'), Modifiers::CTRL), Cmd::Newline);
@@ -187,8 +186,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
     if store.is_none() {
         println!(
             "  {}",
-            "⚠ SessionStore unavailable — history won't persist."
-                .with(Color::Yellow)
+            "⚠ SessionStore unavailable — history won't persist.".with(Color::Yellow)
         );
     }
 
@@ -227,67 +225,16 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
                 // ── Slash Command Dispatch ──
                 if let Some(cmd) = SlashCommand::parse(input) {
-                    match cmd {
-                        SlashCommand::Exit => {
-                            println!(
-                                "\n  {} Session {} ({} turns)\n",
-                                "👋 Goodbye!".bold(),
-                                session.id.0.clone().with(Color::DarkGrey),
-                                state.turns
-                            );
-                            break;
-                        }
-                        SlashCommand::Help => {
-                            print_help(&theme);
-                            continue;
-                        }
-                        SlashCommand::Status => {
-                            print_status(&session, &state, cfg, &messages);
-                            continue;
-                        }
-                        SlashCommand::Clear => {
-                            messages = crate::context::ConversationManager::new(vec![]);
-                            state.turns = 0;
-                            println!(
-                                "  {}",
-                                "🧹 Context cleared. Starting fresh."
-                                    .with(Color::Green)
-                            );
-                            continue;
-                        }
-                        SlashCommand::Compact => {
-                            let ctx_bytes = messages.get_total_bytes();
-                            println!(
-                                "  {} Compacting {} of context...",
-                                "📦".to_string().with(Color::Yellow),
-                                format_bytes(ctx_bytes)
-                            );
-                            // Trigger manual compaction if there's enough history
-                            if messages.needs_compaction() || messages.as_messages().len() > 4 {
-                                let summary = "User requested manual compaction of conversation history.".to_string();
-                                messages.compact_into_summary(summary);
-                                println!(
-                                    "  {}",
-                                    "✔ History compacted into summary."
-                                        .with(Color::Green)
-                                );
-                            } else {
-                                println!(
-                                    "  {}",
-                                    "History is already compact, nothing to do."
-                                        .with(Color::DarkGrey)
-                                );
-                            }
-                            continue;
-                        }
-                        SlashCommand::Unknown(name) => {
-                            println!(
-                                "  {} Unknown command: /{}. Type /help for available commands.",
-                                "⚠".with(Color::Yellow),
-                                name
-                            );
-                            continue;
-                        }
+                    let mut ctx = ReplContext {
+                        session: &session,
+                        state: &mut state,
+                        cfg,
+                        messages: &mut messages,
+                        theme: &theme,
+                    };
+                    match handle_slash_command(cmd, &mut ctx) {
+                        CommandOutcome::Break => break,
+                        CommandOutcome::Continue => continue,
                     }
                 }
 
@@ -301,8 +248,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                 println!();
                 println!(
                     "  {}",
-                    "💭 Analyzing workspace and synthesizing IntentPlan..."
-                        .with(Color::DarkGrey)
+                    "💭 Analyzing workspace and synthesizing IntentPlan...".with(Color::DarkGrey)
                 );
                 let turn_start = Instant::now();
 
@@ -348,10 +294,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
             }
             Err(ReadlineError::Interrupted) => {
                 // Ctrl+C: if the line was empty, hint they should use /exit
-                println!(
-                    "  {}",
-                    "^C (Type /exit to leave)".with(Color::DarkGrey)
-                );
+                println!("  {}", "^C (Type /exit to leave)".with(Color::DarkGrey));
                 continue;
             }
             Err(ReadlineError::Eof) => {
@@ -380,8 +323,7 @@ fn print_help(theme: &ColorTheme) {
     println!("  {}", "Available Commands".bold().with(theme.heading));
     println!(
         "  {}",
-        "───────────────────────────────────────────────"
-            .with(Color::DarkGrey)
+        "───────────────────────────────────────────────".with(Color::DarkGrey)
     );
 
     let commands = [
@@ -401,24 +343,18 @@ fn print_help(theme: &ColorTheme) {
     }
 
     println!();
+    println!("  {}", "Tips:".bold().with(theme.heading));
     println!(
         "  {}",
-        "Tips:".bold().with(theme.heading)
+        "• Ctrl+J or Shift+Enter inserts a newline for multi-line input".with(Color::DarkGrey)
     );
     println!(
         "  {}",
-        "• Ctrl+J or Shift+Enter inserts a newline for multi-line input"
-            .with(Color::DarkGrey)
+        "• Tab-complete slash commands (type / then press Tab)".with(Color::DarkGrey)
     );
     println!(
         "  {}",
-        "• Tab-complete slash commands (type / then press Tab)"
-            .with(Color::DarkGrey)
-    );
-    println!(
-        "  {}",
-        "• Previous commands are accessible with ↑/↓ arrow keys"
-            .with(Color::DarkGrey)
+        "• Previous commands are accessible with ↑/↓ arrow keys".with(Color::DarkGrey)
     );
     println!();
 }
@@ -443,8 +379,7 @@ fn print_status(
     println!("  {}", "Session Status".bold().with(Color::Cyan));
     println!(
         "  {}",
-        "───────────────────────────────────────────────"
-            .with(Color::DarkGrey)
+        "───────────────────────────────────────────────".with(Color::DarkGrey)
     );
     println!(
         "  {}  {}",
@@ -536,4 +471,79 @@ fn dirs_home() -> std::path::PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+enum CommandOutcome {
+    Continue,
+    Break,
+}
+
+struct ReplContext<'a> {
+    pub session: &'a Session,
+    pub state: &'a mut SessionState,
+    pub cfg: &'a CrowConfig,
+    pub messages: &'a mut crate::context::ConversationManager,
+    pub theme: &'a ColorTheme,
+}
+
+fn handle_slash_command(cmd: SlashCommand, ctx: &mut ReplContext) -> CommandOutcome {
+    match cmd {
+        SlashCommand::Exit => {
+            println!(
+                "\n  {} Session {} ({} turns)\n",
+                "👋 Goodbye!".bold(),
+                ctx.session.id.0.clone().with(Color::DarkGrey),
+                ctx.state.turns
+            );
+            CommandOutcome::Break
+        }
+        SlashCommand::Help => {
+            print_help(ctx.theme);
+            CommandOutcome::Continue
+        }
+        SlashCommand::Status => {
+            print_status(ctx.session, ctx.state, ctx.cfg, ctx.messages);
+            CommandOutcome::Continue
+        }
+        SlashCommand::Clear => {
+            *ctx.messages = crate::context::ConversationManager::new(vec![]);
+            ctx.state.turns = 0;
+            println!(
+                "  {}",
+                "🧹 Context cleared. Starting fresh.".with(Color::Green)
+            );
+            CommandOutcome::Continue
+        }
+        SlashCommand::Compact => {
+            let ctx_bytes = ctx.messages.get_total_bytes();
+            println!(
+                "  {} Compacting {} of context...",
+                "📦".to_string().with(Color::Yellow),
+                format_bytes(ctx_bytes)
+            );
+            if ctx.messages.needs_compaction() || ctx.messages.as_messages().len() > 4 {
+                let summary =
+                    "User requested manual compaction of conversation history.".to_string();
+                ctx.messages.compact_into_summary(summary);
+                println!(
+                    "  {}",
+                    "✔ History compacted into summary.".with(Color::Green)
+                );
+            } else {
+                println!(
+                    "  {}",
+                    "History is already compact, nothing to do.".with(Color::DarkGrey)
+                );
+            }
+            CommandOutcome::Continue
+        }
+        SlashCommand::Unknown(name) => {
+            println!(
+                "  {} Unknown command: /{}. Type /help for available commands.",
+                "⚠".with(Color::Yellow),
+                name
+            );
+            CommandOutcome::Continue
+        }
+    }
 }

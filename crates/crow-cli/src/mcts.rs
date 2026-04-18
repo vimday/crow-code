@@ -127,7 +127,9 @@ pub async fn explore_round(
         let lang_clone = lang.clone();
         let snap_clone = snapshot_id.clone();
 
-        join_set.spawn(async move { run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd, &lang_clone, &snap_clone).await });
+        join_set.spawn(async move {
+            run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd, &lang_clone, &snap_clone).await
+        });
     }
 
     // Branches 1..N: generate fresh plans with temperature.
@@ -205,13 +207,14 @@ async fn run_branch(
     snapshot_id: &crow_patch::SnapshotId,
 ) -> BranchOutcome {
     let branch_start = std::time::Instant::now();
-    
+
     // MCTS Alignment: Append a deterministic suffix to the very last message.
     // The entire conversation history is structurally 100% identical across all branches,
     // ensuring massive Anthropic cache hits. Only the final few tokens differ to force diversity.
     let mut aligned_messages = messages.to_vec();
     if let Some(last) = aligned_messages.last_mut() {
-        last.content.push_str(&format!("\n\n[MCTS EXPLORATION ARM: {}]", branch_id));
+        last.content
+            .push_str(&format!("\n\n[MCTS EXPLORATION ARM: {}]", branch_id));
     }
 
     // LLM generate with temperature for diversity.
@@ -268,7 +271,16 @@ async fn run_branch(
         Err(outcome) => return outcome,
     };
 
-    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command, lang, snapshot_id).await;
+    let outcome = evaluate_plan(
+        branch_id,
+        plan,
+        sandbox,
+        frozen_root,
+        verify_command,
+        lang,
+        snapshot_id,
+    )
+    .await;
     println!(
         "    Branch {}: total {:.1}s — {}",
         branch_id,
@@ -298,7 +310,16 @@ async fn run_branch_with_plan(
         Err(outcome) => return outcome,
     };
 
-    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command, lang, snapshot_id).await;
+    let outcome = evaluate_plan(
+        branch_id,
+        plan,
+        sandbox,
+        frozen_root,
+        verify_command,
+        lang,
+        snapshot_id,
+    )
+    .await;
     println!(
         "    Branch {}: total {:.1}s — {}",
         branch_id,
@@ -340,7 +361,10 @@ pub async fn clone_cache_dir(src: &Path, dst: &Path) {
                 eprintln!("    ⚠️  macOS fast path clone failed with exit code {:?}, falling back to cp -a", st.code());
             }
         } else if let Err(e) = status {
-            eprintln!("    ⚠️  macOS fast path clone execution failed: {}, falling back to cp -a", e);
+            eprintln!(
+                "    ⚠️  macOS fast path clone execution failed: {}, falling back to cp -a",
+                e
+            );
         }
     }
 
@@ -477,7 +501,8 @@ async fn evaluate_plan(
         Some(sandbox.path()),
         std::time::Duration::from_secs(60),
         lang,
-    ).await;
+    )
+    .await;
 
     if let crow_verifier::preflight::PreflightResult::Errors(diags) = preflight_result {
         let summary = crow_verifier::preflight::format_diagnostics(&diags);
@@ -614,7 +639,7 @@ fn empty_plan() -> IntentPlan {
         is_partial: true,
         confidence: crow_patch::Confidence::None,
         requires_mcts: true,
-            operations: vec![],
+        operations: vec![],
     }
 }
 

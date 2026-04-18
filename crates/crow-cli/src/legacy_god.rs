@@ -60,14 +60,15 @@ pub async fn run_god_pipeline() -> Result<()> {
         is_partial: false,
         confidence: Confidence::High,
         requires_mcts: true,
-            operations: vec![EditOp::Create {
+        operations: vec![EditOp::Create {
             path: WorkspacePath::new("dummy_test_crow.txt")?,
             content: "This is a synthetic artifact created by God Pipeline.\n".into(),
             precondition: FilePrecondition::MustNotExist,
         }],
     };
 
-    let hydrated_plan = crow_workspace::PlanHydrator::hydrate(&mock_plan, &snapshot_id, sandbox.path()).unwrap();
+    let hydrated_plan =
+        crow_workspace::PlanHydrator::hydrate(&mock_plan, &snapshot_id, sandbox.path()).unwrap();
     apply_plan_to_sandbox(&hydrated_plan, &sandbox).context("Failed to apply synthetic plan")?;
     println!("    💉 Inject successful!");
 

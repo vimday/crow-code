@@ -111,11 +111,15 @@ impl IntentCompiler {
             Return ONLY the summary wrapped in `<summary>...</summary>` tags, without any other text. Do NOT emit a JSON AgentAction."
         ));
 
-        let response = self.client.generate(&conversation).await.map_err(CompilerError::PromptFailed)?;
-        
+        let response = self
+            .client
+            .generate(&conversation)
+            .await
+            .map_err(CompilerError::PromptFailed)?;
+
         let start = response.find("<summary>").map(|i| i + 9).unwrap_or(0);
         let end = response.rfind("</summary>").unwrap_or(response.len());
-        
+
         if start <= end {
             Ok(response[start..end].trim().to_string())
         } else {

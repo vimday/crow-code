@@ -14,7 +14,6 @@ const ANTHROPIC_ALIASES: &[&str] = &["anthropic", "claude"];
 const OLLAMA_ALIASES: &[&str] = &["ollama"];
 const DEEPSEEK_ALIASES: &[&str] = &["deepseek"];
 
-
 /// Construct the correct LLM client for the given provider configuration.
 ///
 /// Routing logic:
@@ -40,7 +39,9 @@ pub fn build_client(config: &LlmProviderConfig) -> Result<Arc<dyn LlmClient>, Br
                 // Ollama is OpenAI-compatible but typically runs on localhost.
                 // Apply Ollama-specific defaults if not explicitly set.
                 let mut ollama_config = config.clone();
-                if ollama_config.base_url.is_empty() || ollama_config.base_url == "https://api.openai.com/v1" {
+                if ollama_config.base_url.is_empty()
+                    || ollama_config.base_url == "https://api.openai.com/v1"
+                {
                     ollama_config.base_url = "http://localhost:11434/v1".to_string();
                 }
                 // Ollama doesn't need an API key
@@ -56,7 +57,9 @@ pub fn build_client(config: &LlmProviderConfig) -> Result<Arc<dyn LlmClient>, Br
             } else if DEEPSEEK_ALIASES.iter().any(|a| *a == lower) {
                 // DeepSeek is OpenAI-compatible with a different endpoint.
                 let mut ds_config = config.clone();
-                if ds_config.base_url.is_empty() || ds_config.base_url == "https://api.openai.com/v1" {
+                if ds_config.base_url.is_empty()
+                    || ds_config.base_url == "https://api.openai.com/v1"
+                {
                     ds_config.base_url = "https://api.deepseek.com/v1".to_string();
                 }
                 let client = ReqwestLlmClient::from_config(&ds_config)?;
@@ -92,7 +95,11 @@ pub fn describe_provider(config: &LlmProviderConfig) -> String {
         "{} | {} | {}",
         kind,
         config.model,
-        if config.prompt_caching { "cache=on" } else { "cache=off" }
+        if config.prompt_caching {
+            "cache=on"
+        } else {
+            "cache=off"
+        }
     )
 }
 

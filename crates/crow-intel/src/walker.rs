@@ -1,3 +1,9 @@
+//! File tree walker and repository map generator.
+//!
+//! Provides the `RepoWalker` tool for breadth-first searching of workspaces
+//! and concatenating file skeletons up to a configurable budget.
+
+use crate::pagerank::{ContentMap, SymbolMap};
 use crate::skeleton::ASTProcessor;
 use std::path::Path;
 
@@ -35,19 +41,26 @@ impl RepoWalker {
     /// ensuring shallow/important files (Cargo.toml, src/main.rs) are seen
     /// by the LLM before deep nested paths consume the budget.
     pub fn build_repo_map(&self, root: &Path) -> Result<RepoMap, String> {
-        let mut file_contents = std::collections::HashMap::new();
-        let mut file_definitions = std::collections::HashMap::new();
-        
+        let mut file_contents: ContentMap = std::collections::HashMap::new();
+        let mut file_definitions: SymbolMap = std::collections::HashMap::new();
+
         self.collect_all_files(root, &mut file_contents, &mut file_definitions);
 
         let active_files = std::collections::HashSet::new(); // Currently un-personalized, future proof for active context
-        let ranked_files = crate::pagerank::compute_personalized_pagerank(&file_definitions, &file_contents, &active_files);
+        let ranked_files = crate::pagerank::compute_personalized_pagerank(
+            &file_definitions,
+            &file_contents,
+            &active_files,
+        );
 
         let mut out = String::new();
         for (path, _) in ranked_files {
             let source = &file_contents[&path];
-            let skeleton = self.processor.generate_skeleton(source, &path).unwrap_or_else(|_| String::new());
-            
+            let skeleton = self
+                .processor
+                .generate_skeleton(source, &path)
+                .unwrap_or_else(|_| String::new());
+
             let rel_path = path.strip_prefix(root).unwrap_or(&path);
             let combined = format!(
                 "// ─── File: {} ────────────────────────\n{}\n\n",
@@ -76,8 +89,8 @@ impl RepoWalker {
     fn collect_all_files(
         &self,
         root: &Path,
-        file_contents: &mut std::collections::HashMap<std::path::PathBuf, String>,
-        file_definitions: &mut std::collections::HashMap<std::path::PathBuf, std::collections::HashSet<String>>
+        file_contents: &mut ContentMap,
+        file_definitions: &mut SymbolMap,
     ) {
         let skip = ["target", "node_modules", ".git", "vendor", ".venv"];
         let mut queue = std::collections::VecDeque::new();
@@ -99,19 +112,28 @@ impl RepoWalker {
                 } else if path.is_file() {
                     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    
+
                     let is_allowed_ext = [
                         "rs", "ts", "js", "jsx", "tsx", "toml", "json", "yaml", "yml", "md", "sh",
                         "py", "go", "c", "cpp", "h", "txt",
-                    ].contains(&ext);
-                    
+                    ]
+                    .contains(&ext);
+
                     let is_allowed_name = [
-                        "Makefile", "Dockerfile", ".gitignore", ".dockerignore", "LICENSE"
-                    ].contains(&file_name);
+                        "Makefile",
+                        "Dockerfile",
+                        ".gitignore",
+                        ".dockerignore",
+                        "LICENSE",
+                    ]
+                    .contains(&file_name);
 
                     if is_allowed_ext || is_allowed_name {
                         if let Ok(source) = std::fs::read_to_string(&path) {
-                            file_definitions.insert(path.clone(), self.processor.extract_definitions(&source, &path));
+                            file_definitions.insert(
+                                path.clone(),
+                                self.processor.extract_definitions(&source, &path),
+                            );
                             file_contents.insert(path, source);
                         }
                     }

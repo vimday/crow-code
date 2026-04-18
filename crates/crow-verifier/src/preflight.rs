@@ -58,7 +58,10 @@ pub async fn run_preflight(
     match lang.name.as_str() {
         "rust" => cargo_check_preflight(sandbox_root, cache_root, timeout).await,
         "typescript" => tsc_check_preflight(sandbox_root, cache_root, timeout).await,
-        _ => PreflightResult::Skipped(format!("No fast preflight configured for language: {}", lang.name)),
+        _ => PreflightResult::Skipped(format!(
+            "No fast preflight configured for language: {}",
+            lang.name
+        )),
     }
 }
 
@@ -138,10 +141,7 @@ async fn tsc_check_preflight(
     use crow_probe::VerificationCommand;
 
     // tsc --noEmit is roughly the JS/TS equivalent of cargo check
-    let cmd = VerificationCommand::new(
-        "npx",
-        vec!["tsc", "--noEmit"],
-    );
+    let cmd = VerificationCommand::new("npx", vec!["tsc", "--noEmit"]);
 
     let exec_config = ExecutionConfig {
         timeout,
@@ -167,7 +167,7 @@ async fn tsc_check_preflight(
     } else {
         result.test_run.truncated_log.clone()
     };
-    
+
     PreflightResult::Errors(vec![CompileDiagnostic {
         level: "error".into(),
         message: snippet.trim().to_string(),

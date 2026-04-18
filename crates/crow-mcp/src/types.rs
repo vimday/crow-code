@@ -117,12 +117,7 @@ pub enum ToolContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "image")]
-    Image {
-        data: String,
-        mime_type: String,
-    },
+    Image { data: String, mime_type: String },
     #[serde(rename = "resource")]
-    Resource {
-        resource: serde_json::Value,
-    },
+    Resource { resource: serde_json::Value },
 }

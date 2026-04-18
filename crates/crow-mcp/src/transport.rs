@@ -37,10 +37,7 @@ impl StdioTransport {
             .with_context(|| format!("Failed to spawn MCP server '{}'", cmd))?;
 
         let stdin = child.stdin.take().context("Failed to open child stdin")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("Failed to open child stdout")?;
+        let stdout = child.stdout.take().context("Failed to open child stdout")?;
 
         let pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Option<serde_json::Value>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -83,7 +80,7 @@ impl StdioTransport {
                             if trimmed.is_empty() {
                                 continue;
                             }
-                            
+
                             // Parse JSON-RPC message
                             match serde_json::from_str::<serde_json::Value>(trimmed) {
                                 Ok(value) => {
@@ -159,11 +156,11 @@ impl StdioTransport {
             Ok(Some(resp_value)) => {
                 let resp: Response = serde_json::from_value(resp_value)
                     .context("Failed to deserialize JSON-RPC response")?;
-                
+
                 if let Some(err) = &resp.error {
                     bail!("JSON-RPC Error {}: {}", err.code, err.message);
                 }
-                
+
                 Ok(resp)
             }
             Ok(None) => bail!("Received empty response"),

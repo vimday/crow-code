@@ -1,11 +1,7 @@
 //! Session persistence for crow.
 //!
-//! Stores conversation history and snapshot timelines so `crow` can resume
-//! work across process restarts. Sessions are serialized as JSON files
-//! under `~/.crow/sessions/`.
-//!
-//! This is a key differentiator over competitors that either don't persist
-//! sessions or write session data directly into the repository.
+//! Stores conversation history and snapshot timelines.
+//! Sessions are serialized as JSON files under `~/.crow/sessions/`.
 
 use anyhow::{Context, Result};
 use crow_brain::{ChatMessage, ChatRole};
@@ -64,7 +60,6 @@ pub struct Session {
     /// Stored conversation messages.
     messages: Vec<StoredMessage>,
     /// Snapshot timeline — each SnapshotId represents a verified state.
-    /// Competitors don't track this, making undo/replay impossible.
     pub snapshot_timeline: Vec<SnapshotId>,
     /// ISO 8601 creation timestamp.
     pub created_at: String,
@@ -110,8 +105,8 @@ impl Session {
 /// Manages session persistence on disk.
 ///
 /// Sessions are stored as individual JSON files under `~/.crow/sessions/`.
-/// The store never writes into the repository — session state lives in
-/// the user's home directory, unlike competitors that pollute the workspace.
+/// The store maintains session state in the user's home directory rather
+/// than polluting the local workspace repository.
 pub struct SessionStore {
     session_dir: PathBuf,
 }
@@ -121,16 +116,19 @@ impl SessionStore {
     pub fn open() -> Result<Self> {
         let home = dirs_home()?;
         let session_dir = home.join(".crow").join("sessions");
-        fs::create_dir_all(&session_dir)
-            .with_context(|| format!("Failed to create session directory: {}", session_dir.display()))?;
+        fs::create_dir_all(&session_dir).with_context(|| {
+            format!(
+                "Failed to create session directory: {}",
+                session_dir.display()
+            )
+        })?;
         Ok(Self { session_dir })
     }
 
     /// Save a session to disk.
     pub fn save(&self, session: &Session) -> Result<()> {
         let path = self.session_path(&session.id);
-        let json = serde_json::to_string_pretty(session)
-            .context("Failed to serialize session")?;
+        let json = serde_json::to_string_pretty(session).context("Failed to serialize session")?;
         fs::write(&path, json)
             .with_context(|| format!("Failed to write session to {}", path.display()))?;
         Ok(())
@@ -141,8 +139,8 @@ impl SessionStore {
         let path = self.session_path(id);
         let json = fs::read_to_string(&path)
             .with_context(|| format!("Session not found: {}", path.display()))?;
-        let session: Session = serde_json::from_str(&json)
-            .context("Failed to parse session JSON")?;
+        let session: Session =
+            serde_json::from_str(&json).context("Failed to parse session JSON")?;
         Ok(session)
     }
 
@@ -336,7 +334,9 @@ mod tests {
         assert!(found.is_some());
         assert_eq!(found.unwrap().task, "task a");
 
-        let not_found = store.find_latest_for_workspace(Path::new("/no/such/dir")).unwrap();
+        let not_found = store
+            .find_latest_for_workspace(Path::new("/no/such/dir"))
+            .unwrap();
         assert!(not_found.is_none());
     }
 }

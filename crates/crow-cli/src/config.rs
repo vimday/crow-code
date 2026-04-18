@@ -10,11 +10,8 @@ use std::path::{Path, PathBuf};
 
 // ─── Write Mode ─────────────────────────────────────────────────
 
-/// Controls how crow handles filesystem writes.
-///
-/// This is a deliberate brand decision: crow defaults to `WorkspaceWrite`,
-/// which requires evidence-based verification before touching the real
-/// workspace. Competitors default to `DangerFullAccess`.
+/// Controls how the framework handles filesystem propagation from the execution sandbox
+/// back to the live workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteMode {
     /// Never touch the real workspace. All changes stay in sandbox.
@@ -32,7 +29,9 @@ impl WriteMode {
     fn from_str_opt(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "sandbox" | "sandbox-only" | "sandboxonly" => Some(WriteMode::SandboxOnly),
-            "write" | "workspace-write" | "workspacewrite" | "default" => Some(WriteMode::WorkspaceWrite),
+            "write" | "workspace-write" | "workspacewrite" | "default" => {
+                Some(WriteMode::WorkspaceWrite)
+            }
             "danger" | "full" | "danger-full-access" => Some(WriteMode::DangerFullAccess),
             _ => None,
         }
@@ -58,6 +57,7 @@ struct ConfigFile {
     mcp_servers: Option<std::collections::HashMap<String, McpServerConfig>>,
 }
 
+/// Configuration for a remote Model Context Protocol (MCP) server integration.
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct McpServerConfig {
     pub command: String,
@@ -107,10 +107,10 @@ impl CrowConfig {
     /// Resolve configuration explicitly for a given workspace path.
     pub fn load_for(workspace_dir: &Path) -> anyhow::Result<Self> {
         let local_config_path = workspace_dir.join(".crow").join("config.json");
-        
+
         // Skip global config entirely if testing
         let is_testing = std::env::var("CROW_TEST_ENV").is_ok() || cfg!(test);
-        
+
         let home_dir = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .map(PathBuf::from)
@@ -122,10 +122,18 @@ impl CrowConfig {
         // 1. Load global config
         if !is_testing && global_config_path.exists() {
             let content = fs::read_to_string(&global_config_path).map_err(|e| {
-                anyhow::anyhow!("Failed to read global config at {}: {}", global_config_path.display(), e)
+                anyhow::anyhow!(
+                    "Failed to read global config at {}: {}",
+                    global_config_path.display(),
+                    e
+                )
             })?;
             let cfg = serde_json::from_str::<ConfigFile>(&content).map_err(|e| {
-                anyhow::anyhow!("Syntax error in global config at {}: {}", global_config_path.display(), e)
+                anyhow::anyhow!(
+                    "Syntax error in global config at {}: {}",
+                    global_config_path.display(),
+                    e
+                )
             })?;
             file_cfg = cfg;
         }
@@ -133,35 +141,67 @@ impl CrowConfig {
         // 2. Load local config and merge
         if local_config_path.exists() {
             let content = fs::read_to_string(&local_config_path).map_err(|e| {
-                anyhow::anyhow!("Failed to read local config at {}: {}", local_config_path.display(), e)
+                anyhow::anyhow!(
+                    "Failed to read local config at {}: {}",
+                    local_config_path.display(),
+                    e
+                )
             })?;
             let cfg = serde_json::from_str::<ConfigFile>(&content).map_err(|e| {
-                anyhow::anyhow!("Syntax error in local config at {}: {}", local_config_path.display(), e)
+                anyhow::anyhow!(
+                    "Syntax error in local config at {}: {}",
+                    local_config_path.display(),
+                    e
+                )
             })?;
-            
+
             if let Some(llm) = cfg.llm {
                 if let Some(ref mut global_llm) = file_cfg.llm {
-                    if llm.provider.is_some() { global_llm.provider = llm.provider.clone(); }
-                    if llm.api_key.is_some() { global_llm.api_key = llm.api_key.clone(); }
-                    if llm.model.is_some() { global_llm.model = llm.model.clone(); }
-                    if llm.base_url.is_some() { global_llm.base_url = llm.base_url.clone(); }
-                    if llm.max_tokens.is_some() { global_llm.max_tokens = llm.max_tokens; }
-                    if llm.connect_timeout.is_some() { global_llm.connect_timeout = llm.connect_timeout; }
-                    if llm.request_timeout.is_some() { global_llm.request_timeout = llm.request_timeout; }
-                    if llm.json_mode.is_some() { global_llm.json_mode = llm.json_mode; }
-                    if llm.prompt_caching.is_some() { global_llm.prompt_caching = llm.prompt_caching; }
-                    if llm.reasoning_effort.is_some() { global_llm.reasoning_effort = llm.reasoning_effort.clone(); }
+                    if llm.provider.is_some() {
+                        global_llm.provider = llm.provider.clone();
+                    }
+                    if llm.api_key.is_some() {
+                        global_llm.api_key = llm.api_key.clone();
+                    }
+                    if llm.model.is_some() {
+                        global_llm.model = llm.model.clone();
+                    }
+                    if llm.base_url.is_some() {
+                        global_llm.base_url = llm.base_url.clone();
+                    }
+                    if llm.max_tokens.is_some() {
+                        global_llm.max_tokens = llm.max_tokens;
+                    }
+                    if llm.connect_timeout.is_some() {
+                        global_llm.connect_timeout = llm.connect_timeout;
+                    }
+                    if llm.request_timeout.is_some() {
+                        global_llm.request_timeout = llm.request_timeout;
+                    }
+                    if llm.json_mode.is_some() {
+                        global_llm.json_mode = llm.json_mode;
+                    }
+                    if llm.prompt_caching.is_some() {
+                        global_llm.prompt_caching = llm.prompt_caching;
+                    }
+                    if llm.reasoning_effort.is_some() {
+                        global_llm.reasoning_effort = llm.reasoning_effort.clone();
+                    }
                 } else {
                     file_cfg.llm = Some(llm);
                 }
             }
             if let Some(ws) = cfg.workspace {
-                 if let Some(ref mut global_ws) = file_cfg.workspace {
-                     if ws.map_budget.is_some() { global_ws.map_budget = ws.map_budget; }
-                     if ws.write_mode.is_some() { global_ws.write_mode = ws.write_mode.clone(); }
-                 } else {
-                     file_cfg.workspace = Some(ws);
-                 }
+                if let Some(ref mut global_ws) = file_cfg.workspace {
+                    if ws.map_budget.is_some() {
+                        global_ws.map_budget = ws.map_budget;
+                    }
+                    if ws.write_mode.is_some() {
+                        global_ws.write_mode = ws.write_mode.clone();
+                    }
+                } else {
+                    file_cfg.workspace = Some(ws);
+                }
             }
             if let Some(mcp) = cfg.mcp_servers {
                 if let Some(ref mut global_mcp) = file_cfg.mcp_servers {
@@ -289,10 +329,7 @@ impl CrowConfig {
                 }
                 _ => "Set OPENAI_API_KEY or CROW_API_KEY.",
             };
-            anyhow::bail!(
-                "Missing API Key for {:?}. {}",
-                provider_kind, hint
-            );
+            anyhow::bail!("Missing API Key for {:?}. {}", provider_kind, hint);
         }
 
         let max_tokens = env::var("LLM_MAX_TOKENS")
@@ -329,7 +366,7 @@ impl CrowConfig {
             .ok()
             .or(file_llm.reasoning_effort)
             .map(|e| e.to_lowercase());
-            
+
         if let Some(ref effort) = reasoning_effort {
             if !valid_efforts.contains(&effort.as_str()) {
                 anyhow::bail!(
@@ -389,7 +426,9 @@ impl CrowConfig {
 
     /// Build an LLM client from this configuration.
     /// Routes to the correct provider implementation (OpenAI, Anthropic, Ollama, DeepSeek).
-    pub fn build_llm_client(&self) -> Result<std::sync::Arc<dyn crow_brain::LlmClient>, BrainError> {
+    pub fn build_llm_client(
+        &self,
+    ) -> Result<std::sync::Arc<dyn crow_brain::LlmClient>, BrainError> {
         crow_brain::build_client(&self.llm)
     }
 

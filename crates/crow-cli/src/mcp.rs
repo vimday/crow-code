@@ -12,7 +12,9 @@ pub struct McpManager {
 
 impl McpManager {
     /// Boot configured MCP servers and build the prompt injection material.
-    pub async fn boot(config_servers: &HashMap<String, crate::config::McpServerConfig>) -> Result<Self> {
+    pub async fn boot(
+        config_servers: &HashMap<String, crate::config::McpServerConfig>,
+    ) -> Result<Self> {
         let mut clients = HashMap::new();
         let mut lines = Vec::new();
 
@@ -35,7 +37,7 @@ impl McpManager {
                     continue;
                 }
             };
-            
+
             // Handshake
             let init = match client.initialize().await {
                 Ok(i) => i,
@@ -44,13 +46,19 @@ impl McpManager {
                     continue;
                 }
             };
-            lines.push(format!("\nServer [{}]: {} v{}", name, init.server_info.name, init.server_info.version));
-            
+            lines.push(format!(
+                "\nServer [{}]: {} v{}",
+                name, init.server_info.name, init.server_info.version
+            ));
+
             // Fetch tools
             let tools_res = match client.list_tools().await {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("  ⚠️  Failed to list tools for MCP server '{}': {}", name, e);
+                    eprintln!(
+                        "  ⚠️  Failed to list tools for MCP server '{}': {}",
+                        name, e
+                    );
                     continue;
                 }
             };
@@ -59,7 +67,10 @@ impl McpManager {
                 if let Some(desc) = &tool.description {
                     lines.push(format!("    Description: {}", desc));
                 }
-                lines.push(format!("    InputSchema: {}", serde_json::to_string(&tool.input_schema).unwrap_or_default()));
+                lines.push(format!(
+                    "    InputSchema: {}",
+                    serde_json::to_string(&tool.input_schema).unwrap_or_default()
+                ));
             }
 
             clients.insert(name.clone(), Arc::new(client));
@@ -77,8 +88,16 @@ impl McpManager {
     }
 
     /// Make a call to a specific tool on a specific server.
-    pub async fn call(&self, server: &str, tool: &str, args: Option<serde_json::Value>) -> Result<crow_mcp::types::CallToolResult> {
-        let client = self.clients.get(server).ok_or_else(|| anyhow::anyhow!("Unknown MCP server: {}", server))?;
+    pub async fn call(
+        &self,
+        server: &str,
+        tool: &str,
+        args: Option<serde_json::Value>,
+    ) -> Result<crow_mcp::types::CallToolResult> {
+        let client = self
+            .clients
+            .get(server)
+            .ok_or_else(|| anyhow::anyhow!("Unknown MCP server: {}", server))?;
         client.call_tool(tool, args).await
     }
 }

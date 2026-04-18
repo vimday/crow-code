@@ -594,7 +594,7 @@ mod tests {
                 is_partial: false,
                 confidence: Confidence::Low,
                 requires_mcts: true,
-            operations: vec![],
+                operations: vec![],
             },
         };
         assert!(action.validate().is_ok());
