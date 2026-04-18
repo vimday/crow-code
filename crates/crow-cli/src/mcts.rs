@@ -290,7 +290,7 @@ async fn run_branch_with_plan(
 // ─── Shared Pipeline Stages ─────────────────────────────────────────
 
 /// Clone the target cache directory to avoid lock contention between parallel branches.
-async fn clone_cache_dir(src: &Path, dst: &Path) {
+pub async fn clone_cache_dir(src: &Path, dst: &Path) {
     if !src.exists() {
         return;
     }
