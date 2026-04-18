@@ -20,7 +20,7 @@ members = [
 
     # 🖥️ L5: The Interface & Observability
     "crates/crow-cli",
-    "crates/crow-replay",
+    "crates/crow-replay", "crates/crow-mcp",
 ]
 resolver = "2"
 
