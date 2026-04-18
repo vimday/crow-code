@@ -58,6 +58,11 @@ impl ConversationManager {
         }
     }
 
+    pub fn set_system(&mut self, sys_msgs: Vec<ChatMessage>) {
+        self.system_messages = sys_msgs;
+        self.enforce_budget();
+    }
+
     pub fn push_user(&mut self, content: impl Into<String>) {
         self.conversation.push_back(Memory {
             message: ChatMessage::user(content),

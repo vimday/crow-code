@@ -10,6 +10,7 @@ pub mod mcts;
 mod session;
 pub mod snapshot;
 pub mod tui;
+pub mod chat;
 
 use anyhow::{Context, Result};
 use config::CrowConfig;
@@ -40,14 +41,15 @@ async fn main() -> Result<()> {
             print_help();
             Ok(())
         }
+        Some("chat") => chat::run_repl(&CrowConfig::load()?).await,
         Some(unknown) => {
             eprintln!("Unknown command: {}", unknown);
             print_help();
             std::process::exit(1);
         }
         None => {
-            print_help();
-            Ok(())
+            // Default to continuous REPL chat
+            chat::run_repl(&CrowConfig::load()?).await
         }
     }
 }
@@ -61,6 +63,7 @@ USAGE:
     crow <COMMAND> [OPTIONS]
 
 COMMANDS:
+    chat                      (or no args) Start the Continuous Chat REPL
     run <prompt>              Full autonomous loop (serial or MCTS)
     plan <prompt>             Compile and preview plan with evidence report
     compile <prompt>          Compile-only: show the IntentPlan JSON
@@ -620,13 +623,23 @@ fn detect_manifests(root: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+
 async fn run_dry_run(args: &[String]) -> Result<()> {
+    let cfg = CrowConfig::load()?;
+    let prompt = args.join(" ");
+    let mut messages = context::ConversationManager::new(vec![]);
+    run_conversation_turn(&cfg, &prompt, &mut messages).await
+}
+
+pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mut context::ConversationManager) -> Result<()> {
     use crow_workspace::PlanHydrator;
+    println!("🦅 crow-code Dry-Run / Turn mode initializing...\n");
+
+
 
     println!("🦅 crow-code Dry-Run mode initializing...\n");
 
-    let cfg = CrowConfig::load()?;
-    let prompt = args.join(" ");
+    
 
     // ── Step 1: Freeze the timeline FIRST ──────────────────────────
     // We probe the live workspace only to discover ignore patterns,
@@ -706,15 +719,20 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         sys_prompt.push_str(mcp_ctx);
     }
 
-    use context::ConversationManager;
     use crow_brain::ChatMessage;
-
-    let mut messages = ConversationManager::new(vec![
-        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(sys_prompt),
-    ]);
-
-    messages.push_user(format!("Task:\n{}", prompt));
+    
+    // Inject current repo state and system context if it's the first turn, or as a strong reminder.
+    if messages.as_messages().is_empty() {
+        // First turn
+        messages.set_system(vec![
+            ChatMessage::system("You are an autonomous engineering agent executing the given task."),
+            ChatMessage::system(sys_prompt)
+        ]);
+        messages.push_user(format!("Task:\n{}", prompt));
+    } else {
+        // Ongoing turn
+        messages.push_user(format!("{}\n\nTask:\n{}", sys_prompt, prompt));
+    }
 
     // Outer Crucible Loop (max 3 compile-test cycles).
     // Each attempt re-materializes a fresh sandbox so that retries are
@@ -743,7 +761,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             &candidate,
             &frozen_root,
             &compiler,
-            &mut messages,
+            messages,
             &snapshot_id,
             Some(&mcp_manager),
         )
@@ -764,7 +782,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         );
 
         let compiled_plan =
-            epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root, Some(&mcp_manager)).await?;
+            epistemic::run_epistemic_loop(&compiler, messages, &frozen_root, Some(&mcp_manager)).await?;
 
         // Re-materialize from the FROZEN baseline, not the live workspace.
         // This ensures every crucible attempt starts from the same immutable
