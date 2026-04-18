@@ -12623,13 +12623,31 @@ File: crates/crow-cli/src/epistemic_ui.rs
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
-/// Implementors of this trait handle progress ticks from the epistemic loop.
+/// An abstraction over progress reporting for internal epistemic loops.
+///
+/// **Responsibilities**: Decouple the core logic execution (compilation, semantic search, reasoning states)
+/// from the standard output and console UI components. This ensures that the engine can run iteratively
+/// without needing hardcoded dependencies on specific terminal drawing crates like `indicatif`.
+///
+/// **Usage Scenarios**:
+/// - `SpinnerObserver` can be injected into interactive/serial CLI operations to show real-time progress.
+/// - `SilentObserver` can be injected during high-velocity asynchronous multi-branch explorations (MCTS)
+///   to prevent terminal spamming or concurrent drawing collisions across threaded branch evaluators.
+///
+/// **Implementation Constraints**:
+/// - Must implement `Send` so progress tracking can be safely moved into `tokio` multi-threaded executor boundaries.
+/// - Operations inside `on_step` must be non-blocking to prevent UI feedback loops from hanging the cognitive request.
 pub trait EpistemicObserver: Send {
     /// Called per epistemic compiler step.
     fn on_step(&mut self, step: usize, max_steps: usize);
 }
 
-/// A silent observer that drops all UI feedback, used for high-velocity MCTS branches.
+/// A null-object pattern implementation of `EpistemicObserver`.
+///
+/// **Responsibilities**: Discards all status updates seamlessly.
+///
+/// **Usage Scenarios**: Utilized by parallel `MCTS` exploration branches where spawning multiple
+/// concurrent overlapping spinners would completely corrupt the terminal multiplexer and create noise.
 pub struct SilentObserver;
 impl EpistemicObserver for SilentObserver {
     fn on_step(&mut self, _step: usize, _max: usize) {}
