@@ -1315,6 +1315,26 @@ async fn run_mcts_crucible(
     }
 
     println!("    Seeding baseline plan into MCTS branch 0...");
+    
+    // Dynamic MCTS Downgrade for Non-code Changes
+    // If the LLM just generated a pure documentation edit or a simple config,
+    // there is absolutely zero need to spin up 3 parallel LLMs generating alternative
+    // markdown variants and freezing the async pool!
+    let mut actual_mcts_config = mcts_config.clone();
+    let is_pure_text_change = baseline_plan.operations.iter().all(|op| {
+        let path = match op {
+            crow_patch::EditOp::Create { path, .. } => path.as_str(),
+            crow_patch::EditOp::Modify { path, .. } => path.as_str(),
+            crow_patch::EditOp::Delete { path, .. } => path.as_str(),
+            crow_patch::EditOp::Rename { from: _, to, .. } => to.as_str(),
+        };
+        path.ends_with(".md") || path.ends_with(".txt")
+    });
+
+    if is_pure_text_change && actual_mcts_config.branch_factor > 1 {
+        println!("    ⏭️  Baseline plan only targets non-code files (.md/.txt). Bypassing parallel diverse search (MCTS downgraded to 1 branch).");
+        actual_mcts_config.branch_factor = 1;
+    }
 
     // 2. MCTS Parallel Explore Rounds
     let mat_config = MaterializeConfig {
@@ -1326,15 +1346,15 @@ async fn run_mcts_crucible(
 
     println!(
         "\n[6/6] Entering MCTS Parallel Crucible ({} branches, {} max rounds)",
-        mcts_config.branch_factor, mcts_config.max_rounds
+        actual_mcts_config.branch_factor, actual_mcts_config.max_rounds
     );
     let mut current_baseline = baseline_plan;
 
-    for mcts_round in 1..=mcts_config.max_rounds {
-        println!("▶️ MCTS Round {}/{}", mcts_round, mcts_config.max_rounds);
+    for mcts_round in 1..=actual_mcts_config.max_rounds {
+        println!("▶️ MCTS Round {}/{}", mcts_round, actual_mcts_config.max_rounds);
 
         let mut outcomes = crate::mcts::explore_round(
-            mcts_config,
+            &actual_mcts_config,
             compiler,
             &messages.as_messages(),
             current_baseline.clone(),
@@ -1375,7 +1395,7 @@ async fn run_mcts_crucible(
         // Re-compile a fresh baseline plan that incorporates the failure
         // feedback. This ensures branch 0 in the next round gets an
         // informed plan instead of repeating the same stale one.
-        if mcts_round < mcts_config.max_rounds {
+        if mcts_round < actual_mcts_config.max_rounds {
             println!("  🧠 Re-deriving baseline plan from failure feedback...");
             match compiler.compile_action(&messages.as_messages()).await {
                 Ok(crow_patch::AgentAction::SubmitPlan { plan }) => {
@@ -1405,7 +1425,7 @@ async fn run_mcts_crucible(
 
     anyhow::bail!(
         "MCTS exploration exhausted all {} rounds without finding a passing plan.",
-        mcts_config.max_rounds
+        actual_mcts_config.max_rounds
     );
 }
 

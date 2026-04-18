@@ -97,6 +97,7 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
     // ignoring any out-of-band files the user might have staged themselves.
     let status = Command::new("git")
         .arg("add")
+        .arg("--force")
         .args(&files_to_stage)
         .current_dir(workspace_root)
         .status()?;
