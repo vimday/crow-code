@@ -111,6 +111,7 @@ mod tests {
             request_timeout_secs: 300,
             json_mode: false,
             prompt_caching: false,
+            reasoning_effort: None,
         }
     }
 

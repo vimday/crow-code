@@ -143,6 +143,7 @@ impl CrowConfig {
                             if llm.request_timeout.is_some() { global_llm.request_timeout = llm.request_timeout; }
                             if llm.json_mode.is_some() { global_llm.json_mode = llm.json_mode; }
                             if llm.prompt_caching.is_some() { global_llm.prompt_caching = llm.prompt_caching; }
+                            if llm.reasoning_effort.is_some() { global_llm.reasoning_effort = llm.reasoning_effort.clone(); }
                         } else {
                             file_cfg.llm = Some(llm);
                         }
@@ -316,6 +317,23 @@ impl CrowConfig {
             .or(file_llm.prompt_caching)
             .unwrap_or(false);
 
+        // Reasoning effort for extended-thinking models (o1, o3, gpt-5.x).
+        // Only sent when explicitly configured; validated against known values.
+        let valid_efforts: &[&str] = &["low", "medium", "high", "xhigh"];
+        let reasoning_effort = env::var("CROW_REASONING_EFFORT")
+            .ok()
+            .or(file_llm.reasoning_effort);
+        if let Some(ref effort) = reasoning_effort {
+            let lower = effort.to_lowercase();
+            if !valid_efforts.contains(&lower.as_str()) {
+                anyhow::bail!(
+                    "Invalid reasoning_effort='{}'. Expected one of: {}",
+                    effort,
+                    valid_efforts.join(", ")
+                );
+            }
+        }
+
         let llm = LlmProviderConfig {
             provider_kind,
             api_key,
@@ -326,7 +344,7 @@ impl CrowConfig {
             request_timeout_secs,
             json_mode,
             prompt_caching,
-            reasoning_effort: file_llm.reasoning_effort,
+            reasoning_effort,
         };
 
         // Clamp map_budget so it can never exceed the conversation manager's

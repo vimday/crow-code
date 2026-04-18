@@ -170,8 +170,17 @@ impl ReqwestLlmClient {
             "messages": api_messages
         });
 
+        // Only inject reasoning_effort for models known to support it.
+        // Sending this to Ollama, DeepSeek, or older OpenAI models causes 400s.
         if let Some(effort) = &self.reasoning_effort {
-            body["reasoning_effort"] = json!(effort);
+            let model_lower = self.model.to_lowercase();
+            let supports_reasoning = model_lower.starts_with("o1")
+                || model_lower.starts_with("o3")
+                || model_lower.starts_with("o4")
+                || model_lower.starts_with("gpt-5");
+            if supports_reasoning {
+                body["reasoning_effort"] = json!(effort);
+            }
         }
 
         if let Some(temp) = temperature {
