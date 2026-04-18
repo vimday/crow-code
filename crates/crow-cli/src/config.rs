@@ -334,7 +334,7 @@ impl CrowConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .or(file_ws.map_budget)
-            .unwrap_or(500 * 1024)
+            .unwrap_or(64 * 1024)
             .min(crate::budget::MAX_SYSTEM_BYTES);
 
         // ── Write Mode ──

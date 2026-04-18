@@ -47,7 +47,7 @@ impl App {
             .unwrap_or_else(|_| PathBuf::from("."));
 
         let ledger_path = home.join(".crow").join("ledger").join(format!("{}.jsonl", hash));
-        let memory_dir = home.join(".crow").join("memory");
+        let memory_dir = home.join(".crow").join("memory").join(&hash);
 
         self.ledger_events.clear();
         if ledger_path.exists() {

@@ -19,12 +19,17 @@ pub struct AutoDream<'a> {
 
 impl<'a> AutoDream<'a> {
     pub fn new(workspace: &'a Path) -> Result<Self> {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        workspace.to_string_lossy().hash(&mut hasher);
+        let hash = format!("{:x}", hasher.finish());
+
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .map(PathBuf::from)
             .context("Could not determine home directory")?;
 
-        let memory_dir = home.join(".crow").join("memory");
+        let memory_dir = home.join(".crow").join("memory").join(hash);
         std::fs::create_dir_all(&memory_dir)?;
 
         Ok(Self {

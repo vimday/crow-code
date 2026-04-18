@@ -459,7 +459,7 @@ async fn run_plan(args: &[String]) -> Result<()> {
     let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
         eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
         // Fallback to memory-only ledger for safety (won't persist but won't crash)
-        crow_workspace::ledger::EventLedger::open(std::path::Path::new("/dev/null")).unwrap() 
+        crow_workspace::ledger::EventLedger::open(&std::env::temp_dir().join("crow_ledger_fallback.jsonl")).unwrap() 
     });
     
     // In actual implementation we append events
@@ -693,7 +693,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
     // Open EventLedger for telemetry recording
     let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
         eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
-        crow_workspace::ledger::EventLedger::open(std::path::Path::new("/dev/null")).unwrap()
+        crow_workspace::ledger::EventLedger::open(&std::env::temp_dir().join("crow_ledger_fallback.jsonl")).unwrap()
     });
     
     let _ = ledger.append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
@@ -720,7 +720,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         ChatMessage::system(sys_prompt)
     ]);
 
-    if messages.as_messages().is_empty() {
+    if messages.as_messages().len() <= 2 {
         // First turn
         messages.push_user(format!("Task:\n{}", prompt));
     } else {
