@@ -5,6 +5,7 @@
 //! compute/time budget.
 
 pub mod anthropic;
+pub mod autodream;
 pub mod client;
 pub mod compiler;
 pub mod router;

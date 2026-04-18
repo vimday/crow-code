@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         Some("compile") => run_compile_only(&args[2..]).await,
         Some("dry-run") => run_dry_run(&args[2..]).await,
         Some("session") => handle_session_command(&args[2..]).await,
+        Some("dream") => run_autodream().await,
         Some("mcp") => handle_mcp_command(&args[2..]).await,
         Some("legacy-god") => legacy_god::run_god_pipeline().await,
         Some("--help") | Some("-h") | Some("help") => {
@@ -63,6 +64,7 @@ COMMANDS:
     compile <prompt>          Compile-only: show the IntentPlan JSON
     session list              List saved sessions
     session resume <id>       Resume a saved session
+    dream                     Run background AutoDream memory consolidation
     mcp                       Manage MCP tools
     dry-run <prompt>          Alias for 'run'
     help                      Show this help
@@ -1290,3 +1292,17 @@ fn open_ledger(workspace: &std::path::Path) -> Result<crow_workspace::ledger::Ev
     let log_path = ledger_dir.join(format!("{}.jsonl", hash));
     Ok(crow_workspace::ledger::EventLedger::open(&log_path)?)
 }
+
+// ─── AutoDream ──────────────────────────────────────────────────────
+
+async fn run_autodream() -> Result<()> {
+    let cfg = config::CrowConfig::load()?;
+    println!("🦅 crow dream — Background Memory Consolidation");
+    
+    let dreamer = crow_brain::autodream::AutoDream::new(&cfg.workspace)?;
+    let client = cfg.build_llm_client()?;
+    dreamer.execute_dream_cycle(client.as_ref()).await?;
+    
+    Ok(())
+}
+
