@@ -28,7 +28,7 @@ const MAX_FILE_BYTES: u64 = 50 * 1024; // 50 KB
 const MAX_FILE_LINES: usize = 500;
 
 /// Maximum epistemic steps before bailing out.
-const MAX_EPISTEMIC_STEPS: usize = 7;
+const MAX_EPISTEMIC_STEPS: usize = 30;
 
 // ─── Epistemic Loop ─────────────────────────────────────────────────
 

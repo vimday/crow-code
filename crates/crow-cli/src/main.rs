@@ -11,6 +11,7 @@ mod session;
 pub mod snapshot;
 pub mod tui;
 pub mod chat;
+pub mod render;
 
 use anyhow::{Context, Result};
 use config::CrowConfig;
@@ -178,13 +179,10 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
     let candidate = match profile.verification_candidates.first() {
         Some(c) => c.clone(),
         None => {
-            println!("  ⚠️  No verification candidates found. Falling back to a no-op check.");
-            crow_probe::types::VerificationCandidate {
-                command: crow_probe::types::VerificationCommand::new("echo", vec!["--", "No verification necessary"]),
-                kind: crow_probe::types::VerificationKind::Test,
-                confidence: crow_probe::types::ProbeConfidence::Inferred,
-                evidence_source: "Fallback".to_string(),
-            }
+            anyhow::bail!(
+                "No verification candidates found. Cannot safely resume execution without a test suite.\n\
+                 Please configure a custom test script in `.crow/config.json`."
+            );
         }
     };
 
@@ -328,15 +326,34 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
     println!("\n--- Changes ---");
     diff::render_plan_diff(&frozen_root, attempt_sandbox.path(), &hydrated_plan);
 
-    // Update session
-    loaded_session.save_messages(&messages.as_messages());
-    loaded_session.push_snapshot(snapshot_id);
-    store.save(&loaded_session)?;
-    println!("\n  💾 Session updated: {}", loaded_session.id.0);
-
     if outcome != &crow_evidence::TestOutcome::Passed {
         anyhow::bail!("Resumed session: verification failed.");
     }
+
+    // Write-back phase
+    if matches!(cfg.write_mode, config::WriteMode::WorkspaceWrite | config::WriteMode::DangerFullAccess) {
+        println!("\n[4] Writing verified changes to workspace...");
+        if let Err(e) = apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan) {
+            eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
+            anyhow::bail!("Workspace mutation failed during resume.");
+        }
+        
+        println!("  ✅ Workspace updated successfully.");
+        if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan) {
+            println!("  ⚠️  Could not automatically commit changes: {}", e);
+        } else {
+            println!("  ✅ Changes committed to git timeline.");
+        }
+    } else {
+        println!("\n  📦 Write mode is sandbox-only. Changes not applied to workspace.");
+    }
+
+    // Update session AFTER mutations to properly anchor snapshot
+    let post_mutation_snapshot = snapshot::resolve_snapshot_id(&cfg.workspace);
+    loaded_session.save_messages(&messages.as_messages());
+    loaded_session.push_snapshot(post_mutation_snapshot);
+    store.save(&loaded_session)?;
+    println!("\n  💾 Session updated: {}", loaded_session.id.0);
 
     println!("\n[🎉] Resumed session completed successfully!");
     Ok(())
@@ -600,7 +617,7 @@ fn build_evidence_from_preflight(
 ) -> crow_evidence::types::EvidenceMatrix {
     use crow_evidence::types::*;
 
-    let compile_passed = matches!(preflight, crow_verifier::preflight::PreflightResult::Clean);
+    let compile_passed = matches!(preflight, crow_verifier::preflight::PreflightResult::Clean | crow_verifier::preflight::PreflightResult::Skipped(_));
 
     EvidenceMatrix {
         compile_runs: vec![TestRun {
@@ -645,10 +662,10 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
     let mut messages = context::ConversationManager::new(vec![]);
-    run_conversation_turn(&cfg, &prompt, &mut messages).await
+    run_conversation_turn(&cfg, &prompt, &mut messages).await.map(|_| ())
 }
 
-pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mut context::ConversationManager) -> Result<()> {
+pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mut context::ConversationManager) -> Result<crow_patch::SnapshotId> {
     use crow_workspace::PlanHydrator;
     println!("🦅 crow-code Dry-Run / Turn mode initializing...\n");
     // ── Step 1: Freeze the timeline FIRST ──────────────────────────
@@ -664,13 +681,10 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
     let candidate = match profile.verification_candidates.first() {
         Some(c) => c.clone(),
         None => {
-            println!("    ⚠️  No verification candidates found. Falling back to a no-op check.");
-            crow_probe::types::VerificationCandidate {
-                command: crow_probe::types::VerificationCommand::new("echo", vec!["--", "No verification necessary"]),
-                kind: crow_probe::types::VerificationKind::Test,
-                confidence: crow_probe::types::ProbeConfidence::Inferred,
-                evidence_source: "Fallback".to_string(),
-            }
+            anyhow::bail!(
+                "No verification candidates found. Cannot safely execute autonomous patches without a test suite.\n\
+                 Please configure a custom test script in `.crow/config.json`."
+            );
         }
     };
 
@@ -793,7 +807,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
             drop(w.sandbox);
         }
         
-        return Ok(());
+        return Ok(snapshot_id);
     }
 
     let mut total_attempts = 0;
@@ -808,6 +822,13 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
             total_attempts,
             verification_runs + 1
         );
+
+        if messages.needs_compaction() {
+            println!("  🗜️  Auto-compacting massive context history (Auto-Compaction)...");
+            if let Ok(summary) = compiler.compile_summary_of_history(messages.as_messages().as_slice()).await {
+                messages.compact_into_summary(format!("[SYSTEM AUTO-COMPACTED HISTORY]\n{}", summary));
+            }
+        }
 
         let compiled_plan =
             epistemic::run_epistemic_loop(&compiler, messages, &frozen_root, Some(&mcp_manager)).await?;
@@ -1006,7 +1027,9 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         anyhow::bail!("All crucible attempts failed to pass verification.");
     }
 
-    Ok(())
+    // Resolving new snapshot ID to capture post-mutation state
+    let new_snapshot_id = snapshot::resolve_snapshot_id(&cfg.workspace);
+    Ok(new_snapshot_id)
 }
 
 /// Apply verified changes from sandbox back to the real workspace.
@@ -1015,7 +1038,6 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
 /// This ensures minimal filesystem mutation and respects the zero-pollution
 /// invariant: if anything goes wrong, the workspace is untouched.
 fn apply_sandbox_to_workspace(
-    sandbox_root: &std::path::Path,
     workspace_root: &std::path::Path,
     plan: &crow_patch::IntentPlan,
 ) -> Result<()> {
@@ -1038,6 +1060,13 @@ fn apply_sandbox_to_workspace(
                 (to.to_absolute(workspace_root), Some(from.to_absolute(workspace_root)))
             }
         };
+
+        // Check symlinks to ensure we don't follow them out of the workspace boundary
+        for path_to_eval in std::iter::once(&Some(dst.clone())).chain(std::iter::once(&from_dst)).flatten() {
+            if path_to_eval.is_symlink() || (path_to_eval.exists() && !path_to_eval.canonicalize().unwrap_or_else(|_| path_to_eval.clone()).starts_with(workspace_root)) {
+                anyhow::bail!("Security violation: operation attempts to modify a symlink or an external path: {}", path_to_eval.display());
+            }
+        }
         
         let original_content = if dst.exists() && dst.is_file() {
             std::fs::read(&dst).ok()
@@ -1080,52 +1109,26 @@ fn apply_sandbox_to_workspace(
         }
     }
 
-    // Phase 2: Attempt destructive apply
+    // Phase 2: Attempt destructive apply via proper unified applier logic
     let mut apply_failed = false;
     let mut apply_error = String::new();
 
-    for op in &plan.operations {
-        let result = match op {
-            EditOp::Create { path, .. } | EditOp::Modify { path, .. } => {
-                let src = path.to_absolute(sandbox_root);
-                let dst = path.to_absolute(workspace_root);
-                if let Some(parent) = dst.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                std::fs::copy(&src, &dst).map(|_| ())
-            }
-            EditOp::Delete { path, .. } => {
-                let dst = path.to_absolute(workspace_root);
-                if dst.exists() {
-                    std::fs::remove_file(&dst)
-                } else {
-                    Ok(())
-                }
-            }
-            EditOp::Rename { from, to, .. } => {
-                // Actually, the intent was to move `from` to `to` in workspace. But wait! The sandbox already HAS the mutated state!
-                // So sandbox's `to` path is the file we want! And we should delete workspace's `from` path.
-                let src = to.to_absolute(sandbox_root);
-                let dst_to = to.to_absolute(workspace_root);
-                let dst_from = from.to_absolute(workspace_root);
-                
-                if let Some(parent) = dst_to.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                
-                match std::fs::copy(&src, &dst_to) {
-                    Ok(_) => {
-                        if dst_from.exists() { std::fs::remove_file(&dst_from) } else { Ok(()) }
-                    }
-                    Err(e) => Err(e)
-                }
-            }
-        };
+    // Rehydrate the plan specifically for the live workspace constraints
+    match crow_workspace::PlanHydrator::hydrate(plan, &plan.base_snapshot_id, workspace_root) {
+        Ok(hydrated_workspace_plan) => {
+            let live_view = crow_materialize::SandboxHandle::non_owning_view_from(
+                workspace_root.to_path_buf(),
+                crow_materialize::MaterializationDriver::SafeCopy
+            );
 
-        if let Err(e) = result {
+            if let Err(e) = crow_workspace::applier::apply_plan_to_sandbox(&hydrated_workspace_plan, &live_view) {
+                apply_failed = true;
+                apply_error = format!("Workspace Applier Failed: {}", e);
+            }
+        }
+        Err(e) => {
             apply_failed = true;
-            apply_error = format!("Failed op {:?}: {}", op, e);
-            break;
+            apply_error = format!("Failed to hydrate plan for live workspace: {}", e);
         }
     }
 
@@ -1282,7 +1285,6 @@ async fn apply_winning_plan(
         config::WriteMode::WorkspaceWrite => {
             println!("\n  ✍️  Write mode: workspace-write — applying verified changes to workspace...");
             if let Err(e) = apply_sandbox_to_workspace(
-                sandbox_path,
                 &cfg.workspace,
                 hydrated_plan,
             ) {
@@ -1301,7 +1303,6 @@ async fn apply_winning_plan(
         config::WriteMode::DangerFullAccess => {
             println!("\n  ⚠️  Write mode: danger-full-access — applying without additional checks...");
             if let Err(e) = apply_sandbox_to_workspace(
-                sandbox_path,
                 &cfg.workspace,
                 hydrated_plan,
             ) {

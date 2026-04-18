@@ -148,6 +148,7 @@ async fn autonomous_loop_direct_submit() {
     .await
     .expect("Verifier should succeed");
 
+    println!("TEST LOG: {}", result.test_run.truncated_log);
     assert_eq!(
         format!("{:?}", result.test_run.outcome),
         "Passed",

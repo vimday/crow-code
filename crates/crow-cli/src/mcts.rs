@@ -205,14 +205,18 @@ async fn run_branch(
     snapshot_id: &crow_patch::SnapshotId,
 ) -> BranchOutcome {
     let branch_start = std::time::Instant::now();
-    let sandbox = match materialize_sandbox(branch_id, mat_config).await {
-        Ok(sb) => sb,
-        Err(outcome) => return outcome,
-    };
+    
+    // MCTS Alignment: Append a deterministic suffix to the very last message.
+    // The entire conversation history is structurally 100% identical across all branches,
+    // ensuring massive Anthropic cache hits. Only the final few tokens differ to force diversity.
+    let mut aligned_messages = messages.to_vec();
+    if let Some(last) = aligned_messages.last_mut() {
+        last.content.push_str(&format!("\n\n[MCTS EXPLORATION ARM: {}]", branch_id));
+    }
 
     // LLM generate with temperature for diversity.
     let action = match compiler
-        .compile_action_with_temperature(messages, temperature)
+        .compile_action_with_temperature(&aligned_messages, temperature)
         .await
     {
         Ok(a) => a,
@@ -220,7 +224,7 @@ async fn run_branch(
             return BranchOutcome {
                 branch_id,
                 plan: empty_plan(),
-                sandbox,
+                sandbox: dummy_sandbox(),
                 passed: false,
                 log: format!("LLM generation failed: {:?}", e),
             };
@@ -233,17 +237,36 @@ async fn run_branch(
             return BranchOutcome {
                 branch_id,
                 plan: empty_plan(),
-                sandbox,
+                sandbox: dummy_sandbox(),
                 passed: false,
                 log: format!("Branch produced non-SubmitPlan action: {:?}", other),
             };
         }
     };
+
     println!(
         "    Branch {}: LLM completed in {:.1}s",
         branch_id,
         branch_start.elapsed().as_secs_f64()
     );
+
+    // Fast-Pruning: Pre-hydrate the plan against the *frozen* root before doing any disk I/O to
+    // materialize a full sandbox. If the LLM hallucinated files or broke checksums, abort early!
+    if let Err(e) = crow_workspace::PlanHydrator::hydrate(&plan, snapshot_id, frozen_root) {
+        return BranchOutcome {
+            branch_id,
+            plan,
+            sandbox: dummy_sandbox(),
+            passed: false,
+            log: format!("Early Pruning: Syntactic invalidity or out-of-bounds mutation detected against frozen root: {:?}", e),
+        };
+    }
+
+    // Only fully materialize if we passed early pruning
+    let sandbox = match materialize_sandbox(branch_id, mat_config).await {
+        Ok(sb) => sb,
+        Err(outcome) => return outcome,
+    };
 
     let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command, lang, snapshot_id).await;
     println!(

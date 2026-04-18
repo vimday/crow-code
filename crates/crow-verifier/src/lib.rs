@@ -24,6 +24,7 @@
 pub mod aci;
 pub mod executor;
 pub mod preflight;
+pub mod semantic_compress;
 pub mod types;
 
 pub use types::*;

@@ -203,14 +203,60 @@ impl ReqwestLlmClient {
             });
         }
 
-        let resp = self.client.post(&url).json(&body).send().await?;
+        let mut retries = 0;
+        let max_retries = 5;
+        let mut delay_ms = 1000;
+        let mut raw_text = String::new();
+        let mut final_status = 0;
+        let mut last_error: Option<reqwest::Error> = None;
 
-        let status = resp.status();
-        let raw_text = resp.text().await?;
+        loop {
+            match self.client.post(&url).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    match resp.text().await {
+                        Ok(text) => {
+                            final_status = status.as_u16();
+                            raw_text = text;
+                            
+                            if status.is_success() || ![429, 500, 502, 503, 529].contains(&final_status) {
+                                break; // Not a transient error, move on
+                            } else {
+                                println!("    ⚠️ API returned transient error ({}). Retrying...", final_status);
+                            }
+                        }
+                        Err(e) => {
+                            println!("    ⚠️ API stream text read failed (IncompleteMessage?): {}. Retrying...", e);
+                            final_status = status.as_u16();
+                            last_error = Some(e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("    ⚠️ API connection transport failed: {}. Retrying...", e);
+                    last_error = Some(e);
+                }
+            }
 
-        if !status.is_success() {
+            if retries >= max_retries {
+                if let Some(err) = last_error {
+                    return Err(BrainError::Transport(err));
+                } else {
+                    return Err(BrainError::ApiError {
+                        status: final_status,
+                        body: format!("Network/transient errors maxed out. Last content: {}", raw_text),
+                    });
+                }
+            }
+
+            retries += 1;
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            delay_ms *= 2;
+        }
+
+        if !(200..300).contains(&final_status) {
             return Err(BrainError::ApiError {
-                status: status.as_u16(),
+                status: final_status,
                 body: raw_text,
             });
         }

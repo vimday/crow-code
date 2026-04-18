@@ -46,7 +46,10 @@ impl ASTProcessor {
 
         let lang = match SupportedLanguage::from_extension(ext) {
             Some(l) => l,
-            None => return Ok(source.to_string()),
+            None => {
+                // To avoid bloating the repo map, unsupported languages just get empty skeletons (path only)
+                return Ok(String::new());
+            }
         };
 
         let mut parser = Parser::new();
@@ -111,6 +114,48 @@ impl ASTProcessor {
             for child in node.children(&mut cursor) {
                 Self::collect_body_spans(child, spans);
             }
+        }
+    }
+
+    /// Extracts simple identifier string names defined in the AST (functions, structs, classes)
+    pub fn extract_definitions(&self, source: &str, path: &Path) -> std::collections::HashSet<String> {
+        let mut defs = std::collections::HashSet::new();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        
+        let lang = match SupportedLanguage::from_extension(ext) {
+            Some(l) => l,
+            None => return defs,
+        };
+
+        let mut parser = Parser::new();
+        if parser.set_language(&lang.tree_sitter_lang()).is_err() {
+            return defs;
+        }
+
+        if let Some(tree) = parser.parse(source, None) {
+            Self::collect_definition_names(tree.root_node(), source.as_bytes(), &mut defs);
+        }
+        defs
+    }
+
+    fn collect_definition_names(node: Node<'_>, source: &[u8], defs: &mut std::collections::HashSet<String>) {
+        let kind = node.kind();
+        
+        // Match identifier children of declarative nodes
+        if matches!(kind, "function_item" | "struct_item" | "enum_item" | "function_declaration" | "class_declaration") {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "identifier" || child.kind() == "type_identifier" {
+                    if let Ok(name) = child.utf8_text(source) {
+                        defs.insert(name.to_string());
+                    }
+                }
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            Self::collect_definition_names(child, source, defs);
         }
     }
 }

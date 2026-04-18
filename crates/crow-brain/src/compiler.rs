@@ -92,6 +92,37 @@ impl IntentCompiler {
         self
     }
 
+    /// Generates an auto-compaction summary of the given messages history
+    /// to replace a long conversation with a tight summary.
+    pub async fn compile_summary_of_history(
+        &self,
+        messages: &[ChatMessage],
+    ) -> Result<String, CompilerError> {
+        let mut conversation = messages.to_vec();
+        conversation.push(ChatMessage::user(
+            "[SYSTEM COMPACTION REQUEST]\n\
+            The conversation history is becoming too long.\n\
+            Please generate a highly compressed, structured `<summary>` of the ENTIRE conversation history up to this point.\n\
+            Focus strictly on:\n\
+            1. The overarching goal of the task.\n\
+            2. The precise current state of the workspace (files modified, tests run).\n\
+            3. The immediate next action you were about to take.\n\
+            \n\
+            Return ONLY the summary wrapped in `<summary>...</summary>` tags, without any other text. Do NOT emit a JSON AgentAction."
+        ));
+
+        let response = self.client.generate(&conversation).await.map_err(CompilerError::PromptFailed)?;
+        
+        let start = response.find("<summary>").map(|i| i + 9).unwrap_or(0);
+        let end = response.rfind("</summary>").unwrap_or(response.len());
+        
+        if start <= end {
+            Ok(response[start..end].trim().to_string())
+        } else {
+            Ok(response)
+        }
+    }
+
     /// Compiles a task directive into a strict `AgentAction`.
     /// Employs a self-healing loop: if the LLM output violates the schema,
     /// it catches the parsing error and prompts the LLM to fix it.

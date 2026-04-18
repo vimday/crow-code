@@ -62,7 +62,18 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
         return None;
     }
 
-    Some(hash)
+    let status_output = git_cmd()
+        .args(["status", "--porcelain"])
+        .current_dir(workspace_root)
+        .output()
+        .ok()?;
+
+    let is_dirty = !status_output.stdout.is_empty();
+    if is_dirty {
+        Some(format!("{}-dirty", hash))
+    } else {
+        Some(hash)
+    }
 }
 
 /// Automatically commit applied changes to the workspace if it's a git repository.
@@ -102,11 +113,12 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
         return Ok(());
     }
 
-    // Since we are applying changes autonomously, we should ONLY commit what the agent modified,
-    // ignoring any out-of-band files the user might have staged themselves.
+    // Since we are applying changes autonomously, we should ONLY commit what the agent modified.
+    // We intentionally omit --force here to respect .gitignore boundaries. If the model
+    // attempts to modify a secret file (e.g. .env) that is gitignored, it will not be
+    // automatically grouped into a commit, retaining security boundaries.
     let status = git_cmd()
         .arg("add")
-        .arg("--force")
         .args(&files_to_stage)
         .current_dir(workspace_root)
         .status()?;

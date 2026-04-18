@@ -106,7 +106,7 @@ cargo run -p crow-cli -- run "Fix a typo in README.md"
 | `crow dry-run <prompt>` | Alias for `run` |
 | `crow session list` | List saved sessions |
 | `crow session resume-run <id>` | Resume a saved session |
-| `crow mcp` | Manage / use MCP tools |
+| `crow mcp list-tools [server-name]` | List tools exposed by a configured MCP server |
 | `crow dashboard` | Open the dashboard |
 | `crow dream` | Run AutoDream memory consolidation |
 
@@ -148,8 +148,8 @@ L0  crow-patch   crow-evidence   crow-probe
 | `crow-materialize` | L1 | Workspace-isolation materialization |
 | `crow-verifier` | L2 | Isolated command execution and log truncation |
 | `crow-intel` | L3 | Tree-sitter repo maps / outlines |
-| `crow-brain` | L4 | Intent compiler, provider routing, MCTS, AutoDream |
-| `crow-cli` | L5 | User-facing CLI binary |
+| `crow-brain` | L4 | Intent compiler, provider routing, LLM clients, and AutoDream |
+| `crow-cli` | L5 | User-facing CLI, autonomous loop, MCTS crucible, sessions, and dashboard |
 | `crow-replay` | L5 | Replay harness (still minimal / planned) |
 | `crow-mcp` | L5 | MCP stdio transport and client |
 

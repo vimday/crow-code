@@ -212,6 +212,37 @@ impl ConversationManager {
         }
     }
 
+    /// Checks if the auto-compaction threshold is reached.
+    pub fn needs_compaction(&self) -> bool {
+        // Only compact if history itself is getting long.
+        // If the system prompt is just huge, compacting a 2-turn history won't help much!
+        let hist_bytes = self.history_bytes();
+        let turns = self.conversation.len();
+        
+        hist_bytes > (self.max_bytes * 3) / 10 || turns > (self.max_history_turns * 8) / 10
+    }
+
+    /// Shrinks the conversation history by converting the oldest turns into a
+    /// single foundational system memory, while keeping the most recent active turns.
+    pub fn compact_into_summary(&mut self, summary_text: String) {
+        // Append the new summary directly to the system anchors
+        self.system_messages.push(ChatMessage::system(summary_text));
+
+        // Retain the last 4 messages (which equals ~2 recent Request/Response pairs)
+        // rather than completely wiping out the agent's short-term memory!
+        let retain = 4;
+        let c_len = self.conversation.len();
+        if c_len > retain {
+            for _ in 0..(c_len - retain) {
+                self.conversation.pop_front();
+            }
+        }
+    }
+
+    pub fn get_total_bytes(&self) -> usize {
+        self.system_bytes() + self.history_bytes()
+    }
+
     fn history_bytes(&self) -> usize {
         self.conversation
             .iter()

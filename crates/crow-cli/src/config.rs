@@ -121,50 +121,55 @@ impl CrowConfig {
 
         // 1. Load global config
         if !is_testing && global_config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&global_config_path) {
-                if let Ok(cfg) = serde_json::from_str::<ConfigFile>(&content) {
-                    file_cfg = cfg;
-                }
-            }
+            let content = fs::read_to_string(&global_config_path).map_err(|e| {
+                anyhow::anyhow!("Failed to read global config at {}: {}", global_config_path.display(), e)
+            })?;
+            let cfg = serde_json::from_str::<ConfigFile>(&content).map_err(|e| {
+                anyhow::anyhow!("Syntax error in global config at {}: {}", global_config_path.display(), e)
+            })?;
+            file_cfg = cfg;
         }
 
         // 2. Load local config and merge
         if local_config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&local_config_path) {
-                if let Ok(cfg) = serde_json::from_str::<ConfigFile>(&content) {
-                    if let Some(llm) = cfg.llm {
-                        if let Some(ref mut global_llm) = file_cfg.llm {
-                            if llm.provider.is_some() { global_llm.provider = llm.provider.clone(); }
-                            if llm.api_key.is_some() { global_llm.api_key = llm.api_key.clone(); }
-                            if llm.model.is_some() { global_llm.model = llm.model.clone(); }
-                            if llm.base_url.is_some() { global_llm.base_url = llm.base_url.clone(); }
-                            if llm.max_tokens.is_some() { global_llm.max_tokens = llm.max_tokens; }
-                            if llm.connect_timeout.is_some() { global_llm.connect_timeout = llm.connect_timeout; }
-                            if llm.request_timeout.is_some() { global_llm.request_timeout = llm.request_timeout; }
-                            if llm.json_mode.is_some() { global_llm.json_mode = llm.json_mode; }
-                            if llm.prompt_caching.is_some() { global_llm.prompt_caching = llm.prompt_caching; }
-                            if llm.reasoning_effort.is_some() { global_llm.reasoning_effort = llm.reasoning_effort.clone(); }
-                        } else {
-                            file_cfg.llm = Some(llm);
-                        }
+            let content = fs::read_to_string(&local_config_path).map_err(|e| {
+                anyhow::anyhow!("Failed to read local config at {}: {}", local_config_path.display(), e)
+            })?;
+            let cfg = serde_json::from_str::<ConfigFile>(&content).map_err(|e| {
+                anyhow::anyhow!("Syntax error in local config at {}: {}", local_config_path.display(), e)
+            })?;
+            
+            if let Some(llm) = cfg.llm {
+                if let Some(ref mut global_llm) = file_cfg.llm {
+                    if llm.provider.is_some() { global_llm.provider = llm.provider.clone(); }
+                    if llm.api_key.is_some() { global_llm.api_key = llm.api_key.clone(); }
+                    if llm.model.is_some() { global_llm.model = llm.model.clone(); }
+                    if llm.base_url.is_some() { global_llm.base_url = llm.base_url.clone(); }
+                    if llm.max_tokens.is_some() { global_llm.max_tokens = llm.max_tokens; }
+                    if llm.connect_timeout.is_some() { global_llm.connect_timeout = llm.connect_timeout; }
+                    if llm.request_timeout.is_some() { global_llm.request_timeout = llm.request_timeout; }
+                    if llm.json_mode.is_some() { global_llm.json_mode = llm.json_mode; }
+                    if llm.prompt_caching.is_some() { global_llm.prompt_caching = llm.prompt_caching; }
+                    if llm.reasoning_effort.is_some() { global_llm.reasoning_effort = llm.reasoning_effort.clone(); }
+                } else {
+                    file_cfg.llm = Some(llm);
+                }
+            }
+            if let Some(ws) = cfg.workspace {
+                 if let Some(ref mut global_ws) = file_cfg.workspace {
+                     if ws.map_budget.is_some() { global_ws.map_budget = ws.map_budget; }
+                     if ws.write_mode.is_some() { global_ws.write_mode = ws.write_mode.clone(); }
+                 } else {
+                     file_cfg.workspace = Some(ws);
+                 }
+            }
+            if let Some(mcp) = cfg.mcp_servers {
+                if let Some(ref mut global_mcp) = file_cfg.mcp_servers {
+                    for (k, v) in mcp {
+                        global_mcp.insert(k, v);
                     }
-                    if let Some(ws) = cfg.workspace {
-                         if let Some(ref mut global_ws) = file_cfg.workspace {
-                             if ws.map_budget.is_some() { global_ws.map_budget = ws.map_budget; }
-                             if ws.write_mode.is_some() { global_ws.write_mode = ws.write_mode.clone(); }
-                         } else {
-                             file_cfg.workspace = Some(ws);
-                         }
-                    }
-                    if let Some(mcp) = cfg.mcp_servers {
-                        if let Some(ref mut global_mcp) = file_cfg.mcp_servers {
-                            for (k, v) in mcp {
-                                global_mcp.insert(k, v);
-                            }
-                        } else {
-                            file_cfg.mcp_servers = Some(mcp);
-                        }
-                    }
+                } else {
+                    file_cfg.mcp_servers = Some(mcp);
                 }
             }
         }
