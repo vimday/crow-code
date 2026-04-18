@@ -762,7 +762,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         
         if let Some(w) = winner {
             // Apply the winning plan using the workspace WriteMode
-            let plan_id = format!("mcts-{}", snapshot_id.0);
+            let plan_id = format!("mcts-{}-{}", snapshot_id.0, chrono::Utc::now().timestamp_millis());
             apply_winning_plan(&cfg, w.sandbox.path(), &w.plan, &plan_id, &snapshot_id, &mut ledger).await?;
             drop(w.sandbox);
         }
@@ -1283,11 +1283,13 @@ async fn apply_winning_plan(
         }
     }
 
-    let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
-        plan_id: plan_id.to_string(),
-        snapshot_id: snapshot_id.clone(),
-        timestamp: chrono::Utc::now(),
-    });
+    if cfg.write_mode != config::WriteMode::SandboxOnly {
+        let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
+            plan_id: plan_id.to_string(),
+            snapshot_id: snapshot_id.clone(),
+            timestamp: chrono::Utc::now(),
+        });
+    }
 
     Ok(())
 }
@@ -1486,5 +1488,51 @@ async fn run_autodream() -> Result<()> {
     dreamer.execute_dream_cycle(client.as_ref()).await?;
     
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use std::fs;
+
+    #[tokio::test]
+    async fn test_apply_winning_plan_sandbox_only_does_not_append_ledger() {
+        let workspace = TempDir::new().unwrap();
+        let ledger_dir = workspace.path().join("ledger.jsonl");
+        let mut ledger = crow_workspace::ledger::EventLedger::open(&ledger_dir).unwrap();
+
+        let cfg = config::CrowConfig {
+            workspace: workspace.path().to_path_buf(),
+            write_mode: config::WriteMode::SandboxOnly,
+            llm: Default::default(),
+            map_budget: 1024,
+            mcp_servers: Default::default(),
+        };
+
+        let sandbox = TempDir::new().unwrap();
+        let plan = crow_patch::IntentPlan {
+            base_snapshot_id: crow_patch::SnapshotId("snap-123".into()),
+            rationale: "test".into(),
+            is_partial: false,
+            confidence: crow_patch::Confidence::High,
+            operations: vec![],
+        };
+
+        let snap_id = crow_patch::SnapshotId("snap-123".into());
+        
+        apply_winning_plan(
+            &cfg,
+            sandbox.path(),
+            &plan,
+            "test-plan",
+            &snap_id,
+            &mut ledger,
+        ).await.unwrap();
+
+        // Ledger should be empty for SandboxOnly mode
+        let contents = fs::read_to_string(&ledger_dir).unwrap_or_default();
+        assert!(contents.is_empty(), "SandboxOnly should not emit PlanApplied event to ledger");
+    }
 }
 
