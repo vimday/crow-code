@@ -747,8 +747,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         // Pre-warm the build cache so all MCTS branches start with
         // compiled dependencies. Without this, the first cargo check
         // in every branch hits a cold cache (30-60s); with it, each
-        println!("    🔥 Warming up build cache for parallel branches...");
-        warm_build_cache(&frozen_root, &cfg.workspace, &profile).await;
+        warm_build_cache(&frozen_root, &cfg.workspace, &profile, &candidate).await;
         let winner = run_mcts_crucible(
             &mcts_config,
             &profile,
@@ -1138,17 +1137,29 @@ fn apply_sandbox_to_workspace(
 /// recompilation of the patched crate(s).
 ///
 /// Failure is non-fatal: if the warm-up fails (e.g. the project doesn't
-/// compile in its current state), branches will simply cold-build.
 async fn warm_build_cache(
     frozen_root: &std::path::Path,
     workspace_root: &std::path::Path,
     profile: &crow_probe::types::ProjectProfile,
+    candidate: &crow_probe::types::VerificationCandidate,
 ) {
     use std::time::Instant;
 
     let mut cmd = None;
     match profile.primary_lang.name.as_str() {
-        "rust" => cmd = Some(crow_probe::VerificationCommand::new("cargo", vec!["check", "--color=never"])),
+        "rust" => {
+            let mut c = candidate.command.clone();
+            if c.program == "cargo" || c.program.ends_with("/cargo") {
+                if c.args.contains(&"test".to_string()) && !c.args.contains(&"--no-run".to_string()) {
+                    c.args.push("--no-run".to_string());
+                }
+            }
+            // Strip out display colors which pollute verification parsing (just in case)
+            if !c.args.iter().any(|a| a.starts_with("--color")) {
+                c.args.push("--color=never".to_string());
+            }
+            cmd = Some(c);
+        }
         "typescript" | "javascript" => cmd = Some(crow_probe::VerificationCommand::new("npm", vec!["install", "--ignore-scripts"])),
         _ => {}
     };
@@ -1161,12 +1172,20 @@ async fn warm_build_cache(
     println!("\n[4.5/6] Pre-warming build cache for {}...", profile.primary_lang.name);
     let start = Instant::now();
     
-    // NEW: Branch specific cache copying
-    // Clone the `workspace_root`'s baseline cache into the `frozen_root`'s unique cache
-    // so that the cargo check runs incrementally in ~1s instead of cold building for 30s+!
-    let workspace_cache = crow_verifier::executor::compute_target_dir_path(workspace_root);
+    // NEW: Bootstrapping cache magic!
+    // The previous implementation used an initially EMPTY hash directory, causing a 30s+ cold build.
+    // Now, we map the host's actual `target/` directory if it exists, bypassing the cold build instantly!
+    let host_target = workspace_root.join("target");
+    let crow_target = crow_verifier::executor::compute_target_dir_path(workspace_root);
+    
+    let base_cache = if host_target.exists() {
+        host_target
+    } else {
+        crow_target.clone()
+    };
+    
     let frozen_cache = crow_verifier::executor::compute_target_dir_path(frozen_root);
-    crate::mcts::clone_cache_dir(&workspace_cache, &frozen_cache).await;
+    crate::mcts::clone_cache_dir(&base_cache, &frozen_cache).await;
 
     let exec_config = crow_verifier::ExecutionConfig {
         timeout: std::time::Duration::from_secs(120),
@@ -1186,8 +1205,10 @@ async fn warm_build_cache(
         Ok(result) => {
             let elapsed = start.elapsed();
             if result.exit_code == Some(0) {
-                // Once warmed in frozen root, sync it BACK to workspace cache to benefit future sessions!
-                crate::mcts::clone_cache_dir(&frozen_cache, &workspace_cache).await;
+                // Sync the warmed cache into our isolated global tracker for future runs.
+                // We MUST use `crow_target` here, NOT `host_target`, as we do not want to pollute 
+                // the user's active workspace target/ with our sandbox builds!
+                crate::mcts::clone_cache_dir(&frozen_cache, &crow_target).await;
                 println!(
                     "    ✅ Build cache warmed in {:.1}s — MCTS branches will use incremental compilation",
                     elapsed.as_secs_f64()
