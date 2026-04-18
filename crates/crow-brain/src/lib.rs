@@ -4,9 +4,12 @@
 //! search policy for high-risk refactors. All governed by a strict
 //! compute/time budget.
 
+pub mod anthropic;
 pub mod client;
 pub mod compiler;
+pub mod router;
 pub mod schema;
 
 pub use client::{BrainError, LlmProviderConfig, ProviderKind, ReqwestLlmClient};
 pub use compiler::{ChatMessage, ChatRole, CompilerError, IntentCompiler, LlmClient};
+pub use router::{build_client, describe_provider};

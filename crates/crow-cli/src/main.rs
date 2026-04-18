@@ -216,7 +216,7 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
 
     println!("  Entering crucible loop...\n");
 
-    let client = std::sync::Arc::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
+    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
     let compiler = crow_brain::IntentCompiler::new(client);
 
     // Run one crucible attempt
@@ -334,11 +334,11 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
     );
 
     println!(
-        "\n[2/3] Compiling IntentPlan via crow-brain (Model: {})...",
-        cfg.llm.model
+        "\n[2/3] Compiling IntentPlan via crow-brain (Engine: {})...",
+        cfg.describe_provider()
     );
 
-    let client = std::sync::Arc::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
+    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
     let compiler = IntentCompiler::new(client);
 
     use crate::context::ConversationManager;
@@ -422,7 +422,7 @@ async fn run_plan(args: &[String]) -> Result<()> {
 
     let repo_map = cfg.build_repo_map_for(&frozen_root).map_err(|e| anyhow::anyhow!(e))?;
 
-    let client = std::sync::Arc::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
+    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
     let compiler = IntentCompiler::new(client);
 
     use crate::context::ConversationManager;
@@ -637,11 +637,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
     // ── Step 3: Autonomous Crucible Loop ───────────────────────────
     println!(
-        "\n[4/6] Entering Autonomous Crucible Loop (Model: {})...",
-        cfg.llm.model
+        "\n[4/6] Entering Autonomous Crucible Loop (Engine: {})...",
+        cfg.describe_provider()
     );
 
-    let client = std::sync::Arc::new(cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?);
+    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
     let compiler = IntentCompiler::new(client);
 
     // Structured message history with proper role separation.

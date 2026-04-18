@@ -107,7 +107,10 @@ impl CrowConfig {
 
         // ── LLM Configuration ──
 
+        // Resolve API key with provider-aware fallback chain
         let env_api_key = env::var("OPENAI_API_KEY")
+            .or_else(|_| env::var("ANTHROPIC_API_KEY"))
+            .or_else(|_| env::var("DEEPSEEK_API_KEY"))
             .or_else(|_| env::var("CROW_API_KEY"))
             .ok();
         let api_key = env_api_key.or(file_llm.api_key);
@@ -137,10 +140,26 @@ impl CrowConfig {
         let default_base_url = "https://api.openai.com/v1".to_string();
 
         let (provider_kind, final_base_url, final_model) = match provider_str.as_deref() {
-            Some("openai") | Some("openaicompatible") => (
+            Some("openai") | Some("openaicompatible") | Some("openai-compatible") => (
                 ProviderKind::OpenAICompatible,
                 base_url.unwrap_or_else(|| default_base_url.clone()),
                 model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
+            ),
+            // Well-known providers with sensible defaults
+            Some("anthropic") | Some("claude") => (
+                ProviderKind::Custom("anthropic".to_string()),
+                base_url.unwrap_or_else(|| "https://api.anthropic.com/v1".to_string()),
+                model.unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
+            ),
+            Some("ollama") => (
+                ProviderKind::Custom("ollama".to_string()),
+                base_url.unwrap_or_else(|| "http://localhost:11434/v1".to_string()),
+                model.unwrap_or_else(|| "llama3".to_string()),
+            ),
+            Some("deepseek") => (
+                ProviderKind::Custom("deepseek".to_string()),
+                base_url.unwrap_or_else(|| "https://api.deepseek.com/v1".to_string()),
+                model.unwrap_or_else(|| "deepseek-coder".to_string()),
             ),
             Some(other) => {
                 let url = base_url.ok_or_else(|| {
@@ -178,11 +197,29 @@ impl CrowConfig {
             }
         };
 
-        if matches!(provider_kind, ProviderKind::OpenAICompatible) && api_key.is_none() {
+        // Provider-aware API key validation
+        let requires_api_key = match &provider_kind {
+            ProviderKind::OpenAICompatible => true,
+            ProviderKind::Custom(name) => {
+                let lower = name.to_lowercase();
+                // Ollama doesn't require an API key
+                lower != "ollama"
+            }
+        };
+
+        if requires_api_key && api_key.is_none() {
+            let hint = match &provider_kind {
+                ProviderKind::Custom(name) if name == "anthropic" => {
+                    "Set ANTHROPIC_API_KEY or CROW_API_KEY."
+                }
+                ProviderKind::Custom(name) if name == "deepseek" => {
+                    "Set DEEPSEEK_API_KEY or CROW_API_KEY."
+                }
+                _ => "Set OPENAI_API_KEY or CROW_API_KEY.",
+            };
             anyhow::bail!(
-                "Missing API Key for {:?}. Please set OPENAI_API_KEY or CROW_API_KEY. \
-                 (API key is only optional when using a custom provider with explicitly set base URL.)",
-                 provider_kind
+                "Missing API Key for {:?}. {}",
+                provider_kind, hint
             );
         }
 
@@ -259,8 +296,14 @@ impl CrowConfig {
     }
 
     /// Build an LLM client from this configuration.
-    pub fn build_llm_client(&self) -> Result<ReqwestLlmClient, BrainError> {
-        ReqwestLlmClient::from_config(&self.llm)
+    /// Routes to the correct provider implementation (OpenAI, Anthropic, Ollama, DeepSeek).
+    pub fn build_llm_client(&self) -> Result<std::sync::Arc<dyn crow_brain::LlmClient>, BrainError> {
+        crow_brain::build_client(&self.llm)
+    }
+
+    /// Human-readable description of the configured provider.
+    pub fn describe_provider(&self) -> String {
+        crow_brain::describe_provider(&self.llm)
     }
 
     /// Build a repo map from the workspace using the configured budget.
