@@ -1213,6 +1213,13 @@ async fn run_mcts_crucible(
     // 1. Initial Epistemic Loop (Serial Recon)
     println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
     let baseline_plan = epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager).await?;
+    
+    if baseline_plan.operations.is_empty() {
+        println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
+        println!("─── Agent Message ───\n{}", baseline_plan.rationale);
+        return Ok(());
+    }
+
     println!("    Seeding baseline plan into MCTS branch 0...");
 
     // 2. MCTS Parallel Explore Rounds
