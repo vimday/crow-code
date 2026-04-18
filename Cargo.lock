@@ -187,6 +187,7 @@ dependencies = [
  "crow-evidence",
  "crow-intel",
  "crow-materialize",
+ "crow-mcp",
  "crow-patch",
  "crow-probe",
  "crow-verifier",
@@ -224,6 +225,18 @@ version = "0.1.0"
 dependencies = [
  "globset",
  "libc",
+]
+
+[[package]]
+name = "crow-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

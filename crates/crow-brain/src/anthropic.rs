@@ -51,6 +51,11 @@ impl AnthropicClient {
         }
 
         let client = Client::builder()
+            // Avoid OS proxy auto-discovery here. On some sandboxed macOS
+            // environments the system proxy lookup path can panic inside
+            // `system-configuration`, which would take down both tests and
+            // runtime client construction.
+            .no_proxy()
             .default_headers(headers)
             .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
             .timeout(std::time::Duration::from_secs(config.request_timeout_secs))
