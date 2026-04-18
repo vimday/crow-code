@@ -184,7 +184,7 @@ impl IntentCompiler {
 }
 
 /// Helper to strip ```json ... ``` wrappers from LLM output.
-fn extract_json_block(text: &str) -> &str {
+pub fn extract_json_block(text: &str) -> &str {
     let trimmed = text.trim();
     if let Some(after_fence) = trimmed.strip_prefix("```json") {
         if let Some(end) = after_fence.rfind("```") {

@@ -29,6 +29,7 @@ impl StdioTransport {
     pub fn spawn(cmd: &str, args: &[&str]) -> Result<Self> {
         let mut child = Command::new(cmd)
             .args(args)
+            .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // Pass stderr through for debugging
