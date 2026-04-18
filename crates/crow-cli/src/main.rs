@@ -833,6 +833,16 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         let compiled_plan =
             epistemic::run_epistemic_loop(&compiler, messages, &frozen_root, Some(&mcp_manager)).await?;
 
+        // ── Conversational Short-Circuit ──
+        // If the agent submitted an empty plan (no file changes), this is a
+        // conversational response. Render it and skip verification entirely.
+        if compiled_plan.operations.is_empty() {
+            println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
+            let renderer = crate::render::TerminalRenderer::new();
+            let _ = renderer.render_markdown(&compiled_plan.rationale);
+            return Ok(snapshot_id);
+        }
+
         // Re-materialize from the FROZEN baseline, not the live workspace.
         // This ensures every crucible attempt starts from the same immutable
         // snapshot, even if the live workspace changes between attempts.
@@ -1348,7 +1358,8 @@ async fn run_mcts_crucible(
     
     if baseline_plan.operations.is_empty() {
         println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
-        println!("─── Agent Message ───\n{}", baseline_plan.rationale);
+        let renderer = crate::render::TerminalRenderer::new();
+        let _ = renderer.render_markdown(&baseline_plan.rationale);
         return Ok(None);
     }
 

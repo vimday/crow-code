@@ -291,9 +291,19 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                     }
                 }
 
+                // ── Skip Empty Input ──
+                if input.is_empty() {
+                    continue;
+                }
+
                 // ── Execute Turn ──
                 state.turns += 1;
                 println!();
+                println!(
+                    "  {}",
+                    "💭 Analyzing workspace and synthesizing IntentPlan..."
+                        .with(Color::DarkGrey)
+                );
                 let turn_start = Instant::now();
 
                 match crate::run_conversation_turn(cfg, input, &mut messages).await {
