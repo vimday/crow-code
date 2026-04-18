@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
         Some("compile") => run_compile_only(&args[2..]).await,
         Some("dry-run") => run_dry_run(&args[2..]).await,
         Some("session") => handle_session_command(&args[2..]).await,
+        Some("mcp") => handle_mcp_command(&args[2..]).await,
         Some("legacy-god") => legacy_god::run_god_pipeline().await,
         Some("--help") | Some("-h") | Some("help") => {
             print_help();
@@ -1124,4 +1125,49 @@ async fn run_mcts_crucible(
         "MCTS exploration exhausted all {} rounds without finding a passing plan.",
         mcts_config.max_rounds
     );
+}
+
+// ─── MCP Commands ───────────────────────────────────────────────────
+
+async fn handle_mcp_command(args: &[String]) -> Result<()> {
+    let subcmd = args.first().map(|s| s.as_str());
+    match subcmd {
+        Some("list-tools") => {
+            let server_name = args.get(1).map(|s| s.as_str());
+            let cfg = CrowConfig::load()?;
+            
+            let (name, mcp_cfg) = if let Some(n) = server_name {
+                let conf = cfg.mcp_servers.get(n).ok_or_else(|| anyhow::anyhow!("MCP server '{}' not found in config", n))?;
+                (n, conf)
+            } else {
+                if cfg.mcp_servers.is_empty() {
+                    anyhow::bail!("No MCP servers configured in .crow/config.json");
+                }
+                // Just grab the first one
+                let first = cfg.mcp_servers.iter().next().unwrap();
+                (first.0.as_str(), first.1)
+            };
+
+            println!("🔌 Connecting to MCP Server: {} ({} {})", name, mcp_cfg.command, mcp_cfg.args.join(" "));
+            
+            let args_refs: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
+            let client = crow_mcp::McpClient::spawn(&mcp_cfg.command, &args_refs)?;
+            
+            println!("  Initializing handshake...");
+            let init = client.initialize().await?;
+            println!("  ✅ Server initialized: {} v{}", init.server_info.name, init.server_info.version);
+            
+            println!("  Fetching tools...");
+            let tools = client.list_tools().await?;
+            println!("\n🛠️  Available Tools ({}):", tools.tools.len());
+            for tool in tools.tools {
+                println!("  - {} : {}", tool.name, tool.description.as_deref().unwrap_or("No description"));
+            }
+            Ok(())
+        }
+        _ => {
+            eprintln!("Usage: crow mcp list-tools [server-name]");
+            Ok(())
+        }
+    }
 }

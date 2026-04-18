@@ -13,7 +13,7 @@ use std::sync::Arc;
 const ANTHROPIC_ALIASES: &[&str] = &["anthropic", "claude"];
 const OLLAMA_ALIASES: &[&str] = &["ollama"];
 const DEEPSEEK_ALIASES: &[&str] = &["deepseek"];
-const OPENAI_ALIASES: &[&str] = &["openai", "openaicompatible", "openai-compatible"];
+
 
 /// Construct the correct LLM client for the given provider configuration.
 ///

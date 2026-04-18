@@ -2,7 +2,7 @@
 //!
 //! Priority: Environment variables > `.crow/config.json` > defaults.
 
-use crow_brain::{BrainError, LlmProviderConfig, ProviderKind, ReqwestLlmClient};
+use crow_brain::{BrainError, LlmProviderConfig, ProviderKind};
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -55,6 +55,14 @@ impl std::fmt::Display for WriteMode {
 struct ConfigFile {
     llm: Option<LlmConfigFile>,
     workspace: Option<WorkspaceConfigFile>,
+    mcp_servers: Option<std::collections::HashMap<String, McpServerConfig>>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct McpServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -85,6 +93,7 @@ pub struct CrowConfig {
     pub llm: LlmProviderConfig,
     pub map_budget: usize,
     pub write_mode: WriteMode,
+    pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
 }
 
 impl CrowConfig {
@@ -292,6 +301,7 @@ impl CrowConfig {
             llm,
             map_budget,
             write_mode,
+            mcp_servers: file_cfg.mcp_servers.unwrap_or_default(),
         })
     }
 

@@ -22,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 similar = "2.6"
 anyhow = "1"
 crow-evidence = { version = "0.1.0", path = "../crow-evidence" }
+crow-mcp = { version = "0.1.0", path = "../crow-mcp" }
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
@@ -32,6 +33,8 @@ tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 crow-brain = { path = "../crow-brain" }
 crow-materialize = { path = "../crow-materialize" }
 crow-patch = { path = "../crow-patch" }
+crow-evidence = { path = "../crow-evidence" }
+
 crow-probe = { path = "../crow-probe" }
 crow-verifier = { path = "../crow-verifier" }
 crow-workspace = { path = "../crow-workspace" }
