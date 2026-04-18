@@ -1470,7 +1470,8 @@ async fn handle_mcp_command(args: &[String]) -> Result<()> {
                     anyhow::bail!("No MCP servers configured in .crow/config.json");
                 }
                 // Just grab the first one
-                let first = cfg.mcp_servers.iter().next().unwrap();
+                let first = cfg.mcp_servers.iter().next()
+                    .ok_or_else(|| anyhow::anyhow!("Expected at least one MCP server, but map was empty after check"))?;
                 (first.0.as_str(), first.1)
             };
 

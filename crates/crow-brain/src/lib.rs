@@ -11,6 +11,9 @@ pub mod compiler;
 pub mod router;
 pub mod schema;
 
+pub mod usage;
+
 pub use client::{BrainError, LlmProviderConfig, ProviderKind, ReqwestLlmClient};
 pub use compiler::{ChatMessage, ChatRole, CompilerError, IntentCompiler, LlmClient};
 pub use router::{build_client, describe_provider};
+pub use usage::TokenUsage;
