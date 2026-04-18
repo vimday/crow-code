@@ -1,10 +1,18 @@
+//! Epistemic loop UI dispatchers.
+//!
+//! Provides the `EpistemicObserver` trait to abstract progress reporting
+//! from the underlying MCTS and Serial engines.
+
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
+/// Implementors of this trait handle progress ticks from the epistemic loop.
 pub trait EpistemicObserver: Send {
+    /// Called per epistemic compiler step.
     fn on_step(&mut self, step: usize, max_steps: usize);
 }
 
+/// A silent observer that drops all UI feedback, used for high-velocity MCTS branches.
 pub struct SilentObserver;
 impl EpistemicObserver for SilentObserver {
     fn on_step(&mut self, _step: usize, _max: usize) {}

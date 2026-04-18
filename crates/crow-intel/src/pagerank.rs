@@ -50,8 +50,12 @@ pub fn compute_personalized_pagerank(
             if content.contains(*symbol) {
                 for file_b in defining_files {
                     if file_a != *file_b {
-                        if let Some(set) = adjacency.get_mut(file_a) { set.insert(*file_b); }
-                        if let Some(set) = adjacency.get_mut(*file_b) { set.insert(file_a); }
+                        if let Some(set) = adjacency.get_mut(file_a) {
+                            set.insert(*file_b);
+                        }
+                        if let Some(set) = adjacency.get_mut(*file_b) {
+                            set.insert(file_a);
+                        }
                     }
                 }
             }
@@ -103,10 +107,12 @@ pub fn compute_personalized_pagerank(
                         }
                     }
                 }
-            } else {
-                let share = (ranks[u] * damping) / (neighbors.len() as f64);
+            } else if let Some(&rank_u) = ranks.get(u) {
+                let share = (rank_u * damping) / (neighbors.len() as f64);
                 for v in neighbors {
-                    *new_ranks.get_mut(v).unwrap() += share;
+                    if let Some(nr) = new_ranks.get_mut(v) {
+                        *nr += share;
+                    }
                 }
             }
         }

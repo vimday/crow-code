@@ -1,6 +1,6 @@
 //! Evidence Report.
 //!
-//! Formats the internal pipeline (snapshot anchoring, plan hydration, 
+//! Formats the internal pipeline (snapshot anchoring, plan hydration,
 //! preflight verification, evidence matrix) into a structured report for CLI output.
 
 use crow_evidence::types::{EvidenceMatrix, RiskKind};

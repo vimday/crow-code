@@ -1,3 +1,8 @@
+//! The Serial Crucible execution loop.
+//!
+//! Orchestrates the end-to-end verification and code application flow for a single turn,
+//! handling sandbox materialization, compilation preflights, and test execution.
+
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
 use crate::epistemic;
@@ -10,13 +15,30 @@ use crow_probe::types::{ProjectProfile, VerificationCandidate};
 use crow_workspace::ledger::EventLedger;
 use std::path::Path;
 
+/// Contains the static references and environment required to safely orchestrate
+/// a sandbox evaluation epoch.
 pub struct SerialCrucible<'a> {
+    /// Workspace configuration and bounds.
     pub cfg: &'a CrowConfig,
+    /// Profile of the current workspace containing ignore specs.
     pub profile: &'a ProjectProfile,
+    /// The target verification command to assert code correctness.
     pub candidate: &'a VerificationCandidate,
+    /// The path to the frozen baseline directory (read-only reference point).
     pub frozen_root: &'a Path,
+    /// The orchestrating LLM toolchain.
     pub compiler: &'a IntentCompiler,
+    /// Contextual state for MCP plugins and tools.
     pub mcp_manager: Option<&'a crate::mcp::McpManager>,
+}
+
+enum EpochOutcome {
+    /// Sandbox successfully applied and tested, or conversional short-circuit.
+    Success(SnapshotId),
+    /// Plan hydration or preflight failed. Does NOT consume a verification run.
+    RetryCompile,
+    /// Preflight passed, but verifier tests failed. DOES consume a verification run.
+    RetryVerification,
 }
 
 impl SerialCrucible<'_> {
@@ -38,7 +60,7 @@ impl SerialCrucible<'_> {
                 verification_runs + 1
             );
 
-            if let Some(new_snap) = self
+            match self
                 .run_epoch(
                     messages,
                     snapshot_id,
@@ -48,10 +70,17 @@ impl SerialCrucible<'_> {
                 )
                 .await?
             {
-                return Ok(new_snap);
+                EpochOutcome::Success(new_snap) => return Ok(new_snap),
+                EpochOutcome::RetryCompile => {
+                    // LLM hallucinated files or compile errors. Don't consume verifier budget!
+                    continue;
+                }
+                EpochOutcome::RetryVerification => {
+                    // Logic issue: verifier executed but failed.
+                    verification_runs += 1;
+                    continue;
+                }
             }
-
-            verification_runs += 1;
         }
 
         anyhow::bail!("All crucible attempts failed to pass verification.");
@@ -64,7 +93,7 @@ impl SerialCrucible<'_> {
         ledger: &mut EventLedger,
         verification_runs: u32,
         _total_attempts: u32,
-    ) -> Result<Option<SnapshotId>> {
+    ) -> Result<EpochOutcome> {
         if messages.needs_compaction() {
             println!("  🗜️  Auto-compacting massive context history (Auto-Compaction)...");
             if let Ok(summary) = self
@@ -96,7 +125,7 @@ impl SerialCrucible<'_> {
             println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
             let renderer = crate::render::TerminalRenderer::new();
             let _ = renderer.render_markdown(&compiled_plan.rationale);
-            return Ok(Some(snapshot_id.clone()));
+            return Ok(EpochOutcome::Success(snapshot_id.clone()));
         }
 
         println!("\n[5/6] Re-materializing fresh sandbox (from frozen baseline)...");
@@ -136,7 +165,7 @@ impl SerialCrucible<'_> {
                     "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
                     e
                 ));
-                return Ok(None);
+                return Ok(EpochOutcome::RetryCompile);
             }
             Err(e) => {
                 anyhow::bail!("Hydration task panicked: {:?}", e);
@@ -211,7 +240,7 @@ impl SerialCrucible<'_> {
                         "[PREFLIGHT COMPILE CHECK FAILED]\n{}\n\nPlease fix these compile errors and resubmit your plan.",
                         summary
                     ));
-                    return Ok(None);
+                    return Ok(EpochOutcome::RetryCompile);
                 }
                 PreflightResult::Skipped(reason) => {
                     println!("    ⚠️  Preflight skipped: {}", reason);
@@ -259,7 +288,7 @@ impl SerialCrucible<'_> {
             )
             .await?;
             let new_snapshot_id = crate::snapshot::resolve_snapshot_id(&self.cfg.workspace);
-            return Ok(Some(new_snapshot_id));
+            return Ok(EpochOutcome::Success(new_snapshot_id));
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
             messages.push_verifier_result(
@@ -273,6 +302,6 @@ impl SerialCrucible<'_> {
             });
         }
 
-        Ok(None)
+        Ok(EpochOutcome::RetryVerification)
     }
 }

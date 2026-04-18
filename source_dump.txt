@@ -9677,7 +9677,7 @@ File: crates/crow-cli/src/evidence_report.rs
 ======================================
 //! Evidence Report.
 //!
-//! Formats the internal pipeline (snapshot anchoring, plan hydration, 
+//! Formats the internal pipeline (snapshot anchoring, plan hydration,
 //! preflight verification, evidence matrix) into a structured report for CLI output.
 
 use crow_evidence::types::{EvidenceMatrix, RiskKind};
@@ -10442,6 +10442,11 @@ mod tests {
 ======================================
 File: crates/crow-cli/src/crucible.rs
 ======================================
+//! The Serial Crucible execution loop.
+//!
+//! Orchestrates the end-to-end verification and code application flow for a single turn,
+//! handling sandbox materialization, compilation preflights, and test execution.
+
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
 use crate::epistemic;
@@ -10454,13 +10459,30 @@ use crow_probe::types::{ProjectProfile, VerificationCandidate};
 use crow_workspace::ledger::EventLedger;
 use std::path::Path;
 
+/// Contains the static references and environment required to safely orchestrate
+/// a sandbox evaluation epoch.
 pub struct SerialCrucible<'a> {
+    /// Workspace configuration and bounds.
     pub cfg: &'a CrowConfig,
+    /// Profile of the current workspace containing ignore specs.
     pub profile: &'a ProjectProfile,
+    /// The target verification command to assert code correctness.
     pub candidate: &'a VerificationCandidate,
+    /// The path to the frozen baseline directory (read-only reference point).
     pub frozen_root: &'a Path,
+    /// The orchestrating LLM toolchain.
     pub compiler: &'a IntentCompiler,
+    /// Contextual state for MCP plugins and tools.
     pub mcp_manager: Option<&'a crate::mcp::McpManager>,
+}
+
+enum EpochOutcome {
+    /// Sandbox successfully applied and tested, or conversional short-circuit.
+    Success(SnapshotId),
+    /// Plan hydration or preflight failed. Does NOT consume a verification run.
+    RetryCompile,
+    /// Preflight passed, but verifier tests failed. DOES consume a verification run.
+    RetryVerification,
 }
 
 impl SerialCrucible<'_> {
@@ -10482,7 +10504,7 @@ impl SerialCrucible<'_> {
                 verification_runs + 1
             );
 
-            if let Some(new_snap) = self
+            match self
                 .run_epoch(
                     messages,
                     snapshot_id,
@@ -10492,10 +10514,17 @@ impl SerialCrucible<'_> {
                 )
                 .await?
             {
-                return Ok(new_snap);
+                EpochOutcome::Success(new_snap) => return Ok(new_snap),
+                EpochOutcome::RetryCompile => {
+                    // LLM hallucinated files or compile errors. Don't consume verifier budget!
+                    continue;
+                }
+                EpochOutcome::RetryVerification => {
+                    // Logic issue: verifier executed but failed.
+                    verification_runs += 1;
+                    continue;
+                }
             }
-
-            verification_runs += 1;
         }
 
         anyhow::bail!("All crucible attempts failed to pass verification.");
@@ -10508,7 +10537,7 @@ impl SerialCrucible<'_> {
         ledger: &mut EventLedger,
         verification_runs: u32,
         _total_attempts: u32,
-    ) -> Result<Option<SnapshotId>> {
+    ) -> Result<EpochOutcome> {
         if messages.needs_compaction() {
             println!("  🗜️  Auto-compacting massive context history (Auto-Compaction)...");
             if let Ok(summary) = self
@@ -10540,7 +10569,7 @@ impl SerialCrucible<'_> {
             println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
             let renderer = crate::render::TerminalRenderer::new();
             let _ = renderer.render_markdown(&compiled_plan.rationale);
-            return Ok(Some(snapshot_id.clone()));
+            return Ok(EpochOutcome::Success(snapshot_id.clone()));
         }
 
         println!("\n[5/6] Re-materializing fresh sandbox (from frozen baseline)...");
@@ -10580,7 +10609,7 @@ impl SerialCrucible<'_> {
                     "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
                     e
                 ));
-                return Ok(None);
+                return Ok(EpochOutcome::RetryCompile);
             }
             Err(e) => {
                 anyhow::bail!("Hydration task panicked: {:?}", e);
@@ -10655,7 +10684,7 @@ impl SerialCrucible<'_> {
                         "[PREFLIGHT COMPILE CHECK FAILED]\n{}\n\nPlease fix these compile errors and resubmit your plan.",
                         summary
                     ));
-                    return Ok(None);
+                    return Ok(EpochOutcome::RetryCompile);
                 }
                 PreflightResult::Skipped(reason) => {
                     println!("    ⚠️  Preflight skipped: {}", reason);
@@ -10703,7 +10732,7 @@ impl SerialCrucible<'_> {
             )
             .await?;
             let new_snapshot_id = crate::snapshot::resolve_snapshot_id(&self.cfg.workspace);
-            return Ok(Some(new_snapshot_id));
+            return Ok(EpochOutcome::Success(new_snapshot_id));
         } else {
             println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
             messages.push_verifier_result(
@@ -10717,7 +10746,7 @@ impl SerialCrucible<'_> {
             });
         }
 
-        Ok(None)
+        Ok(EpochOutcome::RetryVerification)
     }
 }
 
@@ -12586,13 +12615,21 @@ fn ui(f: &mut Frame, app: &App) {
 ======================================
 File: crates/crow-cli/src/epistemic_ui.rs
 ======================================
+//! Epistemic loop UI dispatchers.
+//!
+//! Provides the `EpistemicObserver` trait to abstract progress reporting
+//! from the underlying MCTS and Serial engines.
+
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
+/// Implementors of this trait handle progress ticks from the epistemic loop.
 pub trait EpistemicObserver: Send {
+    /// Called per epistemic compiler step.
     fn on_step(&mut self, step: usize, max_steps: usize);
 }
 
+/// A silent observer that drops all UI feedback, used for high-velocity MCTS branches.
 pub struct SilentObserver;
 impl EpistemicObserver for SilentObserver {
     fn on_step(&mut self, _step: usize, _max: usize) {}
@@ -14196,8 +14233,12 @@ pub fn compute_personalized_pagerank(
             if content.contains(*symbol) {
                 for file_b in defining_files {
                     if file_a != *file_b {
-                        if let Some(set) = adjacency.get_mut(file_a) { set.insert(*file_b); }
-                        if let Some(set) = adjacency.get_mut(*file_b) { set.insert(file_a); }
+                        if let Some(set) = adjacency.get_mut(file_a) {
+                            set.insert(*file_b);
+                        }
+                        if let Some(set) = adjacency.get_mut(*file_b) {
+                            set.insert(file_a);
+                        }
                     }
                 }
             }
@@ -14249,10 +14290,12 @@ pub fn compute_personalized_pagerank(
                         }
                     }
                 }
-            } else {
-                let share = (ranks[u] * damping) / (neighbors.len() as f64);
+            } else if let Some(&rank_u) = ranks.get(u) {
+                let share = (rank_u * damping) / (neighbors.len() as f64);
                 for v in neighbors {
-                    *new_ranks.get_mut(v).unwrap() += share;
+                    if let Some(nr) = new_ranks.get_mut(v) {
+                        *nr += share;
+                    }
                 }
             }
         }
