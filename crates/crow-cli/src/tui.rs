@@ -27,8 +27,18 @@ struct App {
 
 impl App {
     fn new(workspace: PathBuf) -> Result<Self> {
+        let mut app = App {
+            ledger_events: Vec::new(),
+            memories: Vec::new(),
+            workspace,
+        };
+        app.refresh();
+        Ok(app)
+    }
+
+    fn refresh(&mut self) {
         let mut hasher = DefaultHasher::new();
-        workspace.to_string_lossy().hash(&mut hasher);
+        self.workspace.to_string_lossy().hash(&mut hasher);
         let hash = format!("{:x}", hasher.finish());
 
         let home = std::env::var("HOME")
@@ -39,31 +49,23 @@ impl App {
         let ledger_path = home.join(".crow").join("ledger").join(format!("{}.jsonl", hash));
         let memory_dir = home.join(".crow").join("memory");
 
-        // Load ledger
-        let mut ledger_events = Vec::new();
+        self.ledger_events.clear();
         if ledger_path.exists() {
             if let Ok(ledger) = EventLedger::open(&ledger_path) {
-                ledger_events = ledger.history().to_vec();
+                self.ledger_events = ledger.history().to_vec();
             }
         }
 
-        // Load memories
-        let mut memories = Vec::new();
+        self.memories.clear();
         if memory_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&memory_dir) {
                 for entry in entries.flatten() {
                     if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                        memories.push(content);
+                        self.memories.push(content);
                     }
                 }
             }
         }
-
-        Ok(App {
-            ledger_events,
-            memories,
-            workspace,
-        })
     }
 }
 
@@ -99,6 +101,7 @@ pub async fn run_dashboard(workspace: PathBuf) -> Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
     loop {
+        app.refresh(); // Live View update!
         terminal.draw(|f| ui(f, &app))?;
 
         if event::poll(Duration::from_millis(250))? {

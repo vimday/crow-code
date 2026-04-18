@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::tempdir;
 use std::process::Command;
 
@@ -87,3 +87,5 @@ fn get_git_status(path: &Path) -> String {
     let output = Command::new("git").args(["status", "--porcelain"]).current_dir(path).output().unwrap();
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
+
+
