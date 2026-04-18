@@ -1,7 +1,5 @@
 # 🦅 Crow Code
 
-![Corvus Matrix Logo](./assets/logo.png)
-
 > Evidence-driven AI coding agent with sandboxed verification and structured patch plans.
 
 **Crow Code** is an AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). Instead of letting a model write directly to your repository, Crow compiles model output into structured `AgentAction` / `IntentPlan` objects, rehydrates them against the current workspace, applies them inside an isolated sandbox, and verifies the result before any workspace write.
@@ -105,7 +103,8 @@ cargo run -p crow-cli -- run "Fix a typo in README.md"
 | `crow run <prompt>` | Full autonomous loop |
 | `crow dry-run <prompt>` | Alias for `run` |
 | `crow session list` | List saved sessions |
-| `crow session resume-run <id>` | Resume a saved session |
+| `crow session resume <id>` | Inspect a saved session without executing it |
+| `crow session resume-run <id>` | Restore a saved session and continue execution |
 | `crow mcp list-tools [server-name]` | List tools exposed by a configured MCP server |
 | `crow dashboard` | Open the dashboard |
 | `crow dream` | Run AutoDream memory consolidation |
