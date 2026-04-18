@@ -76,6 +76,7 @@ struct LlmConfigFile {
     request_timeout: Option<u64>,
     json_mode: Option<bool>,
     prompt_caching: Option<bool>,
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -325,6 +326,7 @@ impl CrowConfig {
             request_timeout_secs,
             json_mode,
             prompt_caching,
+            reasoning_effort: file_llm.reasoning_effort,
         };
 
         // Clamp map_budget so it can never exceed the conversation manager's

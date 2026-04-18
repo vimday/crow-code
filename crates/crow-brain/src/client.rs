@@ -45,6 +45,7 @@ pub struct LlmProviderConfig {
     /// structured content blocks and the last system message gets a
     /// `cache_control: {"type": "ephemeral"}` breakpoint.
     pub prompt_caching: bool,
+    pub reasoning_effort: Option<String>,
 }
 
 impl Default for LlmProviderConfig {
@@ -59,6 +60,7 @@ impl Default for LlmProviderConfig {
             request_timeout_secs: 300,
             json_mode: false,
             prompt_caching: false,
+            reasoning_effort: None,
         }
     }
 }
@@ -72,6 +74,7 @@ pub struct ReqwestLlmClient {
     max_tokens: u32,
     json_mode: bool,
     prompt_caching: bool,
+    reasoning_effort: Option<String>,
 }
 
 impl ReqwestLlmClient {
@@ -106,6 +109,7 @@ impl ReqwestLlmClient {
             max_tokens: config.max_tokens,
             json_mode: config.json_mode,
             prompt_caching: config.prompt_caching,
+            reasoning_effort: config.reasoning_effort.clone(),
         })
     }
 }
@@ -165,6 +169,10 @@ impl ReqwestLlmClient {
             "max_tokens": self.max_tokens,
             "messages": api_messages
         });
+
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
+        }
 
         if let Some(temp) = temperature {
             body["temperature"] = json!(temp);
