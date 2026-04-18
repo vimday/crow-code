@@ -8,6 +8,47 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// ─── Write Mode ─────────────────────────────────────────────────
+
+/// Controls how crow handles filesystem writes.
+///
+/// This is a deliberate brand decision: crow defaults to `WorkspaceWrite`,
+/// which requires evidence-based verification before touching the real
+/// workspace. Competitors default to `DangerFullAccess`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteMode {
+    /// Never touch the real workspace. All changes stay in sandbox.
+    /// Useful for dry-runs, CI pipelines, and demos.
+    SandboxOnly,
+    /// Apply only if EvidenceMatrix meets auto-apply threshold.
+    /// This is the **default** — safe but productive.
+    WorkspaceWrite,
+    /// Apply without verification (requires explicit opt-in via
+    /// `CROW_WRITE_MODE=danger` or config). Not recommended.
+    DangerFullAccess,
+}
+
+impl WriteMode {
+    fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "sandbox" | "sandbox-only" | "sandboxonly" => Some(WriteMode::SandboxOnly),
+            "write" | "workspace-write" | "workspacewrite" | "default" => Some(WriteMode::WorkspaceWrite),
+            "danger" | "full" | "danger-full-access" => Some(WriteMode::DangerFullAccess),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for WriteMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriteMode::SandboxOnly => write!(f, "sandbox-only"),
+            WriteMode::WorkspaceWrite => write!(f, "workspace-write"),
+            WriteMode::DangerFullAccess => write!(f, "danger-full-access"),
+        }
+    }
+}
+
 // ─── File-based configuration shapes ───────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
@@ -32,6 +73,7 @@ struct LlmConfigFile {
 #[derive(Debug, Deserialize, Default)]
 struct WorkspaceConfigFile {
     map_budget: Option<usize>,
+    write_mode: Option<String>,
 }
 
 // ─── Runtime configuration ──────────────────────────────────────
@@ -42,6 +84,7 @@ pub struct CrowConfig {
     pub workspace: PathBuf,
     pub llm: LlmProviderConfig,
     pub map_budget: usize,
+    pub write_mode: WriteMode,
 }
 
 impl CrowConfig {
@@ -192,10 +235,26 @@ impl CrowConfig {
             .unwrap_or(500 * 1024)
             .min(crate::budget::MAX_SYSTEM_BYTES);
 
+        // ── Write Mode ──
+        let write_mode = match env::var("CROW_WRITE_MODE") {
+            Ok(v) => WriteMode::from_str_opt(&v).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid CROW_WRITE_MODE='{}'. Expected: sandbox|write|danger",
+                    v
+                )
+            })?,
+            Err(_) => file_ws
+                .write_mode
+                .as_deref()
+                .and_then(WriteMode::from_str_opt)
+                .unwrap_or(WriteMode::WorkspaceWrite), // Safe default
+        };
+
         Ok(Self {
             workspace: workspace_dir,
             llm,
             map_budget,
+            write_mode,
         })
     }
 

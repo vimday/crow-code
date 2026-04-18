@@ -76,7 +76,7 @@ async fn synthetic_create_plan_passes_verification() {
     let sandbox = materialize(&config).expect("Materialization should succeed");
 
     // ── 3. Hydrate against sandbox ──
-    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path())
+    let hydrated = PlanHydrator::hydrate(&plan, &plan.base_snapshot_id, sandbox.path())
         .expect("Hydration of a Create op should not fail");
 
     // Create precondition should still be MustNotExist after hydration
@@ -164,7 +164,7 @@ async fn synthetic_modify_plan_hydrates_and_applies() {
     let sandbox = materialize(&config).unwrap();
 
     // ── 3. Hydrate against sandbox ──
-    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path()).expect("Hydration should succeed");
+    let hydrated = PlanHydrator::hydrate(&plan, &plan.base_snapshot_id, sandbox.path()).expect("Hydration should succeed");
 
     if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
         assert_ne!(preconditions.content_hash, "will-be-replaced-by-hydrator");

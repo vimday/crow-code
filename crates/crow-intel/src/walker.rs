@@ -79,13 +79,19 @@ impl RepoWalker {
                     return Ok(RepoMap { map_text: out });
                 }
 
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if ![
+                
+                let is_allowed_ext = [
                     "rs", "ts", "js", "jsx", "tsx", "toml", "json", "yaml", "yml", "md", "sh",
                     "py", "go", "c", "cpp", "h", "txt",
-                ]
-                .contains(&ext)
-                {
+                ].contains(&ext);
+                
+                let is_allowed_name = [
+                    "Makefile", "Dockerfile", ".gitignore", ".dockerignore", "LICENSE"
+                ].contains(&file_name);
+
+                if !is_allowed_ext && !is_allowed_name {
                     continue;
                 }
 

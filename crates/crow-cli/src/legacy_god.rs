@@ -53,8 +53,9 @@ pub async fn run_god_pipeline() -> Result<()> {
     println!("    🏎️  Driver active: {:?}", sandbox.driver());
 
     println!("\n[3/4] Synthesizing and Applying 'IntentPlan' (Unlink-on-Write enabled)");
+    let snapshot_id = crate::snapshot::resolve_snapshot_id(&current_dir);
     let mock_plan = IntentPlan {
-        base_snapshot_id: crow_patch::SnapshotId("snapshot-001".into()),
+        base_snapshot_id: snapshot_id.clone(),
         rationale: "Pipeline synthetic verification inject".into(),
         is_partial: false,
         confidence: Confidence::High,
@@ -65,7 +66,8 @@ pub async fn run_god_pipeline() -> Result<()> {
         }],
     };
 
-    apply_plan_to_sandbox(&mock_plan, &sandbox).context("Failed to apply synthetic plan")?;
+    let hydrated_plan = crow_workspace::PlanHydrator::hydrate(&mock_plan, &snapshot_id, sandbox.path()).unwrap();
+    apply_plan_to_sandbox(&hydrated_plan, &sandbox).context("Failed to apply synthetic plan")?;
     println!("    💉 Inject successful!");
 
     println!("\n[4/4] Engaging Verifier execution inside sandbox...");

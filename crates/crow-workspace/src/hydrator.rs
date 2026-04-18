@@ -5,6 +5,7 @@ use std::path::Path;
 #[derive(Debug)]
 pub enum HydrationError {
     IoError { path: String, reason: String },
+    SnapshotMismatch { expected: String, actual: String },
 }
 
 impl std::fmt::Display for HydrationError {
@@ -12,6 +13,13 @@ impl std::fmt::Display for HydrationError {
         match self {
             HydrationError::IoError { path, reason } => {
                 write!(f, "Failed to hydrate {}: {}", path, reason)
+            }
+            HydrationError::SnapshotMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Snapshot anchor mismatch! Plan was generated against '{}' but we are hydrating against '{}'. The timeline has drifted.",
+                    actual, expected
+                )
             }
         }
     }
@@ -23,7 +31,18 @@ impl std::error::Error for HydrationError {}
 pub struct PlanHydrator;
 
 impl PlanHydrator {
-    pub fn hydrate(plan: &IntentPlan, workspace_root: &Path) -> Result<IntentPlan, HydrationError> {
+    pub fn hydrate(
+        plan: &IntentPlan,
+        expected_snapshot: &crow_patch::SnapshotId,
+        workspace_root: &Path,
+    ) -> Result<IntentPlan, HydrationError> {
+        if plan.base_snapshot_id != *expected_snapshot {
+            return Err(HydrationError::SnapshotMismatch {
+                expected: expected_snapshot.0.clone(),
+                actual: plan.base_snapshot_id.0.clone(),
+            });
+        }
+
         let mut hydrated = plan.clone();
 
         for op in &mut hydrated.operations {
@@ -143,7 +162,7 @@ mod tests {
             hunks: vec![],
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).expect("Hydration must succeed");
+        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).expect("Hydration must succeed");
 
         if let EditOp::Modify { preconditions, .. } = &hydrated.operations[0] {
             assert_ne!(preconditions.content_hash, "hallucinated");
@@ -163,7 +182,7 @@ mod tests {
             precondition: FilePrecondition::MustExist, // model guessed weak precondition
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Delete { precondition, .. } = &hydrated.operations[0] {
             match precondition {
@@ -188,7 +207,7 @@ mod tests {
             dest_precondition: FilePrecondition::MustExist,   // model guessed wrong
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Rename {
             source_precondition,
@@ -222,7 +241,7 @@ mod tests {
             dest_precondition: FilePrecondition::MustNotExist, // hallucinated — wrong!
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Rename {
             source_precondition,
@@ -258,7 +277,7 @@ mod tests {
             dest_precondition: FilePrecondition::MustExist, // hallucinated — wrong!
         }]);
 
-        let hydrated = PlanHydrator::hydrate(&plan, dir.path()).unwrap();
+        let hydrated = PlanHydrator::hydrate(&plan, &SnapshotId("snap1".into()), dir.path()).unwrap();
 
         if let EditOp::Rename {
             dest_precondition, ..

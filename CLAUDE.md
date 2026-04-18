@@ -27,7 +27,7 @@ Layer 0 — Currencies (std + serde; no runtime deps)
   crow-probe       Repository recon radar (ProjectProfile)
 
 Layer 1 — Runtime
-  crow-workspace   Plan hydration & sandbox mutation applier
+  crow-workspace   Plan hydration & sandbox mutation applier (Event Ledger planned)
   crow-materialize Workspace-isolation materialization (CoW / copy)
 
 Layer 2 — Crucible
@@ -80,7 +80,7 @@ cargo build -p crow-cli
 1. The LLM **never writes to disk directly.** All mutations go through `IntentPlan`.
 2. Final disk flushes **must verify** `base_snapshot_id` preconditions.
 3. A failed operation **must leave the workspace untouched** (zero pollution).
-4. Every risk flag or test result **must trace back** to a concrete command log or snapshot.
+4. Every risk flag or test result **must trace back** to a concrete command log or snapshot. (Ledger planned)
 
 ## Current Status
 
@@ -90,3 +90,6 @@ cargo build -p crow-cli
 - **Step 4** ✅ `crow-verifier` — Workspace-isolated execution + ACI log truncation (20 tests). Direct exec (no shell), head+tail truncation, VerificationResult → EvidenceMatrix.
 - **Step 5** ✅ `crow-probe` scanner, `crow-workspace` applier, `crow-cli` God Pipeline.
 - **Step 6** ✅ MCTS Parallel Crucible & Cache Isolation. Epistemic loop, preflight compile checks, ConversationManager, build cache warm-up, early termination.
+- **Step 7** ✅ Polyglot Preflights & Snapshot Anchor Runtime Verification. Manifest-aware walker.
+- **Step 8** ✅ Phase 1 Product Foundation: Session persistence (~/.crow/sessions/), Evidence Report module (EvidenceReport + Verdict), CLI subcommands (run/plan/compile/session), WriteMode (SandboxOnly/WorkspaceWrite/DangerFullAccess with WorkspaceWrite as default). 142 tests.
+- **Step 9** ✅ Phase 1.5 Promise Closures: Real snapshot anchoring via `git rev-parse HEAD` (3-tier fallback), WriteMode runtime enforcement in execute path with `apply_sandbox_to_workspace()`, full session resume with `crow session resume-run`. 146 tests, zero "snapshot-001" placeholders.

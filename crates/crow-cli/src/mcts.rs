@@ -110,6 +110,8 @@ pub async fn explore_round(
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
+    lang: &crow_probe::DetectedLanguage,
+    snapshot_id: &crow_patch::SnapshotId,
 ) -> Vec<BranchOutcome> {
     use tokio::task::JoinSet;
 
@@ -120,9 +122,11 @@ pub async fn explore_round(
         let frozen = frozen_root.to_path_buf();
         let mat_cfg = mat_config.clone();
         let cmd = verify_command.clone();
-        let plan = baseline_plan;
+        let plan = baseline_plan.clone();
+        let lang_clone = lang.clone();
+        let snap_clone = snapshot_id.clone();
 
-        join_set.spawn(async move { run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd).await });
+        join_set.spawn(async move { run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd, &lang_clone, &snap_clone).await });
     }
 
     // Branches 1..N: generate fresh plans with temperature.
@@ -133,6 +137,8 @@ pub async fn explore_round(
         let cmd = verify_command.clone();
         let comp = compiler.clone();
         let temperature = config.temperature;
+        let lang_clone = lang.clone();
+        let snap_clone = snapshot_id.clone();
 
         join_set.spawn(async move {
             run_branch(
@@ -143,6 +149,8 @@ pub async fn explore_round(
                 &frozen,
                 &mat_cfg,
                 &cmd,
+                &lang_clone,
+                &snap_clone,
             )
             .await
         });
@@ -191,6 +199,8 @@ async fn run_branch(
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
+    lang: &crow_probe::DetectedLanguage,
+    snapshot_id: &crow_patch::SnapshotId,
 ) -> BranchOutcome {
     let branch_start = std::time::Instant::now();
     let sandbox = match materialize_sandbox(branch_id, mat_config).await {
@@ -233,7 +243,7 @@ async fn run_branch(
         branch_start.elapsed().as_secs_f64()
     );
 
-    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await;
+    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command, lang, snapshot_id).await;
     println!(
         "    Branch {}: total {:.1}s — {}",
         branch_id,
@@ -254,6 +264,8 @@ async fn run_branch_with_plan(
     frozen_root: &Path,
     mat_config: &MaterializeConfig,
     verify_command: &crow_probe::VerificationCommand,
+    lang: &crow_probe::DetectedLanguage,
+    snapshot_id: &crow_patch::SnapshotId,
 ) -> BranchOutcome {
     let branch_start = std::time::Instant::now();
     let sandbox = match materialize_sandbox(branch_id, mat_config).await {
@@ -261,7 +273,7 @@ async fn run_branch_with_plan(
         Err(outcome) => return outcome,
     };
 
-    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command).await;
+    let outcome = evaluate_plan(branch_id, plan, sandbox, frozen_root, verify_command, lang, snapshot_id).await;
     println!(
         "    Branch {}: total {:.1}s — {}",
         branch_id,
@@ -348,12 +360,16 @@ async fn evaluate_plan(
     sandbox: SandboxHandle,
     frozen_root: &Path,
     verify_command: &crow_probe::VerificationCommand,
+    lang: &crow_probe::DetectedLanguage,
+    snapshot_id: &crow_patch::SnapshotId,
 ) -> BranchOutcome {
     // Hydrate plan
     let sandbox_path = sandbox.path().to_path_buf();
+    let sandbox_path_clone = sandbox_path.clone();
+    let snap_for_eval = snapshot_id.clone();
     let plan_clone = plan.clone();
     let hydrate_result = tokio::task::spawn_blocking(move || {
-        crow_workspace::PlanHydrator::hydrate(&plan_clone, &sandbox_path)
+        crow_workspace::PlanHydrator::hydrate(&plan_clone, &snap_for_eval, &sandbox_path_clone)
     })
     .await;
     let hydrated_plan = match hydrate_result {
@@ -416,13 +432,13 @@ async fn evaluate_plan(
     let branch_cache = crow_verifier::executor::compute_target_dir_path(sandbox.path());
     clone_cache_dir(&baseline_cache, &branch_cache).await;
 
-    // Preflight cargo check
-    let preflight_result = crow_verifier::preflight::cargo_check_preflight(
-        sandbox.path(),
-        Some(sandbox.path()), // Use branch cache!
-        std::time::Duration::from_secs(30),
-    )
-    .await;
+    // Preflight
+    let preflight_result = crow_verifier::preflight::run_preflight(
+        &sandbox_path,
+        Some(&frozen_root),
+        std::time::Duration::from_secs(60),
+        lang,
+    ).await;
 
     if let crow_verifier::preflight::PreflightResult::Errors(diags) = preflight_result {
         let summary = crow_verifier::preflight::format_diagnostics(&diags);
@@ -554,7 +570,7 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 
 fn empty_plan() -> IntentPlan {
     IntentPlan {
-        base_snapshot_id: crow_patch::SnapshotId("mcts-placeholder".into()),
+        base_snapshot_id: crow_patch::SnapshotId("pending".into()),
         rationale: "MCTS branch placeholder".into(),
         is_partial: true,
         confidence: crow_patch::Confidence::None,

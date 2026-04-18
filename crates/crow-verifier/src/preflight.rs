@@ -49,7 +49,20 @@ pub enum PreflightResult {
 /// Returns `PreflightResult::Clean` if compilation succeeds,
 /// or `PreflightResult::Errors` with structured diagnostics if it fails.
 /// Never blocks the caller for more than `timeout`.
-pub async fn cargo_check_preflight(
+pub async fn run_preflight(
+    sandbox_root: &Path,
+    cache_root: Option<&Path>,
+    timeout: Duration,
+    lang: &crow_probe::DetectedLanguage,
+) -> PreflightResult {
+    match lang.name.as_str() {
+        "rust" => cargo_check_preflight(sandbox_root, cache_root, timeout).await,
+        "typescript" => tsc_check_preflight(sandbox_root, cache_root, timeout).await,
+        _ => PreflightResult::Skipped(format!("No fast preflight configured for language: {}", lang.name)),
+    }
+}
+
+async fn cargo_check_preflight(
     sandbox_root: &Path,
     cache_root: Option<&Path>,
     timeout: Duration,
@@ -113,6 +126,55 @@ pub fn format_diagnostics(diags: &[CompileDiagnostic]) -> String {
         ));
     }
     out
+}
+
+async fn tsc_check_preflight(
+    sandbox_root: &Path,
+    cache_root: Option<&Path>,
+    timeout: Duration,
+) -> PreflightResult {
+    use crate::executor;
+    use crate::types::{AciConfig, ExecutionConfig};
+    use crow_probe::VerificationCommand;
+
+    // tsc --noEmit is roughly the JS/TS equivalent of cargo check
+    let cmd = VerificationCommand::new(
+        "npx",
+        vec!["tsc", "--noEmit"],
+    );
+
+    let exec_config = ExecutionConfig {
+        timeout,
+        max_output_bytes: 2 * 1024 * 1024,
+    };
+    let aci_config = AciConfig::default_config();
+
+    let result =
+        match executor::execute(sandbox_root, &cmd, &exec_config, &aci_config, cache_root).await {
+            Ok(r) => r,
+            Err(e) => {
+                return PreflightResult::Skipped(format!("tsc failed to execute: {}", e));
+            }
+        };
+
+    if result.exit_code == Some(0) {
+        return PreflightResult::Clean;
+    }
+
+    // A very basic generic diagnostic text output fallback instead of parsing
+    let snippet = if result.test_run.truncated_log.len() > 1000 {
+        result.test_run.truncated_log[..1000].to_string() + "...\n"
+    } else {
+        result.test_run.truncated_log.clone()
+    };
+    
+    PreflightResult::Errors(vec![CompileDiagnostic {
+        level: "error".into(),
+        message: snippet.trim().to_string(),
+        file: None,
+        line: None,
+        column: None,
+    }])
 }
 
 // ─── JSON Parser ────────────────────────────────────────────────────

@@ -119,7 +119,7 @@ async fn autonomous_loop_direct_submit() {
     };
 
     // Step 3: Hydrate against frozen sandbox
-    let hydrated = PlanHydrator::hydrate(&plan, sandbox.path()).expect("Hydration should succeed");
+    let hydrated = PlanHydrator::hydrate(&plan, &plan.base_snapshot_id, sandbox.path()).expect("Hydration should succeed");
 
     // Step 4: Apply
     apply_plan_to_sandbox(&hydrated, &sandbox).expect("Apply should succeed");
@@ -240,7 +240,7 @@ async fn autonomous_loop_read_then_submit() {
     };
 
     // Step 3: Hydrate against frozen sandbox
-    let hydrated = PlanHydrator::hydrate(&plan, &frozen_root).expect("Hydration should succeed");
+    let hydrated = PlanHydrator::hydrate(&plan, &plan.base_snapshot_id, &frozen_root).expect("Hydration should succeed");
 
     // Step 4: Apply
     apply_plan_to_sandbox(&hydrated, &sandbox).expect("Apply should succeed");

@@ -28,7 +28,7 @@ Crows are the most intelligent birds on the planet: they use tools, plan ahead, 
 │  crow-verifier  (Workspace Exec + ACI Truncation)│  L2: Crucible
 ├──────────────────────────────────────────────────┤
 │  crow-workspace        crow-materialize          │  L1: Runtime
-│  (Event Log + Snapshots) (Workspace Copy / CoW)  │
+│  (Applier & Hydrator*)   (Workspace Copy / CoW)  │
 ├──────────────────────────────────────────────────┤
 │  crow-patch    crow-evidence    crow-probe       │  L0: Currencies
 │  (Patch Contract) (Evidence Matrix) (Recon Radar)│
@@ -38,6 +38,8 @@ Crows are the most intelligent birds on the planet: they use tools, plan ahead, 
 10 Rust crates, strict layered dependencies, zero external deps at the foundation.
 
 See [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md) for the full design document.
+
+**Note on current status:** Core data structures, runtime materialization, fast preflights, and MCTS iteration are implemented. Features marked with `*` like the **Event Ledger**, **Snapshot Registry**, and **Replay Harness** are in the design phase and currently mocked or unimplemented.
 
 ## Quick Start
 
@@ -61,7 +63,8 @@ cargo run -p crow-cli
 | 3 | Workspace-isolation materialization | ✅ |
 | 4 | ACI log truncation & bounded exec | ✅ |
 | 5 | Probe + Applier + God Pipeline | ✅ |
-| 6 | MCTS Pipeline & Cache Isolation | ✅ |
+| 6 | MCTS Parallel Crucible & Cache Isolation | ✅ |
+| 7 | Polyglot Preflights & Snapshot Verification | ✅ |
 
 ## Crate Overview
 
