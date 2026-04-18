@@ -243,10 +243,8 @@ impl AgentAction {
                 }
                 _ => {}
             },
-            AgentAction::SubmitPlan { plan } => {
-                if plan.operations.is_empty() {
-                    return Err("submit_plan requires at least one operation".into());
-                }
+            AgentAction::SubmitPlan { plan: _ } => {
+                // We allow empty operations for pure conversational dialog
             }
         }
         Ok(())
@@ -586,6 +584,6 @@ mod tests {
                 operations: vec![],
             },
         };
-        assert!(action.validate().is_err());
+        assert!(action.validate().is_ok());
     }
 }
