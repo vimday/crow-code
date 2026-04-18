@@ -593,7 +593,8 @@ mod tests {
                 rationale: "empty".into(),
                 is_partial: false,
                 confidence: Confidence::Low,
-                operations: vec![],
+                requires_mcts: true,
+            operations: vec![],
             },
         };
         assert!(action.validate().is_ok());

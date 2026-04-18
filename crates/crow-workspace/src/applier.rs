@@ -634,6 +634,7 @@ mod tests {
             rationale: "test".into(),
             is_partial: false,
             confidence: crow_patch::Confidence::High,
+            requires_mcts: true,
             operations: vec![EditOp::Create {
                 path: WorkspacePath::new("src/new.rs").unwrap(),
                 content: "fn main() {}".into(),

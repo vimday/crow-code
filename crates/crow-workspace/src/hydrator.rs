@@ -143,6 +143,7 @@ mod tests {
             rationale: "test".into(),
             is_partial: false,
             confidence: Confidence::High,
+            requires_mcts: true,
             operations: ops,
         }
     }

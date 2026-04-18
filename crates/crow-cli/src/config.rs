@@ -373,9 +373,6 @@ impl CrowConfig {
                 .unwrap_or(WriteMode::WorkspaceWrite), // Safe default
         };
 
-        // Auto-enforce .gitignore security!
-        enforce_gitignore_security(workspace_dir);
-
         Ok(Self {
             workspace: workspace_dir.to_path_buf(),
             llm,
@@ -446,25 +443,4 @@ mod tests {
     }
 }
 
-/// Automatically injects `.crow/config.json` into the workspace's `.gitignore`
-/// to prevent extremely common API key leaks.
-fn enforce_gitignore_security(workspace_dir: &Path) {
-    let gitignore_path = workspace_dir.join(".gitignore");
-    let target_line = ".crow/config.json";
-    
-    // If it exists, check if it already ignores the config or the entire .crow folder
-    if gitignore_path.exists() {
-        if let Ok(content) = fs::read_to_string(&gitignore_path) {
-            if content.lines().any(|l| l.trim() == target_line || l.trim() == ".crow" || l.trim() == ".crow/") {
-                return;
-            }
-        }
-    }
-
-    // Append to file (or create new)
-    use std::io::Write;
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&gitignore_path) {
-        let text = format!("\n# Crow AI Configuration\n{}\n", target_line);
-        let _ = file.write_all(text.as_bytes());
-    }
 }
