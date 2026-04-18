@@ -5,6 +5,7 @@ mod diff;
 mod epistemic;
 mod evidence_report;
 mod legacy_god;
+mod mcp;
 mod mcts;
 mod session;
 mod snapshot;
@@ -62,6 +63,7 @@ COMMANDS:
     compile <prompt>          Compile-only: show the IntentPlan JSON
     session list              List saved sessions
     session resume <id>       Resume a saved session
+    mcp                       Manage MCP tools
     dry-run <prompt>          Alias for 'run'
     help                      Show this help
 
@@ -191,13 +193,21 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
         .build_repo_map_for(&frozen_root)
         .map_err(|e| anyhow::anyhow!(e))?;
 
+    let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
+    let mut sys_prompt = String::from("Context (Repository Map):\n");
+    sys_prompt.push_str(&repo_map.map_text);
+    sys_prompt.push_str(&format!("\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.", snapshot_id.0, snapshot_id.0));
+
+    let mcp_ctx = mcp_manager.prompt_context();
+    if !mcp_ctx.is_empty() {
+        sys_prompt.push_str("\n\n");
+        sys_prompt.push_str(mcp_ctx);
+    }
+
     // Rebuild conversation manager with system context + restored history
     let mut messages = context::ConversationManager::new(vec![
         ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(format!(
-            "Context (Repository Map):\n{}\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-            repo_map.map_text, snapshot_id.0, snapshot_id.0
-        )),
+        ChatMessage::system(sys_prompt),
     ]);
 
     // Restore non-system messages from session history
@@ -222,7 +232,7 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
 
     // Run one crucible attempt
     let compiled_plan =
-        epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root).await?;
+        epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root, Some(&mcp_manager)).await?;
 
     // Hydrate + apply + verify
     let attempt_mat_config = MaterializeConfig {
@@ -426,18 +436,26 @@ async fn run_plan(args: &[String]) -> Result<()> {
     let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
     let compiler = IntentCompiler::new(client);
 
+    let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
+    let mut sys_prompt = String::from("Context (Repository Map):\n");
+    sys_prompt.push_str(&repo_map.map_text);
+    sys_prompt.push_str(&format!("\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.", snapshot_id.0, snapshot_id.0));
+
+    let mcp_ctx = mcp_manager.prompt_context();
+    if !mcp_ctx.is_empty() {
+        sys_prompt.push_str("\n\n");
+        sys_prompt.push_str(mcp_ctx);
+    }
+
     use crate::context::ConversationManager;
     use crow_brain::ChatMessage;
     let mut messages = ConversationManager::new(vec![
         ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(format!(
-            "Context (Repository Map):\n{}\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-            repo_map.map_text, snapshot_id.0, snapshot_id.0
-        )),
+        ChatMessage::system(sys_prompt),
     ]);
     messages.push_user(format!("Task:\n{}", prompt));
 
-    let compiled_plan = epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root).await?;
+    let compiled_plan = epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root, Some(&mcp_manager)).await?;
     let compilation = CompilationSummary::from_plan(&compiled_plan);
     println!("  ✅ {} ops, {:?} confidence", compilation.total_ops(), compilation.confidence);
 
@@ -645,18 +663,23 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
     let compiler = IntentCompiler::new(client);
 
-    // Structured message history with proper role separation.
-    // System context (repo map + constraints) is set once; subsequent
-    // interactions are User (system feedback) and Assistant (LLM output).
+    let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
+    let mut sys_prompt = String::from("Context (Repository Map):\n");
+    sys_prompt.push_str(&repo_map.map_text);
+    sys_prompt.push_str(&format!("\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.", snapshot_id.0, snapshot_id.0));
+
+    let mcp_ctx = mcp_manager.prompt_context();
+    if !mcp_ctx.is_empty() {
+        sys_prompt.push_str("\n\n");
+        sys_prompt.push_str(mcp_ctx);
+    }
+
     use context::ConversationManager;
     use crow_brain::ChatMessage;
 
     let mut messages = ConversationManager::new(vec![
         ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(format!(
-            "Context (Repository Map):\n{}\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-            repo_map.map_text, snapshot_id.0, snapshot_id.0
-        )),
+        ChatMessage::system(sys_prompt),
     ]);
 
     messages.push_user(format!("Task:\n{}", prompt));
@@ -690,6 +713,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             &compiler,
             &mut messages,
             &snapshot_id,
+            Some(&mcp_manager),
         )
         .await;
     }
@@ -708,7 +732,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         );
 
         let compiled_plan =
-            epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root).await?;
+            epistemic::run_epistemic_loop(&compiler, &mut messages, &frozen_root, Some(&mcp_manager)).await?;
 
         // Re-materialize from the FROZEN baseline, not the live workspace.
         // This ensures every crucible attempt starts from the same immutable
@@ -1024,13 +1048,14 @@ async fn run_mcts_crucible(
     profile: &crow_probe::types::ProjectProfile,
     candidate: &crow_probe::types::VerificationCandidate,
     frozen_root: &std::path::Path,
-    compiler: &IntentCompiler,
+    compiler: &crow_brain::IntentCompiler,
     messages: &mut context::ConversationManager,
     snapshot_id: &crow_patch::SnapshotId,
+    mcp_manager: Option<&crate::mcp::McpManager>,
 ) -> Result<()> {
     // 1. Initial Epistemic Loop (Serial Recon)
     println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
-    let baseline_plan = epistemic::run_epistemic_loop(compiler, messages, frozen_root).await?;
+    let baseline_plan = epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager).await?;
     println!("    Seeding baseline plan into MCTS branch 0...");
 
     // 2. MCTS Parallel Explore Rounds

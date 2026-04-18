@@ -43,6 +43,7 @@ pub async fn run_epistemic_loop(
     compiler: &IntentCompiler,
     messages: &mut ConversationManager,
     frozen_root: &Path,
+    mcp_manager: Option<&crate::mcp::McpManager>,
 ) -> Result<IntentPlan> {
     let mut epistemic_step = 0;
 
@@ -87,7 +88,7 @@ pub async fn run_epistemic_loop(
                 println!("    🔍 Agent Recon: {:?}", tool);
                 println!("       Rationale: {}", rationale);
 
-                execute_recon(&tool, frozen_root, messages).await;
+                execute_recon(&tool, frozen_root, messages, mcp_manager).await;
             }
             AgentAction::SubmitPlan { .. } => {
                 // Already handled above via the early return.
@@ -170,7 +171,35 @@ fn read_files_to_context(paths: &[crow_patch::WorkspacePath], frozen_root: &Path
 
 /// Translate a `ReconAction` into a safe command invocation, execute it
 /// against the frozen sandbox, and push the result into the conversation.
-async fn execute_recon(tool: &ReconAction, frozen_root: &Path, messages: &mut ConversationManager) {
+async fn execute_recon(
+    tool: &ReconAction,
+    frozen_root: &Path,
+    messages: &mut ConversationManager,
+    mcp_manager: Option<&crate::mcp::McpManager>,
+) {
+    // Intercept MCP calls and execute via the manager.
+    if let ReconAction::McpCall { server_name, tool_name, arguments } = tool {
+        if let Some(mcp) = mcp_manager {
+            match mcp.call(server_name, tool_name, arguments.clone()).await {
+                Ok(res) => {
+                    let formatted_res = if res.is_error {
+                        format!("MCP Error: {:?}", res.content)
+                    } else {
+                        // Very naive formatter for now
+                        format!("{:?}", res.content)
+                    };
+                    messages.push_recon_result("mcp_call", &format!("{} / {}", server_name, tool_name), &formatted_res);
+                }
+                Err(e) => {
+                    messages.push_user(format!("[MCP ERROR]\nFailed to execute {}/{}: {:?}", server_name, tool_name, e));
+                }
+            }
+        } else {
+            messages.push_user(format!("[MCP ERROR]\nMCP is not enabled or MCP manager unavailable, cannot call {}/{}", server_name, tool_name));
+        }
+        return;
+    }
+
     let (program, args, description) = build_recon_command(tool);
 
     let v_cmd = VerificationCommand {
@@ -279,6 +308,9 @@ fn build_recon_command(tool: &ReconAction) -> (String, Vec<String>, String) {
                 format!("tree -L {} -- {}", depth, path.as_str()),
             )
         }
+        ReconAction::McpCall { .. } => {
+            unreachable!("McpCall is intercepted and executed via mcp_manager before command building");
+        }
     }
 }
 
@@ -290,5 +322,6 @@ fn recon_tool_name(tool: &ReconAction) -> &'static str {
         ReconAction::FileInfo { .. } => "file_info",
         ReconAction::WordCount { .. } => "word_count",
         ReconAction::DirTree { .. } => "dir_tree",
+        ReconAction::McpCall { .. } => "mcp_call",
     }
 }

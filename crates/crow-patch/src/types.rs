@@ -176,6 +176,17 @@ pub enum ReconAction {
         /// Maximum depth to display (default: 3, max: 10).
         max_depth: Option<u32>,
     },
+    /// Call an external read-only tool via MCP transport.
+    #[serde(rename = "mcp_call")]
+    McpCall {
+        /// The name of the configured MCP server to route to.
+        server_name: String,
+        /// The name of the tool to execute.
+        tool_name: String,
+        /// JSON arguments to pass.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        arguments: Option<serde_json::Value>,
+    },
 }
 
 // ─── Agent Action ───────────────────────────────────────────────────
