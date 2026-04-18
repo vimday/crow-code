@@ -46,6 +46,9 @@ pub async fn run_epistemic_loop(
     mcp_manager: Option<&crate::mcp::McpManager>,
 ) -> Result<IntentPlan> {
     let mut epistemic_step = 0;
+    // Track action signatures to detect duplicate recon loops.
+    let mut seen_actions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut consecutive_dupes = 0u32;
 
     loop {
         epistemic_step += 1;
@@ -87,6 +90,28 @@ pub async fn run_epistemic_loop(
             return Ok(plan);
         }
 
+        // ── Duplicate Action Detection ──
+        let dedup_key = action_dedup_key(&action);
+        if !seen_actions.insert(dedup_key) {
+            consecutive_dupes += 1;
+            if consecutive_dupes >= 2 {
+                println!("    ⚠️  Duplicate action detected ({} times). Nudging agent to submit plan...", consecutive_dupes + 1);
+                messages.push_assistant(serde_json::to_string(&action)?);
+                messages.push_user(
+                    "[SYSTEM: DUPLICATE ACTION DETECTED]\n\
+                     You have already performed this exact action. The result is already in your context above.\n\
+                     Do NOT repeat the same action. You have enough information.\n\
+                     If the user's request does not require file changes, submit a plan with an EMPTY operations array \
+                     and put your response text in the rationale field.\n\
+                     Output a submit_plan action NOW."
+                        .to_string(),
+                );
+                continue;
+            }
+        } else {
+            consecutive_dupes = 0;
+        }
+
         // Track the agent's action in conversation history.
         messages.push_assistant(serde_json::to_string(&action)?);
 
@@ -107,10 +132,24 @@ pub async fn run_epistemic_loop(
                 execute_recon(&tool, frozen_root, messages, mcp_manager).await;
             }
             AgentAction::SubmitPlan { .. } => {
-                // Already handled above via the early return.
                 unreachable!("SubmitPlan is intercepted before push_assistant")
             }
         }
+    }
+}
+
+/// Compute a deduplication key for an action (ignoring rationale text).
+fn action_dedup_key(action: &AgentAction) -> String {
+    match action {
+        AgentAction::ReadFiles { paths, .. } => {
+            let mut sorted: Vec<&str> = paths.iter().map(|p| p.as_str()).collect();
+            sorted.sort();
+            format!("read:{}", sorted.join(","))
+        }
+        AgentAction::Recon { tool, .. } => {
+            format!("recon:{:?}", tool)
+        }
+        AgentAction::SubmitPlan { .. } => "submit".to_string(),
     }
 }
 

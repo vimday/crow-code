@@ -129,5 +129,8 @@ Rules:
 - `remove_block` and `insert_block` must be single strings using `\n` for line breaks. Do NOT use arrays for lines.
 - IMPORTANT: `remove_block` must NEVER be empty. For insertions, include at least one existing line as anchor context in `remove_block` and repeat that line alongside your new lines in `insert_block`. Example: to insert "new_line" after "line 2", set remove_block="line 2\n" and insert_block="line 2\nnew_line\n".
 - For recon actions, "path" and "glob" fields are optional for the "search" tool. All paths must be relative.
-- Output ONLY valid JSON. No markdown, no explanation."#
+- Output ONLY valid JSON. No markdown, no explanation.
+- CONVERSATIONAL RESPONSES: If the user's request does NOT require any file changes (e.g. questions, listing files, explaining code, simple greetings), you MUST still use "submit_plan" but with an EMPTY operations array. Put your answer in the "rationale" field. Example:
+  {"action": "submit_plan", "plan": {"base_snapshot_id": "...", "rationale": "Your conversational response here.", "is_partial": false, "confidence": "High", "operations": [], "requires_mcts": false}}
+  Do NOT keep looping with recon actions if you already have enough information to answer. Submit a plan immediately."#
 }
