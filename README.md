@@ -19,7 +19,7 @@ Crows are the most intelligent birds on the planet: they use tools, plan ahead, 
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  crow-cli  (TUI)          crow-replay  (QA)      │  L5: Interface
+│  crow-cli  crow-replay  crow-mcp                │  L5: Interface
 ├──────────────────────────────────────────────────┤
 │  crow-brain  (Intent Compiler + MCTS Solver)     │  L4: Reasoning
 ├──────────────────────────────────────────────────┤
@@ -28,18 +28,18 @@ Crows are the most intelligent birds on the planet: they use tools, plan ahead, 
 │  crow-verifier  (Workspace Exec + ACI Truncation)│  L2: Crucible
 ├──────────────────────────────────────────────────┤
 │  crow-workspace        crow-materialize          │  L1: Runtime
-│  (Applier & Hydrator*)   (Workspace Copy / CoW)  │
+│  (Hydrator & Applier)   (Workspace Copy / CoW)   │
 ├──────────────────────────────────────────────────┤
 │  crow-patch    crow-evidence    crow-probe       │  L0: Currencies
 │  (Patch Contract) (Evidence Matrix) (Recon Radar)│
 └──────────────────────────────────────────────────┘
 ```
 
-10 Rust crates, strict layered dependencies, zero external deps at the foundation.
+11 Rust crates, strict layered dependencies, zero external deps at the foundation.
 
 See [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md) for the full design document.
 
-**Note on current status:** Core data structures, runtime materialization, fast preflights, and MCTS iteration are implemented. Features marked with `*` like the **Event Ledger**, **Snapshot Registry**, and **Replay Harness** are in the design phase and currently mocked or unimplemented.
+**Note on current status:** Core data contracts, sandbox materialization, preflight verification, MCTS iteration, session persistence, snapshot anchoring, multi-provider routing, and MCP stdio transport are implemented. The Event Ledger and parts of the Replay Harness remain planned or partial.
 
 ## Quick Start
 
@@ -58,13 +58,17 @@ cargo run -p crow-cli
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 1 | Workspace genesis (10 crates) | ✅ |
-| 2 | Core data contracts (23 tests) | ✅ |
-| 3 | Workspace-isolation materialization | ✅ |
-| 4 | ACI log truncation & bounded exec | ✅ |
-| 5 | Probe + Applier + God Pipeline | ✅ |
-| 6 | MCTS Parallel Crucible & Cache Isolation | ✅ |
-| 7 | Polyglot Preflights & Snapshot Verification | ✅ |
+| 1 | Workspace genesis | ✅ |
+| 2 | Core data contracts (`crow-patch`, `crow-evidence`, `crow-probe`) | ✅ |
+| 3 | `crow-materialize` sandbox isolation | ✅ |
+| 4 | `crow-verifier` execution + ACI truncation | ✅ |
+| 5 | Probe scanner, workspace applier, CLI pipeline | ✅ |
+| 6 | MCTS parallel crucible & cache isolation | ✅ |
+| 7 | Polyglot preflights & snapshot verification | ✅ |
+| 8 | Session persistence, evidence report, CLI subcommands | ✅ |
+| 9 | Real snapshot anchoring & workspace write enforcement | ✅ |
+| 10 | Multi-provider LLM routing | ✅ |
+| 11 | MCP stdio transport (`crow-mcp`) | ✅ |
 
 ## Crate Overview
 
@@ -73,13 +77,14 @@ cargo run -p crow-cli
 | `crow-patch` | L0 | Unified patch contract: `EditOp`, `IntentPlan`, `WorkspacePath` |
 | `crow-evidence` | L0 | Multidimensional verification: `EvidenceMatrix`, `TestRun`, `RiskFlag` |
 | `crow-probe` | L0 | Repository radar: `ProjectProfile`, `VerificationCandidate` |
-| `crow-workspace` | L1 | Event-sourcing log and snapshot state machine |
+| `crow-workspace` | L1 | Plan hydration and sandbox mutation applier |
 | `crow-materialize` | L1 | Workspace-isolation CoW/copy materialization |
 | `crow-verifier` | L2 | Workspace-isolated command execution, log truncation |
 | `crow-intel` | L3 | Tree-sitter outlines, LSP bridge |
 | `crow-brain` | L4 | Intent compiler, budget governor, MCTS |
-| `crow-cli` | L5 | Ratatui TUI — the `crow` binary |
-| `crow-replay` | L5 | Behavioral regression test harness |
+| `crow-cli` | L5 | CLI entrypoint — the `crow` binary |
+| `crow-replay` | L5 | Behavioral regression and task replay harness (planned) |
+| `crow-mcp` | L5 | JSON-RPC 2.0 stdio MCP transport and client wrapper |
 
 ## License
 
