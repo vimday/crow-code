@@ -7,5 +7,6 @@
 
 pub mod applier;
 pub mod hydrator;
+pub mod ledger;
 
 pub use hydrator::{HydrationError, PlanHydrator};

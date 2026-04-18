@@ -447,6 +447,20 @@ async fn run_plan(args: &[String]) -> Result<()> {
         sys_prompt.push_str(mcp_ctx);
     }
 
+    // Open EventLedger for telemetry recording
+    let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
+        eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
+        // Fallback to memory-only ledger for safety (won't persist but won't crash)
+        crow_workspace::ledger::EventLedger::open(std::path::Path::new("/dev/null")).unwrap() 
+    });
+    
+    // In actual implementation we append events
+    let _ = ledger.append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
+        id: snapshot_id.clone(),
+        git_hash: snapshot_id.0.clone(),
+        timestamp: chrono::Utc::now(),
+    });
+
     use crate::context::ConversationManager;
     use crow_brain::ChatMessage;
     let mut messages = ConversationManager::new(vec![
@@ -664,6 +678,19 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     let compiler = IntentCompiler::new(client);
 
     let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
+    
+    // Open EventLedger for telemetry recording
+    let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
+        eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
+        crow_workspace::ledger::EventLedger::open(std::path::Path::new("/dev/null")).unwrap()
+    });
+    
+    let _ = ledger.append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
+        id: snapshot_id.clone(),
+        git_hash: snapshot_id.0.clone(),
+        timestamp: chrono::Utc::now(),
+    });
+
     let mut sys_prompt = String::from("Context (Repository Map):\n");
     sys_prompt.push_str(&repo_map.map_text);
     sys_prompt.push_str(&format!("\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.", snapshot_id.0, snapshot_id.0));
@@ -756,6 +783,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
         let attempt_sandbox_path = attempt_sandbox.path().to_path_buf();
         let plan_clone = compiled_plan.clone();
         let snap_for_hydrate = snapshot_id.clone();
+        let plan_id = format!("plan-{}", chrono::Utc::now().timestamp_millis());
         let hydrated_plan = match tokio::task::spawn_blocking(move || {
             PlanHydrator::hydrate(&plan_clone, &snap_for_hydrate, &attempt_sandbox_path)
         })
@@ -794,6 +822,13 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             .context("Apply task panicked")?
             .context("Failed to apply plan to sandbox")?;
         }
+        
+        let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
+            plan_id: plan_id.clone(),
+            snapshot_id: snapshot_id.clone(),
+            timestamp: chrono::Utc::now(),
+        });
+        
         println!("    💉 Sandbox injection successful!");
 
         // Diff baseline: frozen_root (pre-patch) → attempt_sandbox (post-patch).
@@ -808,6 +843,13 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             use crow_verifier::preflight::{self, PreflightResult};
 
             println!("\n    🔍 Running preflight compile check...");
+            let start_preflight = std::time::Instant::now();
+            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
+                plan_id: plan_id.clone(),
+                sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
+                timestamp: chrono::Utc::now(),
+            });
+            
             let preflight_result = crow_verifier::preflight::run_preflight(
                 attempt_sandbox.path(),
                 Some(&frozen_root),
@@ -815,6 +857,14 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 &profile.primary_lang,
             )
             .await;
+            
+            let passed_preflight = matches!(preflight_result, PreflightResult::Clean | PreflightResult::Skipped(_));
+            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightTested {
+                plan_id: plan_id.clone(),
+                passed: passed_preflight,
+                duration_ms: start_preflight.elapsed().as_millis() as u64,
+                timestamp: chrono::Utc::now(),
+            });
 
             match preflight_result {
                 PreflightResult::Clean => {
@@ -918,6 +968,12 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 }
             }
 
+            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
+                plan_id: plan_id.clone(),
+                snapshot_id: snapshot_id.clone(),
+                timestamp: chrono::Utc::now(),
+            });
+
             success = true;
             break;
         } else {
@@ -926,6 +982,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                 &format!("{:?}", result.test_run.outcome),
                 &result.test_run.truncated_log,
             );
+            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
+                plan_id: plan_id.clone(),
+                reason: format!("Verification failed: {:?}", result.test_run.outcome),
+                timestamp: chrono::Utc::now(),
+            });
         }
         drop(attempt_sandbox);
     }
@@ -1205,4 +1266,27 @@ async fn handle_mcp_command(args: &[String]) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// ─── Ledger ─────────────────────────────────────────────────────────
+
+fn open_ledger(workspace: &std::path::Path) -> Result<crow_workspace::ledger::EventLedger> {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    use anyhow::Context;
+
+    let mut hasher = DefaultHasher::new();
+    workspace.to_string_lossy().hash(&mut hasher);
+    let hash = format!("{:x}", hasher.finish());
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .context("Could not determine home directory")?;
+
+    let ledger_dir = home.join(".crow").join("ledger");
+    std::fs::create_dir_all(&ledger_dir)?;
+    
+    let log_path = ledger_dir.join(format!("{}.jsonl", hash));
+    Ok(crow_workspace::ledger::EventLedger::open(&log_path)?)
 }
