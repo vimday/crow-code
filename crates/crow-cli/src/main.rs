@@ -749,7 +749,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         // in every branch hits a cold cache (30-60s); with it, each
         println!("    🔥 Warming up build cache for parallel branches...");
         warm_build_cache(&frozen_root, &cfg.workspace, &profile).await;
-        return run_mcts_crucible(
+        let winner = run_mcts_crucible(
             &mcts_config,
             &profile,
             &candidate,
@@ -759,7 +759,16 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
             &snapshot_id,
             Some(&mcp_manager),
         )
-        .await;
+        .await?;
+        
+        if let Some(w) = winner {
+            // Apply the winning plan using the workspace WriteMode
+            let plan_id = format!("mcts-{}", snapshot_id.0);
+            apply_winning_plan(&cfg, w.sandbox.path(), &w.plan, &plan_id, &snapshot_id, &mut ledger).await?;
+            drop(w.sandbox);
+        }
+        
+        return Ok(());
     }
 
     let mut total_attempts = 0;
@@ -940,56 +949,14 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
                 verification_runs
             );
 
-            // ── WriteMode enforcement ────────────────────────────
-            match cfg.write_mode {
-                config::WriteMode::SandboxOnly => {
-                    println!("\n  📦 Write mode: sandbox-only — changes remain in sandbox (not applied to workspace)");
-                    println!("     Use CROW_WRITE_MODE=write to enable workspace application.");
-                }
-                config::WriteMode::WorkspaceWrite => {
-                    println!("\n  ✍️  Write mode: workspace-write — applying verified changes to workspace...");
-                    if let Err(e) = apply_sandbox_to_workspace(
-                        attempt_sandbox.path(),
-                        &cfg.workspace,
-                        &hydrated_plan,
-                    ) {
-                        eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
-                        eprintln!("     Sandbox remains at: {}", attempt_sandbox.path().display());
-                        anyhow::bail!("Workspace application failed: {:?}", e);
-                    } else {
-                        println!("  ✅ Workspace updated successfully.");
-                        if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan) {
-                            println!("  ⚠️  Could not automatically commit changes: {}", e);
-                        } else {
-                            println!("  ✅ Changes committed to git timeline.");
-                        }
-                    }
-                }
-                config::WriteMode::DangerFullAccess => {
-                    println!("\n  ⚠️  Write mode: danger-full-access — applying without additional checks...");
-                    if let Err(e) = apply_sandbox_to_workspace(
-                        attempt_sandbox.path(),
-                        &cfg.workspace,
-                        &hydrated_plan,
-                    ) {
-                        eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
-                        anyhow::bail!("Workspace application failed: {:?}", e);
-                    } else {
-                        println!("  ✅ Workspace updated.");
-                        if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan) {
-                            println!("  ⚠️  Could not automatically commit changes: {}", e);
-                        } else {
-                            println!("  ✅ Changes committed to git timeline.");
-                        }
-                    }
-                }
-            }
-
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
-                plan_id: plan_id.clone(),
-                snapshot_id: snapshot_id.clone(),
-                timestamp: chrono::Utc::now(),
-            });
+            apply_winning_plan(
+                cfg,
+                attempt_sandbox.path(),
+                &hydrated_plan,
+                &plan_id,
+                &snapshot_id,
+                &mut ledger,
+            ).await?;
 
             success = true;
             break;
@@ -1242,6 +1209,68 @@ async fn warm_build_cache(
     }
 }
 
+async fn apply_winning_plan(
+    cfg: &CrowConfig,
+    sandbox_path: &std::path::Path,
+    hydrated_plan: &crow_patch::IntentPlan,
+    plan_id: &str,
+    snapshot_id: &crow_patch::SnapshotId,
+    ledger: &mut crow_workspace::ledger::EventLedger,
+) -> Result<()> {
+    // ── WriteMode enforcement ────────────────────────────
+    match cfg.write_mode {
+        config::WriteMode::SandboxOnly => {
+            println!("\n  📦 Write mode: sandbox-only — changes remain in sandbox (not applied to workspace)");
+            println!("     Use CROW_WRITE_MODE=write to enable workspace application.");
+        }
+        config::WriteMode::WorkspaceWrite => {
+            println!("\n  ✍️  Write mode: workspace-write — applying verified changes to workspace...");
+            if let Err(e) = apply_sandbox_to_workspace(
+                sandbox_path,
+                &cfg.workspace,
+                hydrated_plan,
+            ) {
+                eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
+                eprintln!("     Sandbox remains at: {}", sandbox_path.display());
+                anyhow::bail!("Workspace application failed: {:?}", e);
+            } else {
+                println!("  ✅ Workspace updated successfully.");
+                if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, hydrated_plan) {
+                    println!("  ⚠️  Could not automatically commit changes: {}", e);
+                } else {
+                    println!("  ✅ Changes committed to git timeline.");
+                }
+            }
+        }
+        config::WriteMode::DangerFullAccess => {
+            println!("\n  ⚠️  Write mode: danger-full-access — applying without additional checks...");
+            if let Err(e) = apply_sandbox_to_workspace(
+                sandbox_path,
+                &cfg.workspace,
+                hydrated_plan,
+            ) {
+                eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
+                anyhow::bail!("Workspace application failed: {:?}", e);
+            } else {
+                println!("  ✅ Workspace updated.");
+                if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, hydrated_plan) {
+                    println!("  ⚠️  Could not automatically commit changes: {}", e);
+                } else {
+                    println!("  ✅ Changes committed to git timeline.");
+                }
+            }
+        }
+    }
+
+    let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
+        plan_id: plan_id.to_string(),
+        snapshot_id: snapshot_id.clone(),
+        timestamp: chrono::Utc::now(),
+    });
+
+    Ok(())
+}
+
 async fn run_mcts_crucible(
     mcts_config: &crate::mcts::MctsConfig,
     profile: &crow_probe::types::ProjectProfile,
@@ -1251,7 +1280,7 @@ async fn run_mcts_crucible(
     messages: &mut context::ConversationManager,
     snapshot_id: &crow_patch::SnapshotId,
     mcp_manager: Option<&crate::mcp::McpManager>,
-) -> Result<()> {
+) -> Result<Option<crate::mcts::BranchOutcome>> {
     // 1. Initial Epistemic Loop (Serial Recon)
     println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
     let baseline_plan = epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager).await?;
@@ -1259,7 +1288,7 @@ async fn run_mcts_crucible(
     if baseline_plan.operations.is_empty() {
         println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
         println!("─── Agent Message ───\n{}", baseline_plan.rationale);
-        return Ok(());
+        return Ok(None);
     }
 
     println!("    Seeding baseline plan into MCTS branch 0...");
@@ -1309,8 +1338,7 @@ async fn run_mcts_crucible(
             println!("╚══════════════════════════════════════╝");
             println!("Evidence:\n{}", winner.log);
 
-            drop(winner.sandbox);
-            return Ok(());
+            return Ok(Some(winner));
         }
 
         // All branches failed. Feed diagnostics back and re-derive baseline.

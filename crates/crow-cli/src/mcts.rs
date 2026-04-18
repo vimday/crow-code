@@ -311,17 +311,31 @@ pub async fn clone_cache_dir(src: &Path, dst: &Path) {
         if let Ok(st) = status {
             if st.success() {
                 return;
+            } else {
+                eprintln!("    ⚠️  macOS fast path clone failed with exit code {:?}, falling back to cp -a", st.code());
             }
+        } else if let Err(e) = status {
+            eprintln!("    ⚠️  macOS fast path clone execution failed: {}, falling back to cp -a", e);
         }
     }
 
     // Fallback: standard recursive copy.
-    let _ = tokio::process::Command::new("cp")
+    match tokio::process::Command::new("cp")
         .arg("-a")
         .arg(src)
         .arg(dst)
         .status()
-        .await;
+        .await
+    {
+        Ok(st) => {
+            if !st.success() {
+                eprintln!("    ⚠️  Cache clone failed with exit code {:?} — MCTS branch will use cold cache", st.code());
+            }
+        }
+        Err(e) => {
+            eprintln!("    ⚠️  Failed to execute cache clone command: {} — MCTS branch will use cold cache", e);
+        }
+    }
 }
 
 /// Materialize a fresh sandbox. Returns Ok(sandbox) or Err(BranchOutcome).
@@ -435,7 +449,7 @@ async fn evaluate_plan(
     // Preflight
     let preflight_result = crow_verifier::preflight::run_preflight(
         &sandbox_path,
-        Some(&frozen_root),
+        Some(sandbox.path()),
         std::time::Duration::from_secs(60),
         lang,
     ).await;
