@@ -1034,6 +1034,7 @@ fn apply_sandbox_to_workspace(
         original_content: Option<Vec<u8>>,
     }
     let mut rollback_log: Vec<RollbackRecord> = Vec::new();
+    let mut created_dirs: Vec<std::path::PathBuf> = Vec::new();
 
     // Phase 1: Snapshot original states for rollback
     for op in &plan.operations {
@@ -1051,15 +1052,39 @@ fn apply_sandbox_to_workspace(
         } else {
             None
         };
-        rollback_log.push(RollbackRecord { dst_path: dst, original_content });
+        rollback_log.push(RollbackRecord { dst_path: dst.clone(), original_content });
         
-        if let Some(from_dst) = from_dst {
-            let original_from = if from_dst.exists() && from_dst.is_file() {
-                std::fs::read(&from_dst).ok()
+        if let Some(ref fdst) = from_dst {
+            let original_from = if fdst.exists() && fdst.is_file() {
+                std::fs::read(fdst).ok()
             } else {
                 None
             };
-            rollback_log.push(RollbackRecord { dst_path: from_dst, original_content: original_from });
+            rollback_log.push(RollbackRecord { dst_path: fdst.clone(), original_content: original_from });
+        }
+
+        let mut track_new_dir = |p: &std::path::Path| {
+            if let Some(mut current) = p.parent() {
+                let mut highest_new = None;
+                while !current.exists() {
+                    highest_new = Some(current.to_path_buf());
+                    if let Some(parent) = current.parent() {
+                        current = parent;
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(h) = highest_new {
+                    if !created_dirs.contains(&h) {
+                        created_dirs.push(h);
+                    }
+                }
+            }
+        };
+
+        track_new_dir(&dst);
+        if let Some(f) = from_dst {
+            track_new_dir(&f);
         }
     }
 
@@ -1125,6 +1150,13 @@ fn apply_sandbox_to_workspace(
                 if record.dst_path.exists() {
                     let _ = std::fs::remove_file(&record.dst_path);
                 }
+            }
+        }
+        
+        // Clean up any directories we created
+        for dir in created_dirs {
+            if dir.exists() {
+                let _ = std::fs::remove_dir_all(&dir);
             }
         }
         anyhow::bail!("Transaction failed and rolled back. Cause: {}", apply_error);

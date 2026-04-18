@@ -91,10 +91,19 @@ Limit to 3 critical architectural or context insights.", self.workspace.display(
                 println!("  🌙 [AutoDream] Subconscious processing complete.");
                 
                 // 4. Prune / Store
-                let fragment_path = self.memory_dir.join(format!("memory_{}.json", chrono::Utc::now().timestamp()));
-                std::fs::write(&fragment_path, response)?;
-                
-                println!("  🌙 [AutoDream] Deep long-term memory written to: {}", fragment_path.display());
+                let cleaned = crate::compiler::extract_json_block(&response);
+                match serde_json::from_str::<Vec<MemoryFragment>>(&cleaned) {
+                    Ok(fragments) => {
+                        let validated = serde_json::to_string_pretty(&fragments)?;
+                        let fragment_path = self.memory_dir.join(format!("memory_{}.json", chrono::Utc::now().timestamp()));
+                        std::fs::write(&fragment_path, validated)?;
+                        
+                        println!("  🌙 [AutoDream] Deep long-term memory written to: {}", fragment_path.display());
+                    }
+                    Err(e) => {
+                        eprintln!("  🌙 [AutoDream] Discarded malformed memory fragment: {}", e);
+                    }
+                }
 
                 // We would then truncate or rotate the ledger here to compress the log
             }

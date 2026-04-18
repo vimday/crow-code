@@ -322,10 +322,11 @@ impl CrowConfig {
         let valid_efforts: &[&str] = &["low", "medium", "high", "xhigh"];
         let reasoning_effort = env::var("CROW_REASONING_EFFORT")
             .ok()
-            .or(file_llm.reasoning_effort);
+            .or(file_llm.reasoning_effort)
+            .map(|e| e.to_lowercase());
+            
         if let Some(ref effort) = reasoning_effort {
-            let lower = effort.to_lowercase();
-            if !valid_efforts.contains(&lower.as_str()) {
+            if !valid_efforts.contains(&effort.as_str()) {
                 anyhow::bail!(
                     "Invalid reasoning_effort='{}'. Expected one of: {}",
                     effort,

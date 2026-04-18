@@ -28,14 +28,32 @@ impl McpManager {
 
         for (name, cfg) in config_servers {
             let args_refs: Vec<&str> = cfg.args.iter().map(|s| s.as_str()).collect();
-            let client = McpClient::spawn(&cfg.command, &args_refs)?;
+            let client = match McpClient::spawn(&cfg.command, &args_refs) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("  ⚠️  Failed to spawn MCP server '{}': {}", name, e);
+                    continue;
+                }
+            };
             
             // Handshake
-            let init = client.initialize().await?;
+            let init = match client.initialize().await {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("  ⚠️  Failed to initialize MCP server '{}': {}", name, e);
+                    continue;
+                }
+            };
             lines.push(format!("\nServer [{}]: {} v{}", name, init.server_info.name, init.server_info.version));
             
             // Fetch tools
-            let tools_res = client.list_tools().await?;
+            let tools_res = match client.list_tools().await {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("  ⚠️  Failed to list tools for MCP server '{}': {}", name, e);
+                    continue;
+                }
+            };
             for tool in tools_res.tools {
                 lines.push(format!("  - Tool: {}", tool.name));
                 if let Some(desc) = &tool.description {
