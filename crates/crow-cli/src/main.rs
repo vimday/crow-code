@@ -159,7 +159,7 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
         );
     }
 
-    let cfg = CrowConfig::load()?;
+    let cfg = CrowConfig::load_for(&loaded_session.workspace_root)?;
     let snapshot_id = snapshot::resolve_snapshot_id(&loaded_session.workspace_root);
     println!("  Snapshot ID: {}", snapshot_id.0);
 
@@ -1029,38 +1029,107 @@ fn apply_sandbox_to_workspace(
 ) -> Result<()> {
     use crow_patch::EditOp;
 
+    struct RollbackRecord {
+        dst_path: std::path::PathBuf,
+        original_content: Option<Vec<u8>>,
+    }
+    let mut rollback_log: Vec<RollbackRecord> = Vec::new();
+
+    // Phase 1: Snapshot original states for rollback
     for op in &plan.operations {
-        match op {
+        let (dst, from_dst) = match op {
+            EditOp::Create { path, .. } | EditOp::Modify { path, .. } | EditOp::Delete { path, .. } => {
+                (path.to_absolute(workspace_root), None)
+            }
+            EditOp::Rename { from, to, .. } => {
+                (to.to_absolute(workspace_root), Some(from.to_absolute(workspace_root)))
+            }
+        };
+        
+        let original_content = if dst.exists() && dst.is_file() {
+            std::fs::read(&dst).ok()
+        } else {
+            None
+        };
+        rollback_log.push(RollbackRecord { dst_path: dst, original_content });
+        
+        if let Some(from_dst) = from_dst {
+            let original_from = if from_dst.exists() && from_dst.is_file() {
+                std::fs::read(&from_dst).ok()
+            } else {
+                None
+            };
+            rollback_log.push(RollbackRecord { dst_path: from_dst, original_content: original_from });
+        }
+    }
+
+    // Phase 2: Attempt destructive apply
+    let mut apply_failed = false;
+    let mut apply_error = String::new();
+
+    for op in &plan.operations {
+        let result = match op {
             EditOp::Create { path, .. } | EditOp::Modify { path, .. } => {
                 let src = path.to_absolute(sandbox_root);
                 let dst = path.to_absolute(workspace_root);
                 if let Some(parent) = dst.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    let _ = std::fs::create_dir_all(parent);
                 }
-                std::fs::copy(&src, &dst).with_context(|| {
-                    format!("Failed to copy {} → {}", src.display(), dst.display())
-                })?;
+                std::fs::copy(&src, &dst).map(|_| ())
             }
             EditOp::Delete { path, .. } => {
                 let dst = path.to_absolute(workspace_root);
                 if dst.exists() {
-                    std::fs::remove_file(&dst).with_context(|| {
-                        format!("Failed to delete {}", dst.display())
-                    })?;
+                    std::fs::remove_file(&dst)
+                } else {
+                    Ok(())
                 }
             }
             EditOp::Rename { from, to, .. } => {
-                let dst_from = from.to_absolute(workspace_root);
+                // Actually, the intent was to move `from` to `to` in workspace. But wait! The sandbox already HAS the mutated state!
+                // So sandbox's `to` path is the file we want! And we should delete workspace's `from` path.
+                let src = to.to_absolute(sandbox_root);
                 let dst_to = to.to_absolute(workspace_root);
+                let dst_from = from.to_absolute(workspace_root);
+                
                 if let Some(parent) = dst_to.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    let _ = std::fs::create_dir_all(parent);
                 }
-                std::fs::rename(&dst_from, &dst_to).with_context(|| {
-                    format!("Failed to rename {} → {}", dst_from.display(), dst_to.display())
-                })?;
+                
+                match std::fs::copy(&src, &dst_to) {
+                    Ok(_) => {
+                        if dst_from.exists() { std::fs::remove_file(&dst_from) } else { Ok(()) }
+                    }
+                    Err(e) => Err(e)
+                }
             }
+        };
+
+        if let Err(e) = result {
+            apply_failed = true;
+            apply_error = format!("Failed op {:?}: {}", op, e);
+            break;
         }
     }
+
+    // Phase 3: Rollback on Failure
+    if apply_failed {
+        eprintln!("\n🚨 Apply failed mid-flight. Executing zero-pollution rollback...");
+        for record in rollback_log {
+            if let Some(content) = record.original_content {
+                if let Some(parent) = record.dst_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&record.dst_path, content);
+            } else {
+                if record.dst_path.exists() {
+                    let _ = std::fs::remove_file(&record.dst_path);
+                }
+            }
+        }
+        anyhow::bail!("Transaction failed and rolled back. Cause: {}", apply_error);
+    }
+
     Ok(())
 }
 

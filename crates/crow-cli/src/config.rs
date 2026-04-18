@@ -100,8 +100,15 @@ impl CrowConfig {
     /// Resolve configuration from project file and environment.
     /// Fails fast with a clear message if configuration values are invalid.
     pub fn load() -> anyhow::Result<Self> {
-        let workspace_dir = env::current_dir()?;
+        Self::load_for(&env::current_dir()?)
+    }
+
+    /// Resolve configuration explicitly for a given workspace path.
+    pub fn load_for(workspace_dir: &Path) -> anyhow::Result<Self> {
         let local_config_path = workspace_dir.join(".crow").join("config.json");
+        
+        // Skip global config entirely if testing
+        let is_testing = std::env::var("CROW_TEST_ENV").is_ok() || cfg!(test);
         
         let home_dir = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
@@ -112,7 +119,7 @@ impl CrowConfig {
         let mut file_cfg = ConfigFile::default();
 
         // 1. Load global config
-        if global_config_path.exists() {
+        if !is_testing && global_config_path.exists() {
             if let Ok(content) = fs::read_to_string(&global_config_path) {
                 if let Ok(cfg) = serde_json::from_str::<ConfigFile>(&content) {
                     file_cfg = cfg;
@@ -346,7 +353,7 @@ impl CrowConfig {
         };
 
         Ok(Self {
-            workspace: workspace_dir,
+            workspace: workspace_dir.to_path_buf(),
             llm,
             map_budget,
             write_mode,

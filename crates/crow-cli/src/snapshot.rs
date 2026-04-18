@@ -93,31 +93,46 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
         return Ok(());
     }
 
-    // Stage only the modified files
-    let mut add_cmd = Command::new("git");
-    add_cmd.arg("add");
-    add_cmd.args(&files_to_stage);
-    add_cmd.current_dir(workspace_root);
-    
-    let _ = add_cmd.status()?;
-
-    // See if there's anything to commit
-    let changes = Command::new("git")
-        .args(["status", "--porcelain"])
+    // Since we are applying changes autonomously, we should ONLY commit what the agent modified,
+    // ignoring any out-of-band files the user might have staged themselves.
+    let status = Command::new("git")
+        .arg("add")
+        .args(&files_to_stage)
         .current_dir(workspace_root)
-        .output()?;
+        .status()?;
+
+    if !status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to execute git add. Git workspace may be corrupted."
+        ));
+    }
+
+    // See if there's anything to commit among these files specifically
+    let mut status_cmd = Command::new("git");
+    status_cmd.args(["status", "--porcelain", "--"]);
+    status_cmd.args(&files_to_stage);
+    let changes = status_cmd.current_dir(workspace_root).output()?;
         
     if changes.stdout.is_empty() {
-        return Ok(()); // Nothing to commit
+        return Ok(()); // Nothing actually changed for these files
     }
 
     let commit_msg = format!("crow: {}", plan.rationale.split('\n').next().unwrap_or("Autonomous verification applied"));
     
-    // Commit
-    let _ = Command::new("git")
-        .args(["commit", "-m", &commit_msg])
-        .current_dir(workspace_root)
-        .status()?;
+    // Commit strictly only our target files to avoid scooping up manual stages.
+    let mut commit_cmd = Command::new("git");
+    commit_cmd.args(["commit", "-m", &commit_msg, "--only", "--"]);
+    commit_cmd.args(&files_to_stage);
+    
+    let commit_status = commit_cmd.current_dir(workspace_root).status()?;
+
+    if !commit_status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "git commit failed. The applied changes remain uncommitted."
+        ));
+    }
 
     Ok(())
 }
