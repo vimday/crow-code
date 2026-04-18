@@ -59,7 +59,8 @@ async fn synthetic_create_plan_passes_verification() {
         rationale: "Add a marker file to prove create-path works".into(),
         is_partial: false,
         confidence: Confidence::High,
-        operations: vec![EditOp::Create {
+        requires_mcts: true,
+            operations: vec![EditOp::Create {
             path: WorkspacePath::new("MARKER.txt").unwrap(),
             content: "Created by integration test.\n".into(),
             precondition: FilePrecondition::MustNotExist,
@@ -140,7 +141,8 @@ async fn synthetic_modify_plan_hydrates_and_applies() {
         rationale: "Change greet to return 'world'".into(),
         is_partial: false,
         confidence: Confidence::High,
-        operations: vec![EditOp::Modify {
+        requires_mcts: true,
+            operations: vec![EditOp::Modify {
             path: WorkspacePath::new("src/lib.rs").unwrap(),
             preconditions: PreconditionState {
                 content_hash: "will-be-replaced-by-hydrator".into(),

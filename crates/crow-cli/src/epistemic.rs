@@ -56,13 +56,26 @@ pub async fn run_epistemic_loop(
             );
         }
 
-        println!(
-            "  🧠 Epistemic Step {}/{} — Modulating Cognitive Request...",
-            epistemic_step, MAX_EPISTEMIC_STEPS
+        let spinner = indicatif::ProgressBar::new_spinner();
+        spinner.set_style(
+            indicatif::ProgressStyle::default_spinner()
+                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+                .template("{spinner:.cyan} {msg}")
+                .unwrap(),
         );
-        let action = compiler
+        spinner.set_message(format!(
+            "🧠 Epistemic Step {}/{} — Modulating Cognitive Request...",
+            epistemic_step, MAX_EPISTEMIC_STEPS
+        ));
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let action_result = compiler
             .compile_action(&messages.as_messages())
-            .await
+            .await;
+            
+        spinner.finish_and_clear();
+        
+        let action = action_result
             .map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
         // If it's a SubmitPlan, return immediately before pushing to history.

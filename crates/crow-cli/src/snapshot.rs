@@ -253,6 +253,7 @@ mod tests {
             base_snapshot_id: crow_patch::SnapshotId("snapshot-001".to_string()),
             confidence: crow_patch::Confidence::High,
             is_partial: false,
+            requires_mcts: true,
             operations: vec![
                 crow_patch::EditOp::Modify {
                     path: crow_patch::WorkspacePath::new("target.txt").unwrap(),

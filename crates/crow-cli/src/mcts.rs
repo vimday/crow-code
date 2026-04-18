@@ -588,7 +588,8 @@ fn empty_plan() -> IntentPlan {
         rationale: "MCTS branch placeholder".into(),
         is_partial: true,
         confidence: crow_patch::Confidence::None,
-        operations: vec![],
+        requires_mcts: true,
+            operations: vec![],
     }
 }
 

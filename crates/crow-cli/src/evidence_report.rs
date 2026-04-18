@@ -335,6 +335,7 @@ mod tests {
             rationale: "Fix the auth bug".into(),
             is_partial: false,
             confidence: Confidence::High,
+            requires_mcts: true,
             operations: vec![
                 EditOp::Create {
                     path: crow_patch::WorkspacePath::new("new.rs").unwrap(),

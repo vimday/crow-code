@@ -26,7 +26,8 @@ fn benchmark_zero_pollution_on_failed_apply() {
         base_snapshot_id: crow_patch::SnapshotId("snapshot-abc".to_string()),
         confidence: crow_patch::Confidence::Low,
         is_partial: false,
-        operations: vec![
+        requires_mcts: true,
+            operations: vec![
             crow_patch::EditOp::Modify {
                 path: crow_patch::WorkspacePath::new("src_file.rs").unwrap(),
                 preconditions: crow_patch::types::PreconditionState {

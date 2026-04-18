@@ -310,8 +310,17 @@ pub struct IntentPlan {
     pub is_partial: bool,
     /// Model's self-assessed confidence.
     pub confidence: Confidence,
+    /// If false, the model has judged that this task does not require MCTS
+    /// parallel divergent search (e.g. pure docs/markdown/trivial configuration).
+    /// Default is true. Bypasses the 3-branch expansion to save tokens if set.
+    #[serde(default = "default_requires_mcts")]
+    pub requires_mcts: bool,
     /// The ordered list of atomic operations.
     pub operations: Vec<EditOp>,
+}
+
+fn default_requires_mcts() -> bool {
+    true
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────
@@ -388,6 +397,7 @@ mod tests {
             rationale: "Fix typo in README".into(),
             is_partial: false,
             confidence: Confidence::High,
+            requires_mcts: true,
             operations: vec![EditOp::Modify {
                 path: WorkspacePath::new("README.md").unwrap(),
                 preconditions: PreconditionState {
@@ -412,6 +422,7 @@ mod tests {
             rationale: "Not sure about auth refactor".into(),
             is_partial: true,
             confidence: Confidence::Low,
+            requires_mcts: true,
             operations: vec![],
         };
         assert!(plan.is_partial);
@@ -426,6 +437,7 @@ mod tests {
             rationale: "Rename module and update imports".into(),
             is_partial: false,
             confidence: Confidence::Medium,
+            requires_mcts: true,
             operations: vec![
                 EditOp::Rename {
                     from: WorkspacePath::new("src/old.rs").unwrap(),

@@ -59,7 +59,8 @@ pub async fn run_god_pipeline() -> Result<()> {
         rationale: "Pipeline synthetic verification inject".into(),
         is_partial: false,
         confidence: Confidence::High,
-        operations: vec![EditOp::Create {
+        requires_mcts: true,
+            operations: vec![EditOp::Create {
             path: WorkspacePath::new("dummy_test_crow.txt")?,
             content: "This is a synthetic artifact created by God Pipeline.\n".into(),
             precondition: FilePrecondition::MustNotExist,

@@ -205,6 +205,7 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
     let mut sys_prompt = String::from("Context (Repository Map):\n");
     sys_prompt.push_str(&repo_map.map_text);
     sys_prompt.push_str(&format!("\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.", snapshot_id.0, snapshot_id.0));
+    sys_prompt.push_str("\n\nMCTS DYNAMIC SEARCH: For complex code refactors, we use rigorous parallel searches (MCTS). However, if your intended changes are TRIVIAL (e.g. pure documentation tweaks, simple text formatting, or modifying markdown files), please explicitly set `requires_mcts = false` to save precious API loop latency.");
 
     let mcp_ctx = mcp_manager.prompt_context();
     if !mcp_ctx.is_empty() {
@@ -705,6 +706,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
     let mut sys_prompt = String::from("Context (Repository Map):\n");
     sys_prompt.push_str(&repo_map.map_text);
     sys_prompt.push_str(&format!("\n\nWorkspace Snapshot ID: {}\nIMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.", snapshot_id.0, snapshot_id.0));
+    sys_prompt.push_str("\n\nMCTS DYNAMIC SEARCH: For complex code refactors, we use rigorous parallel searches (MCTS). However, if your intended changes are TRIVIAL (e.g. pure documentation tweaks, simple text formatting, or modifying markdown files), please explicitly set `requires_mcts = false` to save precious API loop latency.");
 
     let mcp_ctx = mcp_manager.prompt_context();
     if !mcp_ctx.is_empty() {
@@ -1169,7 +1171,16 @@ async fn warm_build_cache(
         return;
     };
 
-    println!("\n[4.5/6] Pre-warming build cache for {}...", profile.primary_lang.name);
+    let spinner = indicatif::ProgressBar::new_spinner();
+    spinner.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    spinner.set_message(format!("[4.5/6] Pre-warming build cache for {}...", profile.primary_lang.name));
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    
     let start = Instant::now();
     
     // NEW: Bootstrapping cache magic!
@@ -1203,6 +1214,7 @@ async fn warm_build_cache(
     .await
     {
         Ok(result) => {
+            spinner.finish_and_clear();
             let elapsed = start.elapsed();
             if result.exit_code == Some(0) {
                 // Sync the warmed cache into our isolated global tracker for future runs.
@@ -1222,6 +1234,7 @@ async fn warm_build_cache(
             }
         }
         Err(e) => {
+            spinner.finish_and_clear();
             eprintln!(
                 "    ⚠️  Build cache warm-up failed: {:?} — continuing without cache",
                 e
@@ -1331,8 +1344,8 @@ async fn run_mcts_crucible(
         path.ends_with(".md") || path.ends_with(".txt")
     });
 
-    if is_pure_text_change && actual_mcts_config.branch_factor > 1 {
-        println!("    ⏭️  Baseline plan only targets non-code files (.md/.txt). Bypassing parallel diverse search (MCTS downgraded to 1 branch).");
+    if (is_pure_text_change || !baseline_plan.requires_mcts) && actual_mcts_config.branch_factor > 1 {
+        println!("    ⏭️  Baseline plan indicates MCTS bypass (trivial or non-code task). Bypassing parallel diverse search (MCTS downgraded to 1 branch).");
         actual_mcts_config.branch_factor = 1;
     }
 
@@ -1536,6 +1549,7 @@ mod tests {
             rationale: "test".into(),
             is_partial: false,
             confidence: crow_patch::Confidence::High,
+            requires_mcts: true,
             operations: vec![],
         };
 
