@@ -29,6 +29,7 @@ ratatui = "0.26.1"
 crossterm = "0.27.0"
 rustyline = "14.0"
 indicatif = "0.17.8"
+console = "0.15.11"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"

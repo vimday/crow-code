@@ -2,89 +2,180 @@
 
 ![Corvus Matrix Logo](./assets/logo.png)
 
-> The smartest bird in the codebase.
+> Evidence-driven AI coding agent with sandboxed verification and structured patch plans.
 
-**Crow Code** is a next-generation AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). It is being designed from the ground up with evidence-driven verification, zero-pollution guarantees, and time-travel safety — no legacy, no compromises.
+**Crow Code** is an AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). Instead of letting a model write directly to your repository, Crow compiles model output into structured `AgentAction` / `IntentPlan` objects, rehydrates them against the current workspace, applies them inside an isolated sandbox, and verifies the result before any workspace write.
 
-## Why Crow?
+**Current reality:** the core local loop already works for repo mapping, structured reads and recon, plan hydration, sandbox apply, verification, sessions, provider routing, and MCP stdio transport. Some platform/product layers are still partial or experimental, especially replay/time-travel, richer intelligence/LSP work, and parts of the dashboard/dream story.
 
-Crows are the most intelligent birds on the planet: they use tools, plan ahead, and solve multi-step problems. This project embodies that philosophy:
+## Why Crow
 
-- **Evidence over confidence scores.** Every proposed change will carry a structured proof bundle — compile results, test run history, lint status, and semantic risk flags — not an opaque 0–100 number.
-- **Patches are first-class citizens.** The LLM never touches your files directly. All mutations are buffered as atomic `IntentPlan`s anchored to workspace snapshots.
-- **Zero pollution guarantee (design goal).** If anything fails, your workspace stays exactly as it was. This is the invariant the runtime is being built to enforce.
-- **Time-travel (planned).** Event-sourced state machine with O(1) snapshots. Undo, redo, branch — at the infrastructure level.
+- **Evidence over vibes.** Plans are judged with structured verification output, not just model confidence.
+- **Patches are first-class.** The model proposes structured actions; it does not write arbitrary text straight to disk.
+- **Snapshot-aware safety.** Plans are anchored to a workspace snapshot and hydrated with real file hashes before apply.
+- **Workspace-write by default.** Crow defaults to a verified write path, not unrestricted full access.
+
+## What works today
+
+- Rust workspace probe and repo-map generation
+- structured `read_files` and recon actions
+- intent compilation into `AgentAction`
+- plan hydration with ground-truth file hashes
+- isolated sandbox materialization and patch application
+- preflight compile checks and full verification runs
+- session persistence and resume
+- multi-provider LLM routing (OpenAI-compatible, Anthropic, Ollama, DeepSeek, custom)
+- MCP stdio transport for external tools
+- evidence-first `plan` preview mode
+
+## Quick start
+
+### Prerequisites
+
+- Rust / Cargo
+- an LLM provider configured via environment or `.crow/config.json`
+- for the built-in recon tools, common local utilities such as `rg`, `tree`, `file`, `wc`, and `ls`
+
+### 1) Build and test the workspace
+
+```bash
+cargo build --workspace
+cargo test --workspace
+```
+
+### 2) Configure a provider
+
+Minimal OpenAI-compatible example:
+
+```bash
+export OPENAI_API_KEY=...
+export LLM_PROVIDER=openai
+export LLM_MODEL=gpt-4-turbo
+```
+
+Anthropic / Ollama / DeepSeek are also supported via `LLM_PROVIDER`.
+
+You can also use project-local or global config:
+
+- local: `.crow/config.json`
+- global: `~/.crow/config.json`
+
+Example:
+
+```json
+{
+  "llm": {
+    "provider": "ollama",
+    "model": "llama3",
+    "base_url": "http://localhost:11434/v1"
+  },
+  "workspace": {
+    "write_mode": "write",
+    "map_budget": 65536
+  }
+}
+```
+
+### 3) Run the CLI
+
+```bash
+# Show help
+cargo run -p crow-cli -- help
+
+# Start interactive chat (also the default with no args)
+cargo run -p crow-cli -- chat
+
+# Compile a task into structured JSON only
+cargo run -p crow-cli -- compile "Add a short note to README.md"
+
+# Preview a plan plus evidence without applying it
+cargo run -p crow-cli -- plan "Explain how this repo is organized"
+
+# Run the full autonomous loop
+cargo run -p crow-cli -- run "Fix a typo in README.md"
+```
+
+## Core commands
+
+| Command | Purpose |
+|---|---|
+| `crow` / `crow chat` | Continuous chat REPL |
+| `crow compile <prompt>` | Show the parsed `AgentAction` JSON |
+| `crow plan <prompt>` | Preview a plan and evidence report |
+| `crow run <prompt>` | Full autonomous loop |
+| `crow dry-run <prompt>` | Alias for `run` |
+| `crow session list` | List saved sessions |
+| `crow session resume-run <id>` | Resume a saved session |
+| `crow mcp` | Manage / use MCP tools |
+| `crow dashboard` | Open the dashboard |
+| `crow dream` | Run AutoDream memory consolidation |
+
+## Safety model
+
+Crow is trying to make the safe path the default:
+
+- the model never writes to the workspace directly
+- file mutations are expressed as structured plans
+- plans are hydrated with real file hashes before apply
+- changes are applied and tested inside a sandbox first
+- default write mode is `workspace-write`, not unrestricted full access
+
+### Current limitations
+
+Crow is **not** a full OS-level sandbox yet. Repository isolation and verification are strong, but deep process/network isolation is still outside the current scope. Replay/time-travel infrastructure is also not complete yet.
 
 ## Architecture
 
+Crow is a Rust workspace with 11 crates and strict layering:
+
 ```
-┌──────────────────────────────────────────────────┐
-│  crow-cli  crow-replay  crow-mcp                │  L5: Interface
-├──────────────────────────────────────────────────┤
-│  crow-brain  (Intent Compiler + MCTS Solver)     │  L4: Reasoning
-├──────────────────────────────────────────────────┤
-│  crow-intel  (Tree-sitter + LSP Bridge)          │  L3: Intelligence
-├──────────────────────────────────────────────────┤
-│  crow-verifier  (Workspace Exec + ACI Truncation)│  L2: Crucible
-├──────────────────────────────────────────────────┤
-│  crow-workspace        crow-materialize          │  L1: Runtime
-│  (Hydrator & Applier)   (Workspace Copy / CoW)   │
-├──────────────────────────────────────────────────┤
-│  crow-patch    crow-evidence    crow-probe       │  L0: Currencies
-│  (Patch Contract) (Evidence Matrix) (Recon Radar)│
-└──────────────────────────────────────────────────┘
+L5  crow-cli   crow-replay   crow-mcp
+L4  crow-brain
+L3  crow-intel
+L2  crow-verifier
+L1  crow-workspace   crow-materialize
+L0  crow-patch   crow-evidence   crow-probe
 ```
 
-11 Rust crates, strict layered dependencies, zero external deps at the foundation.
-
-See [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md) for the full design document.
-
-**Note on current status:** Core data contracts, sandbox materialization, preflight verification, MCTS iteration, session persistence, snapshot anchoring, multi-provider routing, and MCP stdio transport are implemented. The Event Ledger and parts of the Replay Harness remain planned or partial.
-
-## Quick Start
-
-```bash
-# Build
-cargo build --workspace
-
-# Run all tests
-cargo test --workspace
-
-# Run the CLI
-cargo run -p crow-cli
-```
-
-## Project Status
-
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | Workspace genesis | ✅ |
-| 2 | Core data contracts (`crow-patch`, `crow-evidence`, `crow-probe`) | ✅ |
-| 3 | `crow-materialize` sandbox isolation | ✅ |
-| 4 | `crow-verifier` execution + ACI truncation | ✅ |
-| 5 | Probe scanner, workspace applier, CLI pipeline | ✅ |
-| 6 | MCTS parallel crucible & cache isolation | ✅ |
-| 7 | Polyglot preflights & snapshot verification | ✅ |
-| 8 | Session persistence, evidence report, CLI subcommands | ✅ |
-| 9 | Real snapshot anchoring & workspace write enforcement | ✅ |
-| 10 | Multi-provider LLM routing | ✅ |
-| 11 | MCP stdio transport (`crow-mcp`) | ✅ |
-
-## Crate Overview
+### Crate overview
 
 | Crate | Layer | Purpose |
 |-------|-------|---------|
-| `crow-patch` | L0 | Unified patch contract: `EditOp`, `IntentPlan`, `WorkspacePath` |
-| `crow-evidence` | L0 | Multidimensional verification: `EvidenceMatrix`, `TestRun`, `RiskFlag` |
-| `crow-probe` | L0 | Repository radar: `ProjectProfile`, `VerificationCandidate` |
-| `crow-workspace` | L1 | Plan hydration and sandbox mutation applier |
-| `crow-materialize` | L1 | Workspace-isolation CoW/copy materialization |
-| `crow-verifier` | L2 | Workspace-isolated command execution, log truncation |
-| `crow-intel` | L3 | Tree-sitter outlines, LSP bridge |
-| `crow-brain` | L4 | Intent compiler, budget governor, MCTS |
-| `crow-cli` | L5 | CLI entrypoint — the `crow` binary |
-| `crow-replay` | L5 | Behavioral regression and task replay harness (planned) |
-| `crow-mcp` | L5 | JSON-RPC 2.0 stdio MCP transport and client wrapper |
+| `crow-patch` | L0 | Patch contract: `AgentAction`, `IntentPlan`, `WorkspacePath` |
+| `crow-evidence` | L0 | Verification evidence types |
+| `crow-probe` | L0 | Workspace scanning and verification candidates |
+| `crow-workspace` | L1 | Plan hydration, applier, and event-ledger groundwork |
+| `crow-materialize` | L1 | Workspace-isolation materialization |
+| `crow-verifier` | L2 | Isolated command execution and log truncation |
+| `crow-intel` | L3 | Tree-sitter repo maps / outlines |
+| `crow-brain` | L4 | Intent compiler, provider routing, MCTS, AutoDream |
+| `crow-cli` | L5 | User-facing CLI binary |
+| `crow-replay` | L5 | Replay harness (still minimal / planned) |
+| `crow-mcp` | L5 | MCP stdio transport and client |
+
+## Status
+
+### Implemented
+
+- workspace genesis and layered crate split
+- core patch/evidence/probe contracts
+- sandbox materialization
+- verifier execution + ACI truncation
+- autonomous compile / plan / run flow
+- preflight compile checks
+- session persistence and resume
+- snapshot anchoring
+- multi-provider routing
+- MCP stdio transport
+
+### Partial or still evolving
+
+- replay harness
+- richer event-ledger productization
+- deeper intelligence/LSP integration
+- dashboard / dream / long-horizon memory UX
+
+See [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md) for the architecture baseline and design goals.
 
 ## License
 

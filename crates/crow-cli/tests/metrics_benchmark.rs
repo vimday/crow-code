@@ -2,6 +2,15 @@ use std::path::Path;
 use tempfile::tempdir;
 use std::process::Command;
 
+fn git_cmd() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env_remove("GIT_DIR")
+       .env_remove("GIT_INDEX_FILE")
+       .env_remove("GIT_WORK_TREE")
+       .env_remove("GIT_PREFIX");
+    cmd
+}
+
 /// This integration test acts as the core "Reflective Metric Benchmark" for the zero-pollution invariant.
 /// It creates a mock Git repository, sets up `PreconditionState::Tolerant` but then forces an apply failure,
 /// or simulates a bad test run, and ensures that `git status` remains completely perfectly clean.
@@ -13,8 +22,8 @@ fn benchmark_zero_pollution_on_failed_apply() {
     // 1. Initialize stable Git repo (baseline)
     setup_git_repo(workspace);
     std::fs::write(workspace.join("src_file.rs"), b"fn main() {}").unwrap();
-    Command::new("git").args(["add", "src_file.rs"]).current_dir(workspace).status().unwrap();
-    Command::new("git").args(["commit", "-m", "init"]).current_dir(workspace).status().unwrap();
+    git_cmd().args(["add", "src_file.rs"]).current_dir(workspace).status().unwrap();
+    git_cmd().args(["commit", "-m", "init"]).current_dir(workspace).status().unwrap();
 
     let baseline_status = get_git_status(workspace);
     assert!(baseline_status.is_empty(), "Baseline must be clean");
@@ -79,13 +88,13 @@ fn benchmark_zero_pollution_on_failed_apply() {
 }
 
 fn setup_git_repo(path: &Path) {
-    Command::new("git").args(["init"]).current_dir(path).status().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(path).status().unwrap();
-    Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(path).status().unwrap();
+    git_cmd().args(["init"]).current_dir(path).status().unwrap();
+    git_cmd().args(["config", "user.name", "Test"]).current_dir(path).status().unwrap();
+    git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(path).status().unwrap();
 }
 
 fn get_git_status(path: &Path) -> String {
-    let output = Command::new("git").args(["status", "--porcelain"]).current_dir(path).output().unwrap();
+    let output = git_cmd().args(["status", "--porcelain"]).current_dir(path).output().unwrap();
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 

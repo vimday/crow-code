@@ -746,14 +746,12 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
                 mcts_config.branch_factor
             );
         }
-        // Pre-warm the build cache so all MCTS branches start with
-        // compiled dependencies. Without this, the first cargo check
-        // in every branch hits a cold cache (30-60s); with it, each
-        warm_build_cache(&frozen_root, &cfg.workspace, &profile, &candidate).await;
+
         let winner = run_mcts_crucible(
             &mcts_config,
             &profile,
             &candidate,
+            &cfg.workspace,
             &frozen_root,
             &compiler,
             messages,
@@ -1175,7 +1173,9 @@ async fn warm_build_cache(
             .unwrap(),
     );
     spinner.set_message(format!("[4.5/6] Pre-warming build cache for {}...", profile.primary_lang.name));
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    if console::Term::stdout().is_term() && std::env::var("CI").is_err() {
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    }
     
     let start = Instant::now();
     
@@ -1308,6 +1308,7 @@ async fn run_mcts_crucible(
     mcts_config: &crate::mcts::MctsConfig,
     profile: &crow_probe::types::ProjectProfile,
     candidate: &crow_probe::types::VerificationCandidate,
+    workspace_root: &std::path::Path,
     frozen_root: &std::path::Path,
     compiler: &crow_brain::IntentCompiler,
     messages: &mut context::ConversationManager,
@@ -1344,6 +1345,11 @@ async fn run_mcts_crucible(
     if (is_pure_text_change || !baseline_plan.requires_mcts) && actual_mcts_config.branch_factor > 1 {
         println!("    ⏭️  Baseline plan indicates MCTS bypass (trivial or non-code task). Bypassing parallel diverse search (MCTS downgraded to 1 branch).");
         actual_mcts_config.branch_factor = 1;
+    }
+
+    if actual_mcts_config.branch_factor > 1 {
+        // Pre-warm the build cache so all MCTS branches start with compiled dependencies.
+        warm_build_cache(frozen_root, workspace_root, profile, candidate).await;
     }
 
     // 2. MCTS Parallel Explore Rounds

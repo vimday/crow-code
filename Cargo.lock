@@ -363,6 +363,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "chrono",
+ "console",
  "crossterm",
  "crow-brain",
  "crow-evidence",

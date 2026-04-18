@@ -67,7 +67,10 @@ pub async fn run_epistemic_loop(
             "🧠 Epistemic Step {}/{} — Modulating Cognitive Request...",
             epistemic_step, MAX_EPISTEMIC_STEPS
         ));
-        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+        
+        if console::Term::stdout().is_term() && std::env::var("CI").is_err() {
+            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+        }
 
         let action_result = compiler
             .compile_action(&messages.as_messages())

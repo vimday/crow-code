@@ -9,6 +9,15 @@ use crow_patch::SnapshotId;
 use std::path::Path;
 use std::process::Command;
 
+fn git_cmd() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env_remove("GIT_DIR")
+       .env_remove("GIT_INDEX_FILE")
+       .env_remove("GIT_WORK_TREE")
+       .env_remove("GIT_PREFIX");
+    cmd
+}
+
 /// Resolve a `SnapshotId` from the workspace.
 ///
 /// Strategy:
@@ -35,7 +44,7 @@ pub fn resolve_snapshot_id(workspace_root: &Path) -> SnapshotId {
 
 /// Run `git rev-parse HEAD` in the workspace root.
 fn git_head_hash(workspace_root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["rev-parse", "HEAD"])
         .current_dir(workspace_root)
         .output()
@@ -60,7 +69,7 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
 /// Scopes the commit strictly to the files modified by the plan.
 pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan) -> std::io::Result<()> {
     // Check if it's a git repo
-    let status = Command::new("git")
+    let status = git_cmd()
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(workspace_root)
         .output()?;
@@ -95,7 +104,7 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
 
     // Since we are applying changes autonomously, we should ONLY commit what the agent modified,
     // ignoring any out-of-band files the user might have staged themselves.
-    let status = Command::new("git")
+    let status = git_cmd()
         .arg("add")
         .arg("--force")
         .args(&files_to_stage)
@@ -110,7 +119,7 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
     }
 
     // See if there's anything to commit among these files specifically
-    let mut status_cmd = Command::new("git");
+    let mut status_cmd = git_cmd();
     status_cmd.args(["status", "--porcelain", "--"]);
     status_cmd.args(&files_to_stage);
     let changes = status_cmd.current_dir(workspace_root).output()?;
@@ -122,7 +131,7 @@ pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan)
     let commit_msg = format!("crow: {}", plan.rationale.split('\n').next().unwrap_or("Autonomous verification applied"));
     
     // Commit strictly only our target files to avoid scooping up manual stages.
-    let mut commit_cmd = Command::new("git");
+    let mut commit_cmd = git_cmd();
     commit_cmd.args(["commit", "-m", &commit_msg, "--only", "--"]);
     commit_cmd.args(&files_to_stage);
     
@@ -231,18 +240,18 @@ mod tests {
         let path = dir.path();
 
         // 1. Init git repo
-        Command::new("git").args(["init"]).current_dir(path).status().unwrap();
+        git_cmd().args(["init"]).current_dir(path).status().unwrap();
         // Setup identity
-        Command::new("git").args(["config", "user.name", "Test"]).current_dir(path).status().unwrap();
-        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(path).status().unwrap();
+        git_cmd().args(["config", "user.name", "Test"]).current_dir(path).status().unwrap();
+        git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(path).status().unwrap();
 
         // 2. Create unrelated untracked and tracked files
         std::fs::write(path.join("unrelated_untracked.txt"), b"1").unwrap();
         std::fs::write(path.join("unrelated_tracked.txt"), b"1").unwrap();
         std::fs::write(path.join("target.txt"), b"1").unwrap();
         
-        Command::new("git").args(["add", "unrelated_tracked.txt", "target.txt"]).current_dir(path).status().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).status().unwrap();
+        git_cmd().args(["add", "unrelated_tracked.txt", "target.txt"]).current_dir(path).status().unwrap();
+        git_cmd().args(["commit", "-m", "init"]).current_dir(path).status().unwrap();
 
         // Modify files
         std::fs::write(path.join("unrelated_tracked.txt"), b"2").unwrap();
@@ -270,7 +279,7 @@ mod tests {
         commit_applied_plan(path, &plan).unwrap();
 
         // 5. Verify git status
-        let status = Command::new("git")
+        let status = git_cmd()
             .args(["status", "--porcelain"])
             .current_dir(path)
             .output()
