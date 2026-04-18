@@ -6,7 +6,6 @@
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
 use crate::epistemic;
-use crate::epistemic_ui::SpinnerObserver;
 use anyhow::{Context, Result};
 use crow_brain::IntentCompiler;
 use crow_materialize::MaterializeConfig;
@@ -67,6 +66,7 @@ impl SerialCrucible<'_> {
                     ledger,
                     verification_runs,
                     total_attempts,
+                    None,
                 )
                 .await?
             {
@@ -86,6 +86,56 @@ impl SerialCrucible<'_> {
         anyhow::bail!("All crucible attempts failed to pass verification.");
     }
 
+    pub async fn execute_with_precompiled(
+        &self,
+        messages: &mut ConversationManager,
+        snapshot_id: &SnapshotId,
+        ledger: &mut EventLedger,
+        plan: crow_patch::IntentPlan,
+    ) -> Result<SnapshotId> {
+        let mut total_attempts = 1; // Since we already did 1 epistemic loop for the precompiled plan
+        let mut verification_runs = 0;
+        let max_total_attempts = 10;
+        
+        println!("\n▶️ Crucible Epoch 1 (Verification Run 1/3) [Precompiled Fast-Path]");
+        match self.run_epoch(messages, snapshot_id, ledger, verification_runs, total_attempts, Some(plan)).await? {
+            EpochOutcome::Success(new_snap) => return Ok(new_snap),
+            EpochOutcome::RetryCompile => {},
+            EpochOutcome::RetryVerification => { verification_runs += 1; },
+        }
+        
+        // If it failed, fallback to normal execute retry loop
+        while verification_runs < 3 && total_attempts < max_total_attempts {
+            total_attempts += 1;
+            println!(
+                "\n▶️ Crucible Epoch {} (Verification Run {}/3)",
+                total_attempts,
+                verification_runs + 1
+            );
+
+            match self
+                .run_epoch(
+                    messages,
+                    snapshot_id,
+                    ledger,
+                    verification_runs,
+                    total_attempts,
+                    None,
+                )
+                .await?
+            {
+                EpochOutcome::Success(new_snap) => return Ok(new_snap),
+                EpochOutcome::RetryCompile => continue,
+                EpochOutcome::RetryVerification => {
+                    verification_runs += 1;
+                    continue;
+                }
+            }
+        }
+
+        anyhow::bail!("All crucible precompiled attempts failed to pass verification.");
+    }
+
     async fn run_epoch(
         &self,
         messages: &mut ConversationManager,
@@ -93,6 +143,7 @@ impl SerialCrucible<'_> {
         ledger: &mut EventLedger,
         verification_runs: u32,
         _total_attempts: u32,
+        precompiled_plan: Option<crow_patch::IntentPlan>,
     ) -> Result<EpochOutcome> {
         if messages.needs_compaction() {
             println!("  🗜️  Auto-compacting massive context history (Auto-Compaction)...");
@@ -106,20 +157,20 @@ impl SerialCrucible<'_> {
             }
         }
 
-        let mut observer = SpinnerObserver::new(format!(
-            "🧠 Epistemic Step {{step}}/{{max}} (Run {}/3) — Modulating Request...",
-            verification_runs + 1
-        ));
+        let compiled_plan = if let Some(p) = precompiled_plan {
+            p
+        } else {
+            let mut observer = crate::event::CliEventHandler::new();
 
-        let compiled_plan = epistemic::run_epistemic_loop(
-            self.compiler,
-            messages,
-            self.frozen_root,
-            self.mcp_manager,
-            &mut observer,
-        )
-        .await?;
-        observer.finish();
+            epistemic::run_epistemic_loop(
+                self.compiler,
+                messages,
+                self.frozen_root,
+                self.mcp_manager,
+                &mut observer,
+            )
+            .await?
+        };
 
         if compiled_plan.operations.is_empty() {
             println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
@@ -181,7 +232,7 @@ impl SerialCrucible<'_> {
             let plan_for_apply = hydrated_plan.clone();
             let sandbox_view = attempt_sandbox.non_owning_view();
             tokio::task::spawn_blocking(move || {
-                crate::apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
+                crow_workspace::applier::apply_plan_to_sandbox(&plan_for_apply, &sandbox_view)
             })
             .await
             .context("Apply task panicked")?

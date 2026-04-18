@@ -12,17 +12,17 @@ mod mcp;
 pub mod mcts;
 pub mod render;
 mod session;
+pub mod runtime;
+pub mod prompt;
+pub mod event;
 pub mod snapshot;
 pub mod tui;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use config::CrowConfig;
-use crow_brain::IntentCompiler;
-use crow_materialize::{materialize, MaterializeConfig};
 
 use crow_probe::scan_workspace;
-use crow_verifier::ExecutionConfig;
-use crow_workspace::applier::apply_plan_to_sandbox;
+use crow_materialize::MaterializeConfig;
 use std::env;
 
 #[tokio::main]
@@ -144,282 +144,19 @@ async fn handle_session_command(args: &[String]) -> Result<()> {
     }
 }
 
-/// Resume a session and re-enter the autonomous loop with restored context.
 async fn resume_session_run(session_id: &str) -> Result<()> {
-    use crow_brain::ChatMessage;
-    use crow_workspace::PlanHydrator;
-
-    let store = session::SessionStore::open()?;
-    let mut loaded_session = store.load(&session::SessionId(session_id.to_string()))?;
-
-    println!(
-        "🦅 crow session resume — continuing session {}",
-        &session_id[..8.min(session_id.len())]
-    );
-    println!("  Workspace: {}", loaded_session.workspace_root.display());
-    println!("  Task: {}", loaded_session.task);
-
-    let restored_messages = loaded_session.restore_messages();
-    println!(
-        "  Restored {} messages from history",
-        restored_messages.len()
-    );
-
-    if !loaded_session.workspace_root.exists() {
-        anyhow::bail!(
-            "Workspace no longer exists: {}",
-            loaded_session.workspace_root.display()
-        );
-    }
-
-    let cfg = CrowConfig::load_for(&loaded_session.workspace_root)?;
-    let snapshot_id = snapshot::resolve_snapshot_id(&loaded_session.workspace_root);
-    println!("  Snapshot ID: {}", snapshot_id.0);
-
-    // Compare snapshot timeline to detect workspace drift
-    if let Some(last_snap) = loaded_session.snapshot_timeline.last() {
-        if *last_snap != snapshot_id {
-            println!("  ⚠️  Workspace has changed since last session snapshot");
-            println!("     Last: {} → Current: {}", last_snap.0, snapshot_id.0);
-        } else {
-            println!("  ✅ Workspace matches last session snapshot");
-        }
-    }
-
-    // Probe workspace
-    let profile = scan_workspace(&loaded_session.workspace_root).map_err(|e| anyhow::anyhow!(e))?;
-    let candidate = match profile.verification_candidates.first() {
-        Some(c) => c.clone(),
-        None => {
-            anyhow::bail!(
-                "No verification candidates found. Cannot safely resume execution without a test suite.\n\
-                 Please configure a custom test script in `.crow/config.json`."
-            );
-        }
-    };
-
-    // Materialize sandbox
-    println!("\n  Materializing sandbox...");
-    let mat_config = MaterializeConfig {
-        source: loaded_session.workspace_root.clone(),
-        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: false,
-    };
-    let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config))
-        .await
-        .context("Materialization task panicked")?
-        .context("Failed to materialize sandbox")?;
-    let frozen_root = sandbox.path().to_path_buf();
-
-    // Build repo map from frozen sandbox
-    let repo_map = cfg
-        .build_repo_map_for(&frozen_root)
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-    let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
-    let sys_prompt = build_system_prompt(&repo_map, &snapshot_id, Some(&mcp_manager));
-
-    // Rebuild conversation manager with system context + restored history
-    let mut messages = context::ConversationManager::new(vec![
-        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(sys_prompt),
-    ]);
-
-    // Restore non-system messages from session history
-    for msg in &restored_messages {
-        match msg.role {
-            crow_brain::ChatRole::User => messages.push_user(&msg.content),
-            crow_brain::ChatRole::Assistant => messages.push_assistant(&msg.content),
-            crow_brain::ChatRole::System => {} // System messages rebuilt above
-        }
-    }
-
-    // Add a continuation prompt
-    messages.push_user(format!(
-        "[SESSION RESUMED]\nContinuing work on the original task: {}\n\nPlease pick up where you left off. If the previous attempt failed, try a different approach.",
-        loaded_session.task
-    ));
-
-    println!("  Entering crucible loop...\n");
-
-    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
-    let compiler = crow_brain::IntentCompiler::new(client);
-
-    let mut obs = crate::epistemic_ui::SpinnerObserver::new(
-        "🧠 Epistemic Step {step}/{max} — Modulating Cognitive Request...",
-    );
-    let compiled_plan = epistemic::run_epistemic_loop(
-        &compiler,
-        &mut messages,
-        &frozen_root,
-        Some(&mcp_manager),
-        &mut obs,
-    )
-    .await?;
-    obs.finish();
-
-    // Hydrate + apply + verify
-    let attempt_mat_config = MaterializeConfig {
-        source: frozen_root.clone(),
-        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: false,
-    };
-    let attempt_sandbox = tokio::task::spawn_blocking(move || materialize(&attempt_mat_config))
-        .await
-        .context("Materialization task panicked")?
-        .context("Failed to materialize attempt sandbox")?;
-
-    let attempt_sandbox_path = attempt_sandbox.path().to_path_buf();
-    let plan_clone = compiled_plan.clone();
-    let snap_clone = snapshot_id.clone();
-    let hydrated_plan = tokio::task::spawn_blocking(move || {
-        PlanHydrator::hydrate(&plan_clone, &snap_clone, &attempt_sandbox_path)
-    })
-    .await
-    .context("Hydration task panicked")?
-    .context("Hydration failed")?;
-
-    let plan_for_apply = hydrated_plan.clone();
-    let sandbox_view = attempt_sandbox.non_owning_view();
-    tokio::task::spawn_blocking(move || apply_plan_to_sandbox(&plan_for_apply, &sandbox_view))
-        .await
-        .context("Apply task panicked")?
-        .context("Failed to apply plan to sandbox")?;
-
-    // Preflight check
-    let preflight_result = crow_verifier::preflight::run_preflight(
-        attempt_sandbox.path(),
-        Some(&frozen_root),
-        std::time::Duration::from_secs(60),
-        &profile.primary_lang,
-    )
-    .await;
-
-    match &preflight_result {
-        crow_verifier::preflight::PreflightResult::Clean => {
-            println!("  ✅ Preflight: code compiles cleanly");
-        }
-        crow_verifier::preflight::PreflightResult::Errors(diags) => {
-            let summary = crow_verifier::preflight::format_diagnostics(diags);
-            println!("  ❌ Preflight: {} compile error(s)", diags.len());
-            println!("{}", summary);
-        }
-        crow_verifier::preflight::PreflightResult::Skipped(reason) => {
-            println!("  ⚠️  Preflight skipped: {}", reason);
-        }
-    }
-
-    // Full verification
-    let exec_config = ExecutionConfig {
-        timeout: std::time::Duration::from_secs(60),
-        max_output_bytes: 5 * 1024 * 1024,
-    };
-    let result = crow_verifier::executor::execute(
-        attempt_sandbox.path(),
-        &candidate.command,
-        &exec_config,
-        &crow_verifier::types::AciConfig::compact(),
-        Some(&frozen_root),
-    )
-    .await
-    .context("Verification execution failed")?;
-
-    let outcome = &result.test_run.outcome;
-    println!("\n╔══════════════════════════════════════╗");
-    println!("║  Resume Verdict: {:?}", outcome);
-    println!("╚══════════════════════════════════════╝");
-    println!("Evidence:\n{}", result.test_run.truncated_log);
-
-    // Diff
-    println!("\n--- Changes ---");
-    diff::render_plan_diff(&frozen_root, attempt_sandbox.path(), &hydrated_plan);
-
-    if outcome != &crow_evidence::TestOutcome::Passed {
-        anyhow::bail!("Resumed session: verification failed.");
-    }
-
-    // Write-back phase
-    if matches!(
-        cfg.write_mode,
-        config::WriteMode::WorkspaceWrite | config::WriteMode::DangerFullAccess
-    ) {
-        println!("\n[4] Writing verified changes to workspace...");
-        if let Err(e) = apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan) {
-            eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
-            anyhow::bail!("Workspace mutation failed during resume.");
-        }
-
-        println!("  ✅ Workspace updated successfully.");
-        if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan) {
-            println!("  ⚠️  Could not automatically commit changes: {}", e);
-        } else {
-            println!("  ✅ Changes committed to git timeline.");
-        }
-    } else {
-        println!("\n  📦 Write mode is sandbox-only. Changes not applied to workspace.");
-    }
-
-    // Update session AFTER mutations to properly anchor snapshot
-    let post_mutation_snapshot = snapshot::resolve_snapshot_id(&cfg.workspace);
-    loaded_session.save_messages(&messages.as_messages());
-    loaded_session.push_snapshot(post_mutation_snapshot);
-    store.save(&loaded_session)?;
-    println!("\n  💾 Session updated: {}", loaded_session.id.0);
-
-    println!("\n[🎉] Resumed session completed successfully!");
-    Ok(())
+    let cfg = CrowConfig::load()?;
+    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    runtime.resume(&cfg, session_id).await
 }
 
 // ─── Compile-Only command ───────────────────────────────────────────
 
 async fn run_compile_only(args: &[String]) -> Result<()> {
-    use crow_brain::ChatMessage;
-
-    println!("🦅 crow-code Compile-Only mode initializing...\n");
-
-    let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-
-    println!("[1/3] Gathering Repomap Context via tree-sitter...");
-    let repo_map = cfg.build_repo_map().map_err(|e| anyhow::anyhow!(e))?;
-    println!(
-        "    🎯 Compressed map length: {} bytes",
-        repo_map.map_text.len()
-    );
-
-    println!(
-        "\n[2/3] Compiling IntentPlan via crow-brain (Engine: {})...",
-        cfg.describe_provider()
-    );
-
-    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
-    let compiler = IntentCompiler::new(client);
-
-    use crate::context::ConversationManager;
-    let mut messages = ConversationManager::new(vec![
-        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(format!(
-            "Context (Repository Map):\n{}\n\nConstraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-            repo_map.map_text
-        )),
-    ]);
-
-    messages.push_user(format!("Task:\n{}", prompt));
-
-    match compiler.compile_action(&messages.as_messages()).await {
-        Ok(action) => {
-            println!("\n[✓] Compilation Successful!");
-            println!("--- Parsed AgentAction ---");
-            println!("{}", serde_json::to_string_pretty(&action)?);
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("\n[✗] Compilation Failed: {:?}", e);
-            anyhow::bail!("Failed to compile AgentAction")
-        }
-    }
+    let cfg = CrowConfig::load()?;
+    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    runtime.compile_only(&cfg, &prompt).await
 }
 
 // ─── Plan command (Evidence-First Preview) ──────────────────────────
@@ -427,615 +164,26 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
 /// `crow plan <prompt>` — compile a plan and display a full evidence report
 /// WITHOUT applying changes. This serves as a dry-run for verification tests.
 async fn run_plan(args: &[String]) -> Result<()> {
-    use crow_workspace::PlanHydrator;
-    use evidence_report::*;
-
-    println!("🦅 crow plan — Evidence-First Preview\n");
-
-    let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-    println!("  Write mode: {}", cfg.write_mode);
-
-    // Step 1: Recon
-    println!("\n[1/5] Workspace Recon...");
-    let profile = scan_workspace(&cfg.workspace).map_err(|e| anyhow::anyhow!(e))?;
-    let _candidate = match profile.verification_candidates.first() {
-        Some(c) => c.clone(),
-        None => {
-            println!("  ⚠️  No verification candidates found. Falling back to a no-op check.");
-            crow_probe::types::VerificationCandidate {
-                command: crow_probe::types::VerificationCommand::new(
-                    "echo",
-                    vec!["--", "No verification necessary"],
-                ),
-                kind: crow_probe::types::VerificationKind::Test,
-                confidence: crow_probe::types::ProbeConfidence::Inferred,
-                evidence_source: "Fallback".to_string(),
-            }
-        }
-    };
-
-    // Count scanned files
-    let file_count = walkdir_count(&cfg.workspace);
-    let manifests = detect_manifests(&cfg.workspace);
-
-    let snapshot_id = snapshot::resolve_snapshot_id(&cfg.workspace);
-
-    let recon = ReconSummary {
-        language: profile.primary_lang.name.clone(),
-        tier: format!("{:?}", profile.primary_lang.tier),
-        snapshot_id: snapshot_id.clone(),
-        files_scanned: file_count,
-        manifests,
-    };
-    println!(
-        "  ✅ {} ({}) | {} files | {} manifests",
-        recon.language,
-        recon.tier,
-        recon.files_scanned,
-        recon.manifests.len()
-    );
-
-    // Step 2: Materialize + Compile
-    println!("\n[2/5] Materializing sandbox & compiling plan...");
-    let mat_config = MaterializeConfig {
-        source: cfg.workspace.clone(),
-        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: false,
-    };
-    let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config))
-        .await
-        .context("Materialization task panicked")?
-        .context("Failed to materialize sandbox")?;
-    let frozen_root = sandbox.path().to_path_buf();
-
-    let repo_map = cfg
-        .build_repo_map_for(&frozen_root)
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
-    let compiler = IntentCompiler::new(client);
-
-    let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
-    let sys_prompt = build_system_prompt(&repo_map, &snapshot_id, Some(&mcp_manager));
-
-    // Open EventLedger for telemetry recording
-    let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
-        eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
-        let fallback = std::env::temp_dir().join(format!(
-            "crow_ledger_{}_{}.jsonl",
-            snapshot_id.0,
-            chrono::Utc::now().timestamp_millis()
-        ));
-        crow_workspace::ledger::EventLedger::open(&fallback).unwrap_or_else(|fallback_err| {
-            // Rather than panicking, gracefully exit out rather than dropping telemetry silently
-            eprintln!(
-                "  🚨 Fatal: Could not write fallback ledger to {}: {}",
-                fallback.display(),
-                fallback_err
-            );
-            std::process::exit(1);
-        })
-    });
-
-    // In actual implementation we append events
-    let _ = ledger.append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
-        id: snapshot_id.clone(),
-        git_hash: snapshot_id.0.clone(),
-        timestamp: chrono::Utc::now(),
-    });
-
-    use crate::context::ConversationManager;
-    use crow_brain::ChatMessage;
-    let mut messages = ConversationManager::new(vec![
-        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(sys_prompt),
-    ]);
-    messages.push_user(format!("Task:\n{}", prompt));
-
-    let mut obs = crate::epistemic_ui::SpinnerObserver::new(
-        "🧠 Epistemic Step {step}/{max} — Modulating Cognitive Request...",
-    );
-    let compiled_plan = epistemic::run_epistemic_loop(
-        &compiler,
-        &mut messages,
-        &frozen_root,
-        Some(&mcp_manager),
-        &mut obs,
-    )
-    .await?;
-    obs.finish();
-    let compilation = CompilationSummary::from_plan(&compiled_plan);
-    println!(
-        "  ✅ {} ops, {:?} confidence",
-        compilation.total_ops(),
-        compilation.confidence
-    );
-
-    // Step 3: Hydrate
-    println!("\n[3/5] Hydrating plan against frozen sandbox...");
-    let plan_clone = compiled_plan.clone();
-    let frozen_clone = frozen_root.clone();
-    let snap_clone = snapshot_id.clone();
-    let hydrated_plan = tokio::task::spawn_blocking(move || {
-        PlanHydrator::hydrate(&plan_clone, &snap_clone, &frozen_clone)
-    })
-    .await
-    .context("Hydration task panicked")?
-    .context("Hydration failed")?;
-
-    let hydration = HydrationSummary {
-        snapshot_verified: true,
-        hashes_matched: hydrated_plan.operations.len(),
-        hashes_total: hydrated_plan.operations.len(),
-        drift_warnings: vec![],
-    };
-    println!(
-        "  ✅ Snapshot anchored, {}/{} hashes verified",
-        hydration.hashes_matched, hydration.hashes_total
-    );
-
-    // Step 4: Preflight
-    println!("\n[4/5] Running preflight compile check...");
-    // Apply to sandbox first
-    let plan_for_apply = hydrated_plan.clone();
-    let sandbox_view = sandbox.non_owning_view();
-    tokio::task::spawn_blocking(move || apply_plan_to_sandbox(&plan_for_apply, &sandbox_view))
-        .await
-        .context("Apply task panicked")?
-        .context("Apply failed")?;
-
-    let preflight_start = std::time::Instant::now();
-    let preflight_result = crow_verifier::preflight::run_preflight(
-        sandbox.path(),
-        Some(&frozen_root),
-        std::time::Duration::from_secs(30),
-        &profile.primary_lang,
-    )
-    .await;
-    let preflight_elapsed = preflight_start.elapsed();
-
-    let preflight = PreflightSummary {
-        language: profile.primary_lang.name.clone(),
-        outcome: match &preflight_result {
-            crow_verifier::preflight::PreflightResult::Clean => PreflightOutcome::Clean {
-                duration_secs: preflight_elapsed.as_secs_f64(),
-            },
-            crow_verifier::preflight::PreflightResult::Errors(diags) => PreflightOutcome::Errors {
-                count: diags.len(),
-                summary: crow_verifier::preflight::format_diagnostics(diags),
-            },
-            crow_verifier::preflight::PreflightResult::Skipped(reason) => {
-                PreflightOutcome::Skipped {
-                    reason: reason.clone(),
-                }
-            }
-        },
-    };
-
-    // Step 5: Build evidence and verdict
-    let evidence = build_evidence_from_preflight(&preflight_result, &profile);
-    let verdict = Verdict::from_evidence(evidence);
-
-    // Print the full report
-    let report = EvidenceReport {
-        recon,
-        compilation,
-        hydration,
-        preflight,
-        verdict,
-    };
-    println!("{}", report);
-
-    // Show diff
-    println!("\n─── Planned Changes ───");
-    diff::render_plan_diff(&frozen_root, sandbox.path(), &hydrated_plan);
-
-    // Save session
-    if let Ok(store) = session::SessionStore::open() {
-        let mut sess = session::Session::new(&cfg.workspace, &prompt);
-        sess.save_messages(&messages.as_messages());
-        sess.push_snapshot(snapshot_id);
-        if let Err(e) = store.save(&sess) {
-            eprintln!("  ⚠️  Failed to save session: {:?}", e);
-        } else {
-            println!("\n  💾 Session saved: {}", sess.id.0);
-        }
-    }
-
-    drop(sandbox);
-    Ok(())
+    let cfg = CrowConfig::load()?;
+    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    runtime.generate_plan(&cfg, &prompt).await
 }
 
-/// Build an EvidenceMatrix from preflight results.
-fn build_evidence_from_preflight(
-    preflight: &crow_verifier::preflight::PreflightResult,
-    profile: &crow_probe::types::ProjectProfile,
-) -> crow_evidence::types::EvidenceMatrix {
-    use crow_evidence::types::*;
-
-    let compile_passed = matches!(
-        preflight,
-        crow_verifier::preflight::PreflightResult::Clean
-            | crow_verifier::preflight::PreflightResult::Skipped(_)
-    );
-
-    EvidenceMatrix {
-        compile_runs: vec![TestRun {
-            command: format!("preflight ({})", profile.primary_lang.name),
-            outcome: if compile_passed {
-                TestOutcome::Passed
-            } else {
-                TestOutcome::Failed
-            },
-            passed: if compile_passed { 1 } else { 0 },
-            failed: if compile_passed { 0 } else { 1 },
-            skipped: 0,
-            duration: std::time::Duration::from_secs(0),
-            truncated_log: String::new(),
-        }],
-        test_scope: Some(TestScope::Selective),
-        has_known_baseline: true,
-        lints_clean: compile_passed,
-        intelligence_confidence: crow_patch::Confidence::Medium,
-        risk_flags: vec![],
-    }
-}
-
-/// Count files in a directory (non-recursive, approximate).
-fn walkdir_count(root: &std::path::Path) -> usize {
-    std::fs::read_dir(root)
-        .map(|entries| entries.count())
-        .unwrap_or(0)
-}
-
-/// Detect common manifest files.
-fn detect_manifests(root: &std::path::Path) -> Vec<String> {
-    let candidates = [
-        "Cargo.toml",
-        "package.json",
-        "pyproject.toml",
-        "go.mod",
-        "Makefile",
-        "Dockerfile",
-        ".gitignore",
-        "tsconfig.json",
-    ];
-    candidates
-        .iter()
-        .filter(|name| root.join(name).exists())
-        .map(|name| name.to_string())
-        .collect()
-}
 
 async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
     let mut messages = context::ConversationManager::new(vec![]);
-    run_conversation_turn(&cfg, &prompt, &mut messages)
+    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    runtime.execute_turn(&cfg, &prompt, &mut messages)
         .await
         .map(|_| ())
 }
 
-pub async fn run_conversation_turn(
-    cfg: &CrowConfig,
-    prompt: &str,
-    messages: &mut context::ConversationManager,
-) -> Result<crow_patch::SnapshotId> {
-    println!("🦅 crow-code Dry-Run / Turn mode initializing...\n");
-    // ── Step 1: Freeze the timeline FIRST ──────────────────────────
-    // We probe the live workspace only to discover ignore patterns,
-    // then immediately materialize a sandbox. ALL subsequent work
-    // (repo map, LLM compile, hydrate, apply, verify) operates
-    // exclusively against this frozen snapshot.
 
-    println!("[1/6] Radaring Workspace: {}", cfg.workspace.display());
-    let snapshot_id = snapshot::resolve_snapshot_id(&cfg.workspace);
-    println!("    📌 Snapshot ID: {}", snapshot_id.0);
-    let profile = scan_workspace(&cfg.workspace).map_err(|e| anyhow::anyhow!(e))?;
-    let candidate = match profile.verification_candidates.first() {
-        Some(c) => c.clone(),
-        None => {
-            anyhow::bail!(
-                "No verification candidates found. Cannot safely execute autonomous patches without a test suite.\n\
-                 Please configure a custom test script in `.crow/config.json`."
-            );
-        }
-    };
 
-    println!("\n[2/6] Materializing O(1) Sandbox Boundary (Freezing Timeline)...");
-    let mat_config = MaterializeConfig {
-        source: cfg.workspace.clone(),
-        artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-        skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-        allow_hardlinks: false,
-    };
-    let sandbox = tokio::task::spawn_blocking(move || materialize(&mat_config))
-        .await
-        .context("Materialization task panicked")?
-        .context("Failed to materialize frozen sandbox")?;
-    let frozen_root = sandbox.path().to_path_buf();
-    println!(
-        "    🛡️  Time-Frozen Sandbox established at: {}",
-        frozen_root.display()
-    );
-
-    // ── Step 2: Build repo map against frozen sandbox ──────────────
-    println!("\n[3/6] Gathering Repomap Context from Frozen Sandbox via tree-sitter...");
-    let repo_map = cfg
-        .build_repo_map_for(&frozen_root)
-        .map_err(|e| anyhow::anyhow!(e))
-        .context("Failed to build repo map from frozen sandbox")?;
-    println!(
-        "    🎯 Compressed map length: {} bytes",
-        repo_map.map_text.len()
-    );
-
-    // ── Step 3: Autonomous Crucible Loop ───────────────────────────
-    println!(
-        "\n[4/6] Entering Autonomous Crucible Loop (Engine: {})...",
-        cfg.describe_provider()
-    );
-
-    let client = cfg.build_llm_client().map_err(|e| anyhow::anyhow!(e))?;
-    let compiler = IntentCompiler::new(client);
-
-    let mcp_manager = crate::mcp::McpManager::boot(&cfg.mcp_servers).await?;
-
-    // Open EventLedger for telemetry recording
-    let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
-        eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
-        let fallback = std::env::temp_dir().join(format!(
-            "crow_ledger_{}_{}.jsonl",
-            snapshot_id.0,
-            chrono::Utc::now().timestamp_millis()
-        ));
-        crow_workspace::ledger::EventLedger::open(&fallback).unwrap_or_else(|fallback_err| {
-            eprintln!(
-                "  🚨 Fatal: Could not write fallback ledger to {}: {}",
-                fallback.display(),
-                fallback_err
-            );
-            std::process::exit(1);
-        })
-    });
-
-    let _ = ledger.append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
-        id: snapshot_id.clone(),
-        git_hash: snapshot_id.0.clone(),
-        timestamp: chrono::Utc::now(),
-    });
-
-    let sys_prompt = build_system_prompt(&repo_map, &snapshot_id, Some(&mcp_manager));
-
-    use crow_brain::ChatMessage;
-
-    // Inject current repo state and system context if it's the first turn, or update the existing system context with the new snapshot!
-    messages.set_system(vec![
-        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-        ChatMessage::system(sys_prompt),
-    ]);
-
-    if messages.as_messages().len() <= 2 {
-        // First turn
-        messages.push_user(format!("Task:\n{}", prompt));
-    } else {
-        // Ongoing turn - system prompt is now freshly updated above without bloating user history!
-        messages.push_user(prompt);
-    }
-
-    // Outer Crucible Loop (max 3 compile-test cycles).
-    // Each attempt re-materializes a fresh sandbox so that retries are
-    // independent timelines against the same frozen baseline.
-    let mcts_config = crate::mcts::MctsConfig::from_env();
-    if !mcts_config.is_serial() {
-        // MCTS multiplies LLM calls by branch_factor. This is only
-        // economically viable when prompt caching is active (~90% input
-        // cost reduction). Enforce this as a hard gate, not a comment.
-        if !cfg.llm.prompt_caching {
-            println!(
-                "    ⚠️  Warning: MCTS parallel mode (CROW_MCTS_BRANCHES={}) is running without prompt_caching enabled. \
-                 This may be expensive on providers that bill for repetitive input tokens. \
-                 Set CROW_PROMPT_CACHE=1 or prompt_caching=true in .crow/config.json if using Anthropic models.",
-                mcts_config.branch_factor
-            );
-        }
-
-        let winner = run_mcts_crucible(
-            &mcts_config,
-            &profile,
-            &candidate,
-            &cfg.workspace,
-            &frozen_root,
-            &compiler,
-            messages,
-            &snapshot_id,
-            Some(&mcp_manager),
-        )
-        .await?;
-
-        if let Some(w) = winner {
-            // Apply the winning plan using the workspace WriteMode
-            let plan_id = format!(
-                "mcts-{}-{}",
-                snapshot_id.0,
-                chrono::Utc::now().timestamp_millis()
-            );
-            apply_winning_plan(
-                cfg,
-                w.sandbox.path(),
-                &w.plan,
-                &plan_id,
-                &snapshot_id,
-                &mut ledger,
-            )
-            .await?;
-            drop(w.sandbox);
-        }
-
-        return Ok(snapshot_id);
-    }
-
-    let crucible = crucible::SerialCrucible {
-        cfg,
-        profile: &profile,
-        candidate: &candidate,
-        frozen_root: &frozen_root,
-        compiler: &compiler,
-        mcp_manager: Some(&mcp_manager),
-    };
-    let snapshot_id = crucible
-        .execute(messages, &snapshot_id, &mut ledger)
-        .await?;
-
-    drop(sandbox);
-    Ok(snapshot_id)
-}
-
-/// Apply verified changes from sandbox back to the real workspace.
-///
-/// Only copies files that were changed by the plan (not the entire sandbox).
-/// This ensures minimal filesystem mutation and respects the zero-pollution
-/// invariant: if anything goes wrong, the workspace is untouched.
-fn apply_sandbox_to_workspace(
-    workspace_root: &std::path::Path,
-    plan: &crow_patch::IntentPlan,
-) -> Result<()> {
-    use crow_patch::EditOp;
-
-    struct RollbackRecord {
-        dst_path: std::path::PathBuf,
-        original_content: Option<Vec<u8>>,
-    }
-    let mut rollback_log: Vec<RollbackRecord> = Vec::new();
-    let mut created_dirs: Vec<std::path::PathBuf> = Vec::new();
-
-    // Phase 1: Snapshot original states for rollback
-    for op in &plan.operations {
-        let (dst, from_dst) = match op {
-            EditOp::Create { path, .. }
-            | EditOp::Modify { path, .. }
-            | EditOp::Delete { path, .. } => (path.to_absolute(workspace_root), None),
-            EditOp::Rename { from, to, .. } => (
-                to.to_absolute(workspace_root),
-                Some(from.to_absolute(workspace_root)),
-            ),
-        };
-
-        // Check symlinks to ensure we don't follow them out of the workspace boundary
-        for path_to_eval in std::iter::once(&Some(dst.clone()))
-            .chain(std::iter::once(&from_dst))
-            .flatten()
-        {
-            if path_to_eval.is_symlink()
-                || (path_to_eval.exists()
-                    && !path_to_eval
-                        .canonicalize()
-                        .unwrap_or_else(|_| path_to_eval.clone())
-                        .starts_with(workspace_root))
-            {
-                anyhow::bail!("Security violation: operation attempts to modify a symlink or an external path: {}", path_to_eval.display());
-            }
-        }
-
-        let original_content = if dst.exists() && dst.is_file() {
-            std::fs::read(&dst).ok()
-        } else {
-            None
-        };
-        rollback_log.push(RollbackRecord {
-            dst_path: dst.clone(),
-            original_content,
-        });
-
-        if let Some(ref fdst) = from_dst {
-            let original_from = if fdst.exists() && fdst.is_file() {
-                std::fs::read(fdst).ok()
-            } else {
-                None
-            };
-            rollback_log.push(RollbackRecord {
-                dst_path: fdst.clone(),
-                original_content: original_from,
-            });
-        }
-
-        let mut track_new_dir = |p: &std::path::Path| {
-            if let Some(mut current) = p.parent() {
-                let mut highest_new = None;
-                while !current.exists() {
-                    highest_new = Some(current.to_path_buf());
-                    if let Some(parent) = current.parent() {
-                        current = parent;
-                    } else {
-                        break;
-                    }
-                }
-                if let Some(h) = highest_new {
-                    if !created_dirs.contains(&h) {
-                        created_dirs.push(h);
-                    }
-                }
-            }
-        };
-
-        track_new_dir(&dst);
-        if let Some(f) = from_dst {
-            track_new_dir(&f);
-        }
-    }
-
-    // Phase 2: Attempt destructive apply via proper unified applier logic
-    let mut apply_failed = false;
-    let mut apply_error = String::new();
-
-    // Rehydrate the plan specifically for the live workspace constraints
-    match crow_workspace::PlanHydrator::hydrate(plan, &plan.base_snapshot_id, workspace_root) {
-        Ok(hydrated_workspace_plan) => {
-            let live_view = crow_materialize::SandboxHandle::non_owning_view_from(
-                workspace_root.to_path_buf(),
-                crow_materialize::MaterializationDriver::SafeCopy,
-            );
-
-            if let Err(e) =
-                crow_workspace::applier::apply_plan_to_sandbox(&hydrated_workspace_plan, &live_view)
-            {
-                apply_failed = true;
-                apply_error = format!("Workspace Applier Failed: {}", e);
-            }
-        }
-        Err(e) => {
-            apply_failed = true;
-            apply_error = format!("Failed to hydrate plan for live workspace: {}", e);
-        }
-    }
-
-    // Phase 3: Rollback on Failure
-    if apply_failed {
-        eprintln!("\n🚨 Apply failed mid-flight. Executing zero-pollution rollback...");
-        for record in rollback_log {
-            if let Some(content) = record.original_content {
-                if let Some(parent) = record.dst_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&record.dst_path, content);
-            } else if record.dst_path.exists() {
-                let _ = std::fs::remove_file(&record.dst_path);
-            }
-        }
-
-        // Clean up any directories we created
-        for dir in created_dirs {
-            if dir.exists() {
-                let _ = std::fs::remove_dir_all(&dir);
-            }
-        }
-        anyhow::bail!("Transaction failed and rolled back. Cause: {}", apply_error);
-    }
-
-    Ok(())
-}
+// `apply_sandbox_to_workspace` moved to `crow_workspace::applier`.
 
 /// Pre-warm the Cargo build cache by running `cargo check` on the frozen
 /// sandbox. This populates the `CARGO_TARGET_DIR` (keyed to `frozen_root`)
@@ -1161,7 +309,7 @@ async fn warm_build_cache(
     }
 }
 
-async fn apply_winning_plan(
+pub(crate) async fn apply_winning_plan(
     cfg: &CrowConfig,
     sandbox_path: &std::path::Path,
     hydrated_plan: &crow_patch::IntentPlan,
@@ -1179,7 +327,7 @@ async fn apply_winning_plan(
             println!(
                 "\n  ✍️  Write mode: workspace-write — applying verified changes to workspace..."
             );
-            if let Err(e) = apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan) {
+            if let Err(e) = crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan) {
                 eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
                 eprintln!("     Sandbox remains at: {}", sandbox_path.display());
                 anyhow::bail!("Workspace application failed: {:?}", e);
@@ -1197,7 +345,7 @@ async fn apply_winning_plan(
             println!(
                 "\n  ⚠️  Write mode: danger-full-access — applying without additional checks..."
             );
-            if let Err(e) = apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan) {
+            if let Err(e) = crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan) {
                 eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
                 anyhow::bail!("Workspace application failed: {:?}", e);
             } else {
@@ -1224,7 +372,7 @@ async fn apply_winning_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_mcts_crucible(
+pub(crate) async fn run_mcts_crucible(
     mcts_config: &crate::mcts::MctsConfig,
     profile: &crow_probe::types::ProjectProfile,
     candidate: &crow_probe::types::VerificationCandidate,
@@ -1237,18 +385,16 @@ async fn run_mcts_crucible(
 ) -> Result<Option<crate::mcts::BranchOutcome>> {
     // 1. Initial Epistemic Loop (Serial Recon)
     println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
-    let mut obs = crate::epistemic_ui::SpinnerObserver::new(
-        "🧠 Epistemic Step {step}/{max} — Modulating Cognitive Request...",
-    );
+    let mut obs = crate::event::CliEventHandler::new();
     let baseline_plan =
         epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, &mut obs)
             .await?;
-    obs.finish();
+
 
     if baseline_plan.operations.is_empty() {
         println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
         let renderer = crate::render::TerminalRenderer::new();
-        let _ = renderer.render_markdown(&baseline_plan.rationale);
+        renderer.print_markdown(&baseline_plan.rationale);
         return Ok(None);
     }
 
@@ -1442,7 +588,7 @@ async fn handle_mcp_command(args: &[String]) -> Result<()> {
 
 // ─── Ledger ─────────────────────────────────────────────────────────
 
-fn open_ledger(workspace: &std::path::Path) -> Result<crow_workspace::ledger::EventLedger> {
+pub(crate) fn open_ledger(workspace: &std::path::Path) -> Result<crow_workspace::ledger::EventLedger> {
     use anyhow::Context;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -1476,36 +622,7 @@ async fn run_autodream() -> Result<()> {
     Ok(())
 }
 
-/// Builds the standardized system prompt payload connecting the repo map, snapshot context, and available tools.
-pub fn build_system_prompt(
-    repo_map: &crow_intel::RepoMap,
-    snapshot_id: &crow_patch::SnapshotId,
-    mcp_manager: Option<&crate::mcp::McpManager>,
-) -> String {
-    let mut sys_prompt = String::from("Context (Repository Map):\n");
-    sys_prompt.push_str(&repo_map.map_text);
-    sys_prompt.push_str(&format!(
-        "\n\nWorkspace Snapshot ID: {}\n\
-        IMPORTANT: When you submit a plan, set base_snapshot_id to \"{}\" exactly.\n\n\
-        Constraints: Please limit your edits to Create and Modify operations if possible for this early iteration.",
-        snapshot_id.0, snapshot_id.0
-    ));
-    sys_prompt.push_str(
-        "\n\nMCTS DYNAMIC SEARCH: For complex code refactors, we use rigorous parallel searches (MCTS). \
-        However, if your intended changes are TRIVIAL (e.g. pure documentation tweaks, simple text formatting, \
-        or modifying markdown files), please explicitly set `requires_mcts = false` to save precious API loop latency."
-    );
 
-    if let Some(mgr) = mcp_manager {
-        let mcp_ctx = mgr.prompt_context();
-        if !mcp_ctx.is_empty() {
-            sys_prompt.push_str("\n\n");
-            sys_prompt.push_str(mcp_ctx);
-        }
-    }
-
-    sys_prompt
-}
 
 #[cfg(test)]
 mod tests {
