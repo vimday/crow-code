@@ -93,3 +93,5 @@ cargo build -p crow-cli
 - **Step 7** ✅ Polyglot Preflights & Snapshot Anchor Runtime Verification. Manifest-aware walker.
 - **Step 8** ✅ Phase 1 Product Foundation: Session persistence (~/.crow/sessions/), Evidence Report module (EvidenceReport + Verdict), CLI subcommands (run/plan/compile/session), WriteMode (SandboxOnly/WorkspaceWrite/DangerFullAccess with WorkspaceWrite as default). 142 tests.
 - **Step 9** ✅ Phase 1.5 Promise Closures: Real snapshot anchoring via `git rev-parse HEAD` (3-tier fallback), WriteMode runtime enforcement in execute path with `apply_sandbox_to_workspace()`, full session resume with `crow session resume-run`. 146 tests, zero "snapshot-001" placeholders.
+- **Step 10** ✅ Phase 2 Multi-Provider: `AnthropicClient` (Messages API, cache breakpoints), `ProviderRouter` (auto defaults for Ollama/DeepSeek), `LLM_PROVIDER` overrides.
+- **Step 11** ✅ Phase 2 MCP Stdio Transport: New `crow-mcp` crate. JSON-RPC 2.0 full-duplex protocol over `tokio::process::Command` stdio. Ergonomic `McpClient` wrapper.
