@@ -187,6 +187,12 @@ pub enum ReconAction {
         #[serde(skip_serializing_if = "Option::is_none")]
         arguments: Option<serde_json::Value>,
     },
+    /// Fetch and process the content of a public URL (web browsing).
+    #[serde(rename = "fetch_url")]
+    FetchUrl {
+        /// The public http or https URL to fetch.
+        url: String,
+    },
 }
 
 // ─── Agent Action ───────────────────────────────────────────────────

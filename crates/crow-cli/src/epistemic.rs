@@ -200,6 +200,37 @@ async fn execute_recon(
         return;
     }
 
+    if let ReconAction::FetchUrl { url } = tool {
+        let max_fetch_bytes = 1024 * 50; // max 50KB to protect context
+        match reqwest::get(url).await {
+            Ok(res) => {
+                let status = res.status();
+                if !status.is_success() {
+                    messages.push_user(format!("[WEB FETCH ERROR]\n{} returned HTTP {}", url, status));
+                } else {
+                    match res.text().await {
+                        Ok(mut text) => {
+                            let truncated = if text.len() > max_fetch_bytes {
+                                text.truncate(max_fetch_bytes);
+                                format!("{}...\n\n[SYSTEM WARNING: Response truncated to 50KB]", text)
+                            } else {
+                                text
+                            };
+                            messages.push_recon_result("fetch_url", url, &truncated);
+                        }
+                        Err(e) => {
+                            messages.push_user(format!("[WEB FETCH ERROR]\nFailed to decode response from {}: {:?}", url, e));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                messages.push_user(format!("[WEB FETCH ERROR]\nFailed to fetch {}: {:?}", url, e));
+            }
+        }
+        return;
+    }
+
     let (program, args, description) = build_recon_command(tool);
 
     let v_cmd = VerificationCommand {
@@ -311,6 +342,9 @@ fn build_recon_command(tool: &ReconAction) -> (String, Vec<String>, String) {
         ReconAction::McpCall { .. } => {
             unreachable!("McpCall is intercepted and executed via mcp_manager before command building");
         }
+        ReconAction::FetchUrl { .. } => {
+            unreachable!("FetchUrl is intercepted and executed via reqwest before command building");
+        }
     }
 }
 
@@ -323,5 +357,6 @@ fn recon_tool_name(tool: &ReconAction) -> &'static str {
         ReconAction::WordCount { .. } => "word_count",
         ReconAction::DirTree { .. } => "dir_tree",
         ReconAction::McpCall { .. } => "mcp_call",
+        ReconAction::FetchUrl { .. } => "fetch_url",
     }
 }

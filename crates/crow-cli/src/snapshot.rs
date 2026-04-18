@@ -56,6 +56,46 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
     Some(hash)
 }
 
+/// Automatically commit applied changes to the workspace if it's a git repository.
+/// The commit message includes the session/plan rationale.
+pub fn commit_applied_plan(workspace_root: &Path, rationale: &str) -> std::io::Result<()> {
+    // Check if it's a git repo
+    let status = Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(workspace_root)
+        .output()?;
+    
+    if !status.status.success() {
+        return Ok(()); // Not a git repo, skip quietly
+    }
+
+    // Add all changes (tracked and untracked)
+    let _ = Command::new("git")
+        .args(["add", "."])
+        .current_dir(workspace_root)
+        .status()?;
+
+    // See if there's anything to commit
+    let changes = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workspace_root)
+        .output()?;
+        
+    if changes.stdout.is_empty() {
+        return Ok(()); // Nothing to commit
+    }
+
+    let commit_msg = format!("crow: {}", rationale.split('\n').next().unwrap_or("Autonomous verification applied"));
+    
+    // Commit
+    let _ = Command::new("git")
+        .args(["commit", "-m", &commit_msg])
+        .current_dir(workspace_root)
+        .status()?;
+
+    Ok(())
+}
+
 /// Compute a simple hash from manifest file contents.
 /// Uses SHA-256 of concatenated manifests for stability.
 fn manifest_hash(workspace_root: &Path) -> Option<String> {

@@ -891,6 +891,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                         anyhow::bail!("Workspace application failed: {:?}", e);
                     } else {
                         println!("  ✅ Workspace updated successfully.");
+                        if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan.rationale) {
+                            println!("  ⚠️  Could not automatically commit changes: {}", e);
+                        } else {
+                            println!("  ✅ Changes committed to git timeline.");
+                        }
                     }
                 }
                 config::WriteMode::DangerFullAccess => {
@@ -904,6 +909,11 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
                         anyhow::bail!("Workspace application failed: {:?}", e);
                     } else {
                         println!("  ✅ Workspace updated.");
+                        if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan.rationale) {
+                            println!("  ⚠️  Could not automatically commit changes: {}", e);
+                        } else {
+                            println!("  ✅ Changes committed to git timeline.");
+                        }
                     }
                 }
             }
