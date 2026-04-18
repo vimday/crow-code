@@ -459,8 +459,12 @@ async fn run_plan(args: &[String]) -> Result<()> {
     // Open EventLedger for telemetry recording
     let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
         eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
-        // Fallback to memory-only ledger for safety (won't persist but won't crash)
-        crow_workspace::ledger::EventLedger::open(&std::env::temp_dir().join("crow_ledger_fallback.jsonl")).unwrap() 
+        let fallback = std::env::temp_dir().join(format!("crow_ledger_{}_{}.jsonl", snapshot_id.0, chrono::Utc::now().timestamp_millis()));
+        crow_workspace::ledger::EventLedger::open(&fallback).unwrap_or_else(|fallback_err| {
+            // Rather than panicking, gracefully exit out rather than dropping telemetry silently
+            eprintln!("  🚨 Fatal: Could not write fallback ledger to {}: {}", fallback.display(), fallback_err);
+            std::process::exit(1);
+        })
     });
     
     // In actual implementation we append events
@@ -694,7 +698,11 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
     // Open EventLedger for telemetry recording
     let mut ledger = open_ledger(&cfg.workspace).unwrap_or_else(|e| {
         eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
-        crow_workspace::ledger::EventLedger::open(&std::env::temp_dir().join("crow_ledger_fallback.jsonl")).unwrap()
+        let fallback = std::env::temp_dir().join(format!("crow_ledger_{}_{}.jsonl", snapshot_id.0, chrono::Utc::now().timestamp_millis()));
+        crow_workspace::ledger::EventLedger::open(&fallback).unwrap_or_else(|fallback_err| {
+            eprintln!("  🚨 Fatal: Could not write fallback ledger to {}: {}", fallback.display(), fallback_err);
+            std::process::exit(1);
+        })
     });
     
     let _ = ledger.append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
