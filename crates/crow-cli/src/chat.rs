@@ -20,10 +20,10 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
     let history_file = Path::new(&history_path).join(".crow").join("repl_history.txt");
     let _ = rl.load_history(&history_file);
 
-    let store = SessionStore::open().unwrap_or_else(|_| {
+    let store = SessionStore::open().ok();
+    if store.is_none() {
         println!("⚠️ Warning: Could not open structured SessionStore. Session persistence might be degraded.");
-        panic!("Failed to initialize SessionStore");
-    });
+    }
 
     let mut session = Session::new(&cfg.workspace, "Interactive REPL Session");
     println!("   Session ID: {}", session.id.0);
@@ -64,8 +64,10 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         println!("\n─── 🔄 Session Context Synced ───");
                         // We do NOT stop on success; we let the agent state accumulate!
                         session.save_messages(&messages.as_messages());
-                        if let Err(e) = store.save(&session) {
-                            println!("⚠️ Could not persist session trace: {:?}", e);
+                        if let Some(store) = &store {
+                            if let Err(e) = store.save(&session) {
+                                println!("⚠️ Could not persist session trace: {:?}", e);
+                            }
                         }
                     }
                     Err(e) => {

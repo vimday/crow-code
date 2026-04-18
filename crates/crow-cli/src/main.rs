@@ -634,13 +634,6 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mut context::ConversationManager) -> Result<()> {
     use crow_workspace::PlanHydrator;
     println!("🦅 crow-code Dry-Run / Turn mode initializing...\n");
-
-
-
-    println!("🦅 crow-code Dry-Run mode initializing...\n");
-
-    
-
     // ── Step 1: Freeze the timeline FIRST ──────────────────────────
     // We probe the live workspace only to discover ignore patterns,
     // then immediately materialize a sandbox. ALL subsequent work
@@ -721,17 +714,18 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
 
     use crow_brain::ChatMessage;
     
-    // Inject current repo state and system context if it's the first turn, or as a strong reminder.
+    // Inject current repo state and system context if it's the first turn, or update the existing system context with the new snapshot!
+    messages.set_system(vec![
+        ChatMessage::system("You are an autonomous engineering agent executing the given task."),
+        ChatMessage::system(sys_prompt)
+    ]);
+
     if messages.as_messages().is_empty() {
         // First turn
-        messages.set_system(vec![
-            ChatMessage::system("You are an autonomous engineering agent executing the given task."),
-            ChatMessage::system(sys_prompt)
-        ]);
         messages.push_user(format!("Task:\n{}", prompt));
     } else {
-        // Ongoing turn
-        messages.push_user(format!("{}\n\nTask:\n{}", sys_prompt, prompt));
+        // Ongoing turn - system prompt is now freshly updated above without bloating user history!
+        messages.push_user(prompt);
     }
 
     // Outer Crucible Loop (max 3 compile-test cycles).
