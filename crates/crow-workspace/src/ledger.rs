@@ -67,10 +67,8 @@ impl EventLedger {
                     events.push(event);
                 }
             }
-        } else {
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+        } else if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
 
         Ok(Self {

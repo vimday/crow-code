@@ -102,6 +102,7 @@ pub struct BranchOutcome {
 /// LLM with elevated temperature for diversity.
 ///
 /// Returns outcomes for all branches (callers use `select_winner`).
+#[allow(clippy::too_many_arguments)]
 pub async fn explore_round(
     config: &MctsConfig,
     compiler: &crow_brain::IntentCompiler,
@@ -191,6 +192,7 @@ pub async fn explore_round(
 }
 
 /// Execute a single MCTS branch: materialize → compile → hydrate → apply → verify.
+#[allow(clippy::too_many_arguments)]
 async fn run_branch(
     branch_id: usize,
     compiler: &crow_brain::IntentCompiler,

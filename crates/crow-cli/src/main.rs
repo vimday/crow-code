@@ -765,7 +765,7 @@ pub async fn run_conversation_turn(cfg: &CrowConfig, prompt: &str, messages: &mu
         if let Some(w) = winner {
             // Apply the winning plan using the workspace WriteMode
             let plan_id = format!("mcts-{}-{}", snapshot_id.0, chrono::Utc::now().timestamp_millis());
-            apply_winning_plan(&cfg, w.sandbox.path(), &w.plan, &plan_id, &snapshot_id, &mut ledger).await?;
+            apply_winning_plan(cfg, w.sandbox.path(), &w.plan, &plan_id, &snapshot_id, &mut ledger).await?;
             drop(w.sandbox);
         }
         
@@ -1114,10 +1114,8 @@ fn apply_sandbox_to_workspace(
                     let _ = std::fs::create_dir_all(parent);
                 }
                 let _ = std::fs::write(&record.dst_path, content);
-            } else {
-                if record.dst_path.exists() {
-                    let _ = std::fs::remove_file(&record.dst_path);
-                }
+            } else if record.dst_path.exists() {
+                let _ = std::fs::remove_file(&record.dst_path);
             }
         }
         
@@ -1151,10 +1149,8 @@ async fn warm_build_cache(
     match profile.primary_lang.name.as_str() {
         "rust" => {
             let mut c = candidate.command.clone();
-            if c.program == "cargo" || c.program.ends_with("/cargo") {
-                if c.args.contains(&"test".to_string()) && !c.args.contains(&"--no-run".to_string()) {
-                    c.args.push("--no-run".to_string());
-                }
+            if (c.program == "cargo" || c.program.ends_with("/cargo")) && c.args.contains(&"test".to_string()) && !c.args.contains(&"--no-run".to_string()) {
+                c.args.push("--no-run".to_string());
             }
             // Strip out display colors which pollute verification parsing (just in case)
             if !c.args.iter().any(|a| a.starts_with("--color")) {
@@ -1307,6 +1303,7 @@ async fn apply_winning_plan(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_mcts_crucible(
     mcts_config: &crate::mcts::MctsConfig,
     profile: &crow_probe::types::ProjectProfile,

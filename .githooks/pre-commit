@@ -1,0 +1,26 @@
+#!/bin/sh
+
+echo "========================================="
+echo "🦅 Running Crow Pre-commit Checks..."
+echo "========================================="
+
+# Run Clippy (Linting rules)
+echo "\n[1/2] Running cargo clippy..."
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+if [ $? -ne 0 ]; then
+    echo "❌ [Pre-commit Failed]: Cargo Clippy reported lint errors. Please fix them."
+    exit 1
+fi
+echo "✅ Clippy passed."
+
+# Run Tests (ensure behavior matches contracts)
+echo "\n[2/2] Running cargo test..."
+cargo test --workspace
+if [ $? -ne 0 ]; then
+    echo "❌ [Pre-commit Failed]: Unit/Integration tests failed. Code must remain green to commit."
+    exit 1
+fi
+echo "✅ Tests passed."
+
+echo "\n🚀 All checks passed! Committing to git..."
+exit 0

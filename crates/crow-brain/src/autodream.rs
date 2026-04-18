@@ -92,7 +92,7 @@ Limit to 3 critical architectural or context insights.", self.workspace.display(
                 
                 // 4. Prune / Store
                 let cleaned = crate::compiler::extract_json_block(&response);
-                match serde_json::from_str::<Vec<MemoryFragment>>(&cleaned) {
+                match serde_json::from_str::<Vec<MemoryFragment>>(cleaned) {
                     Ok(fragments) => {
                         let validated = serde_json::to_string_pretty(&fragments)?;
                         let fragment_path = self.memory_dir.join(format!("memory_{}.json", chrono::Utc::now().timestamp()));
