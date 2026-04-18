@@ -176,6 +176,7 @@ impl SessionStore {
     }
 
     /// Find the most recent session for a workspace.
+    #[allow(dead_code)]
     pub fn find_latest_for_workspace(&self, workspace: &Path) -> Result<Option<Session>> {
         let summaries = self.list()?;
         for summary in summaries {
@@ -195,6 +196,7 @@ impl SessionStore {
 #[derive(Debug)]
 pub struct SessionSummary {
     pub id: SessionId,
+    #[allow(dead_code)]
     pub workspace: PathBuf,
     pub task: String,
     pub snapshots: usize,

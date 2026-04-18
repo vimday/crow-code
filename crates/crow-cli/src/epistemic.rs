@@ -202,12 +202,35 @@ async fn execute_recon(
 
     if let ReconAction::FetchUrl { url } = tool {
         let max_fetch_bytes = 1024 * 50; // max 50KB to protect context
-        match reqwest::get(url).await {
+        
+        let client_res = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(10))
+            .user_agent("crow-code-agent/1.0")
+            .build();
+            
+        let client = match client_res {
+            Ok(c) => c,
+            Err(e) => {
+                messages.push_user(format!("[WEB FETCH ERROR]\nFailed to initialize HTTP client: {:?}", e));
+                return;
+            }
+        };
+
+        match client.get(url).send().await {
             Ok(res) => {
                 let status = res.status();
                 if !status.is_success() {
                     messages.push_user(format!("[WEB FETCH ERROR]\n{} returned HTTP {}", url, status));
                 } else {
+                    if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE) {
+                        let ct_str = ct.to_str().unwrap_or("");
+                        if !ct_str.contains("text/") && !ct_str.contains("application/json") {
+                            messages.push_user(format!("[WEB FETCH ERROR]\nUnsupported Content-Type '{}'. Only text or json supported.", ct_str));
+                            return;
+                        }
+                    }
+
                     match res.text().await {
                         Ok(mut text) => {
                             let truncated = if text.len() > max_fetch_bytes {

@@ -57,8 +57,8 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
 }
 
 /// Automatically commit applied changes to the workspace if it's a git repository.
-/// The commit message includes the session/plan rationale.
-pub fn commit_applied_plan(workspace_root: &Path, rationale: &str) -> std::io::Result<()> {
+/// Scopes the commit strictly to the files modified by the plan.
+pub fn commit_applied_plan(workspace_root: &Path, plan: &crow_patch::IntentPlan) -> std::io::Result<()> {
     // Check if it's a git repo
     let status = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -69,11 +69,37 @@ pub fn commit_applied_plan(workspace_root: &Path, rationale: &str) -> std::io::R
         return Ok(()); // Not a git repo, skip quietly
     }
 
-    // Add all changes (tracked and untracked)
-    let _ = Command::new("git")
-        .args(["add", "."])
-        .current_dir(workspace_root)
-        .status()?;
+    // Collect all unique file paths touched by this plan
+    let mut files_to_stage = std::collections::HashSet::new();
+    for op in &plan.operations {
+        match op {
+            crow_patch::EditOp::Create { path, .. } => {
+                files_to_stage.insert(path.as_str().to_string());
+            }
+            crow_patch::EditOp::Modify { path, .. } => {
+                files_to_stage.insert(path.as_str().to_string());
+            }
+            crow_patch::EditOp::Delete { path, .. } => {
+                files_to_stage.insert(path.as_str().to_string());
+            }
+            crow_patch::EditOp::Rename { from, to, .. } => {
+                files_to_stage.insert(from.as_str().to_string());
+                files_to_stage.insert(to.as_str().to_string());
+            }
+        };
+    }
+
+    if files_to_stage.is_empty() {
+        return Ok(());
+    }
+
+    // Stage only the modified files
+    let mut add_cmd = Command::new("git");
+    add_cmd.arg("add");
+    add_cmd.args(&files_to_stage);
+    add_cmd.current_dir(workspace_root);
+    
+    let _ = add_cmd.status()?;
 
     // See if there's anything to commit
     let changes = Command::new("git")
@@ -85,7 +111,7 @@ pub fn commit_applied_plan(workspace_root: &Path, rationale: &str) -> std::io::R
         return Ok(()); // Nothing to commit
     }
 
-    let commit_msg = format!("crow: {}", rationale.split('\n').next().unwrap_or("Autonomous verification applied"));
+    let commit_msg = format!("crow: {}", plan.rationale.split('\n').next().unwrap_or("Autonomous verification applied"));
     
     // Commit
     let _ = Command::new("git")
@@ -181,5 +207,64 @@ mod tests {
         let h1 = manifest_hash(dir.path());
         let h2 = manifest_hash(dir.path());
         assert_eq!(h1, h2, "Hash should be deterministic");
+    }
+
+    #[test]
+    fn test_commit_applied_plan_stages_only_modified() {
+        let dir = tempdir().unwrap();
+        let path = dir.path();
+
+        // 1. Init git repo
+        Command::new("git").args(["init"]).current_dir(path).status().unwrap();
+        // Setup identity
+        Command::new("git").args(["config", "user.name", "Test"]).current_dir(path).status().unwrap();
+        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(path).status().unwrap();
+
+        // 2. Create unrelated untracked and tracked files
+        std::fs::write(path.join("unrelated_untracked.txt"), b"1").unwrap();
+        std::fs::write(path.join("unrelated_tracked.txt"), b"1").unwrap();
+        std::fs::write(path.join("target.txt"), b"1").unwrap();
+        
+        Command::new("git").args(["add", "unrelated_tracked.txt", "target.txt"]).current_dir(path).status().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).status().unwrap();
+
+        // Modify files
+        std::fs::write(path.join("unrelated_tracked.txt"), b"2").unwrap();
+        std::fs::write(path.join("target.txt"), b"2").unwrap();
+
+        let plan = crow_patch::IntentPlan {
+            rationale: "test selective commit".to_string(),
+            base_snapshot_id: crow_patch::SnapshotId("snapshot-001".to_string()),
+            confidence: crow_patch::Confidence::High,
+            is_partial: false,
+            operations: vec![
+                crow_patch::EditOp::Modify {
+                    path: crow_patch::WorkspacePath::new("target.txt").unwrap(),
+                    preconditions: crow_patch::types::PreconditionState {
+                        content_hash: String::new(),
+                        expected_line_count: None,
+                    },
+                    hunks: vec![],
+                }
+            ],
+        };
+
+        // 4. Run commit_applied_plan
+        commit_applied_plan(path, &plan).unwrap();
+
+        // 5. Verify git status
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+            
+        let out = String::from_utf8_lossy(&status.stdout);
+        // unrelated_untracked should still be untracked (?)
+        assert!(out.contains("?? unrelated_untracked.txt"));
+        // unrelated_tracked should still be modified but not staged ( M)
+        assert!(out.contains(" M unrelated_tracked.txt"));
+        // target.txt should be committed, so no "M " or " M target.txt" in status!
+        assert!(!out.contains("target.txt"));
     }
 }

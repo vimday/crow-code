@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
-use crow_patch::{SnapshotId, IntentPlan};
+use crow_patch::SnapshotId;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
