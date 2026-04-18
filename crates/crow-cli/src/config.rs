@@ -442,5 +442,3 @@ mod tests {
         env::remove_var("LLM_MODEL");
     }
 }
-
-}
