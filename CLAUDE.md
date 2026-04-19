@@ -96,3 +96,4 @@ cargo build -p crow-cli
 - **Step 10** ✅ Phase 2 Multi-Provider: `AnthropicClient`, `ProviderRouter`, `LLM_PROVIDER` overrides.
 - **Step 11** ✅ Phase 2 MCP Stdio Transport: New `crow-mcp` crate. JSON-RPC 2.0 full-duplex protocol over `tokio::process::Command` stdio. Ergonomic `McpClient` wrapper.
 - **Step 12** ✅ Architectural Fusion (Phase 1 & 2): Integrated `Codex` native TUI mechanics, `ThreadManager` non-blocking agent loop with TurnStatus isolation, `yomi` inspired Context Persistence & per-tool Memory Whitelist (`A` auto-approve security wall).
+- **Step 13** ✅ Phase 3 Sub-Agent Swarms & Non-Blocking TUI: Asynchronous Task Queuing, isolated `SubagentWorker` execution paths, interior mutability across `SessionRuntime` and `ConversationManager` for zero-lock ThreadManager scheduling.

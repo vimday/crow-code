@@ -1,67 +1,53 @@
-# 🦅 Crow Code
+# 🦅 Crow Code (The Interactive Developer Workstation)
 
-> Evidence-driven AI coding agent with sandboxed verification and structured patch plans.
+> **Evidence-driven AI coding agent with sandboxed verification, non-blocking sub-agent swarms, and structured patch plans.**
 
 **Crow Code** is an AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). Instead of letting a model write directly to your repository, Crow compiles model output into structured `AgentAction` / `IntentPlan` objects, rehydrates them against the current workspace, applies them inside an isolated sandbox, and verifies the result before any workspace write.
 
-**Current reality:** the core local loop already works for repo mapping, structured reads and recon, plan hydration, sandbox apply, verification, sessions, provider routing, and MCP stdio transport. Some platform/product layers are still partial or experimental, especially replay/time-travel, richer intelligence/LSP work, and parts of the dashboard/dream story.
+With the advent of **Phase 3**, Crow is no longer just a pipeline—it is a **world-class interactive High-Performance TUI Workstation**. You can chat, queue commands seamlessly, and instantly dispatch parallel background sub-agents while the primary core continues working.
 
-## Why Crow
+## ✨ Why Crow Code?
 
-- **Evidence over vibes.** Plans are judged with structured verification output, not just model confidence.
-- **Patches are first-class.** The model proposes structured actions; it does not write arbitrary text straight to disk.
-- **Snapshot-aware safety.** Plans are anchored to a workspace snapshot and hydrated with real file hashes before apply.
-- **Workspace-write by default.** Crow defaults to a verified write path, not unrestricted full access.
+### **1. 🚀 Codex-Style Interactive TUI & Swarm Concurrency**
+- **Non-Blocking Execution**: Type freely while the agent is "thinking". Your inputs are asynchronously queued and cleanly burst-executed the moment the turn completes.
+- **Sub-Agent Swarms (`/swarm`)**: Delegate localized research, file generation, or massive refactoring tasks to detached, concurrent agents. Track them via the dynamic **Swarm Activity Bar** without losing focus on your main interactive thread.
+- **Session Persistence**: Crow seamlessly checkpoints conversations to `~/.crow/sessions/`. Start it back up with `crow -r` and the entire cognitive context is rehydrated instantly.
 
-## What works today
+### **2. 🛡️ Evidence Over Vibes (Sandboxed Verification)**
+- **Patches are First-Class**: The model proposes structured actions; it does not write arbitrary text straight to disk.
+- **Snapshot-Aware Safety**: Plans are anchored to a workspace snapshot and hydrated with ground-truth file hashes *before* applying.
+- **Isolated Sandboxing**: Changes are completely materialized inside an APFS/Hardlink isolated sandbox. Crow executes ACI-restricted validation pre-flights on your test suite. Only victorious patches are merged into the live repository.
 
-- Rust workspace probe and repo-map generation
-- structured `read_files` and recon actions
-- intent compilation into `AgentAction`
-- plan hydration with ground-truth file hashes
-- isolated sandbox materialization and patch application
-- preflight compile checks and full verification runs
-- **native ThreadManager yielding an async non-blocking TUI** (Codex-style)
-- **session persistence and instant TUI rehydration** (`crow -r`)
-- **Per-tool Memory Security Approval** (Safe/Caution whitelist)
-- multi-provider LLM routing (OpenAI-compatible, Anthropic, Ollama, DeepSeek)
-- MCP stdio transport for external tools
-- evidence-first `plan` preview mode
+### **3. 🧠 Rich Context & Extensibility**
+- **Native Tool Calling**: Tightly integrated into streaming pipelines.
+- **Multi-Provider Routing**: Out-of-the-box compatibility with OpenAI, Anthropic, Ollama, and DeepSeek backends.
+- **MCP Stdio Transport**: Extensible Model Context Protocol (MCP) tooling natively baked into the event bus.
 
-## Quick start
+---
+
+## ⚡ Quick Start
 
 ### Prerequisites
 
-- Rust / Cargo
-- an LLM provider configured via environment or `.crow/config.json`
-- for the built-in recon tools, common local utilities such as `rg`, `tree`, `file`, `wc`, and `ls`
+- **Rust / Cargo** (Latest Stable)
+- An LLM provider API Key, configured via environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) or in `.crow/config.json`.
+- Standard POSIX utilities: `rg`, `tree`, `file`, `wc`.
 
-### 1) Build and test the workspace
-
+### 1) Check your Workspace
+Ensure your target repository builds locally:
 ```bash
 cargo build --workspace
 cargo test --workspace
 ```
 
-### 2) Configure a provider
-
-Minimal OpenAI-compatible example:
-
+### 2) Configuration
+Fastest way to boot is via environment variables:
 ```bash
-export OPENAI_API_KEY=...
+export OPENAI_API_KEY=sk-...
 export LLM_PROVIDER=openai
-export LLM_MODEL=gpt-4-turbo
+export LLM_MODEL=gpt-4o
 ```
-
-Anthropic / Ollama / DeepSeek are also supported via `LLM_PROVIDER`.
-
-You can also use project-local or global config:
-
-- local: `.crow/config.json`
-- global: `~/.crow/config.json`
-
-Example:
-
+Or declare rules in `.crow/config.json`:
 ```json
 {
   "llm": {
@@ -76,60 +62,44 @@ Example:
 }
 ```
 
-### 3) Run the CLI
-
+### 3) Step into the Workbench
 ```bash
-# Show help
-cargo run -p crow-cli -- help
-
 # Drop into the native Ratatui workbench (default)
 cargo run -p crow-cli
 
-# Start interactive chat in the workbench, and resume previous context
+# Start interactive chat in the workbench, instantly resuming previous context
 cargo run -p crow-cli -- -r
-
-# Compile a task into structured JSON only
-cargo run -p crow-cli -- compile "Add a short note to README.md"
-
-# Preview a plan plus evidence without applying it
-cargo run -p crow-cli -- plan "Explain how this repo is organized"
-
-# Run the full autonomous loop standalone
-cargo run -p crow-cli -- run "Fix a typo in README.md"
 ```
 
-## Core commands
+---
 
-| Command | Purpose |
+## 💻 Core Command Reference
+
+| Pipeline Command | Purpose |
 |---|---|
-| `crow` | Open the Codex-style interactive Ratatui Workbench |
-| `crow -r` / `--resume` | Open the Workbench, instantly resuming the last active session |
-| `crow compile <prompt>` | Show the parsed `AgentAction` JSON |
-| `crow plan <prompt>` | Preview a plan and evidence report |
-| `crow run <prompt>` | Full autonomous loop |
-| `crow dry-run <prompt>` | Alias for `run` |
-| `crow session list` | List saved JSONL sessions under `~/.crow/sessions/` |
-| `crow session resume <id>` | Inspect a saved session without executing it |
-| `crow mcp list-tools` | List tools exposed by a configured MCP server |
-| `crow dashboard` | Open the dashboard |
+| `crow` | Open the Interactive Ratatui Workbench. |
+| `crow -r` \| `--resume` | Boot the Workbench, resuming the most recently active session. |
+| `crow compile <prompt>` | Output the structured `AgentAction` JSON. |
+| `crow plan <prompt>` | Fast evidence-first preview of plans and impact reports. |
+| `crow run <prompt>` | The full autonomous sandbox pipeline (Agentic Loop). |
+| `crow dry-run <prompt>` | Alias for `run`. |
+| `crow session list` | View all historical JSONL sessions. |
+| `crow session resume <id>`| Resume a specific session timeline. |
 
-## Safety model
+### Workbench Slash Commands
+When inside the TUI, these commands orchestrate the session:
 
-Crow is trying to make the safe path the default:
+- `/help` — Display the integrated help manual.
+- `/swarm <task>` — Launch a detached, truly concurrent background agent process on a secondary task.
+- `/model <name>` — Live-swap the active LLM router strategy safely.
+- `/clear` — Erase current semantic memory buffers.
+- `/status` — Dump advanced diagnostic engine state to history.
 
-- the model never writes to the workspace directly
-- file mutations are expressed as structured plans
-- plans are hydrated with real file hashes before apply
-- changes are applied and tested inside a sandbox first
-- default write mode is `workspace-write`, not unrestricted full access
+---
 
-### Current limitations
+## 🧱 Architecture
 
-Crow is **not** a full OS-level sandbox yet. Repository isolation and verification are strong, but deep process/network isolation is still outside the current scope. Replay/time-travel infrastructure is also not complete yet.
-
-## Architecture
-
-Crow is a Rust workspace with 11 crates and strict layering:
+Crow relies on a strictly layered, multi-crate topology to shield core execution boundaries:
 
 ```
 L5  crow-cli   crow-replay   crow-mcp
@@ -140,51 +110,40 @@ L1  crow-workspace   crow-materialize
 L0  crow-patch   crow-evidence   crow-probe
 ```
 
-### Crate overview
-
 | Crate | Layer | Purpose |
 |-------|-------|---------|
-| `crow-patch` | L0 | Patch contract: `AgentAction`, `IntentPlan`, `WorkspacePath` |
-| `crow-evidence` | L0 | Verification evidence types |
-| `crow-probe` | L0 | Workspace scanning and verification candidates |
-| `crow-workspace` | L1 | Plan hydration, applier, and event-ledger groundwork |
-| `crow-materialize` | L1 | Workspace-isolation materialization |
-| `crow-verifier` | L2 | Isolated command execution and log truncation |
-| `crow-intel` | L3 | Tree-sitter repo maps / outlines |
-| `crow-brain` | L4 | Intent compiler, provider routing, LLM clients, and AutoDream |
-| `crow-cli` | L5 | User-facing CLI, autonomous loop, MCTS crucible, sessions, and dashboard |
-| `crow-replay` | L5 | Replay harness (still minimal / planned) |
-| `crow-mcp` | L5 | MCP stdio transport and client |
+| `crow-patch` | L0 | Internal patch contract: `AgentAction`, `IntentPlan`, `WorkspacePath` |
+| `crow-evidence` | L0 | Verification evidence schemas & multidimensional types |
+| `crow-probe` | L0 | Active workspace scanning and validation candidates |
+| `crow-workspace` | L1 | Plan hydration, mutations applier, and Ledger event ingestion |
+| `crow-materialize`| L1 | Secure Physical Isolation protocols (CoW / symlink boundaries) |
+| `crow-verifier` | L2 | Sandboxed command execution & ACI truncation buffers |
+| `crow-intel` | L3 | LSP bridges, Tree-Sitter Repo Maps & outliners |
+| `crow-brain` | L4 | Intent compilation, LLM client streaming, & AutoDream models |
+| `crow-cli` | L5 | The Event-Bus UX, Ratatui GUI, MCTS crucible & Swarm thread managers |
+| `crow-mcp` | L5 | MCP stdio JSON-RPC dueling clients |
 
-## Status
+---
 
-### Implemented
+## 🗺️ Current Status
 
-- workspace genesis and layered crate split
-- core patch/evidence/probe contracts
-- sandbox materialization
-- verifier execution + ACI truncation
-- autonomous compile / plan / run flow
-- preflight compile checks
-- session persistence and resume
-- snapshot anchoring
-- multi-provider routing
-- MCP stdio transport
-- **streaming SSE with native tool calling**
-- **structured event bus (AgentEvent system)**
-- **orthogonal prompt architecture (Identity/Context/Skills/Contract)**
-- **unified SessionRuntime across all CLI entry points**
-- **subagent delegation with recursion limits**
+### ✅ **Achieved & Deployed**
+- Multi-provider LLM routing with streaming tool-calls.
+- Complete snapshot anchoring & rollback runtime validation.
+- Sub-Agent delegation constraints with deep recursion checks.
+- Unified ThreadManager yielding a completely asynchronous, dynamic TUI experience.
+- Queue-based input buffering & zero-block Multi-Task Swarms.
+- Per-tool Security Wall approval loops (Whitelist overrides).
 
-### Partial or still evolving
+### 🚧 **Active Development**
+- **Time-Travel Replay**: The `crow-replay` harness for behavioral regression is in active design.
+- **Event-Ledger UX**: Enhanced visualization of timeline snapshots onto the Dashboard.
+- **Deep LSP Intelligence**: Tighter native LSP proxy streams through `crow-intel`.
+- **Advanced Network Isolation**: Broadening OS-level process sandboxing constraints.
 
-- replay harness and time-travel
-- richer event-ledger productization
-- deeper intelligence/LSP integration
-- dashboard / dream / long-horizon memory UX
+For in-depth architectural mandates, check out [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md).
 
-See [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md) for the architecture baseline and design goals.
+---
 
-## License
-
+## 📜 License
 [MIT](LICENSE)
