@@ -162,6 +162,10 @@ pub fn get_palette_commands(query: &str) -> Vec<(&'static str, &'static str)> {
         ("/clear", "Clear history"),
         ("/model", "Switch LLM Model"),
         ("/view", "Swap Lens Mode (focus|evidence|audit)"),
+        ("/swarm", "Launch background sub-agent swarm"),
+        ("/compact", "Force context compaction"),
+        ("/session list", "List saved sessions"),
+        ("/session resume", "Resume a saved session"),
     ];
     if query == "/" || query.is_empty() {
         all

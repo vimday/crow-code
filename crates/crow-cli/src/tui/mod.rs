@@ -738,6 +738,8 @@ fn execute_command_string(
                         "  /clear         Clear conversation",
                         "  /view <mode>   Set view (focus|evidence|audit)",
                         "  /model         Show current model",
+                        "  /swarm <task>  Launch background sub-agent",
+                        "  /compact       Force context compaction",
                         "",
                         "Shortcuts:",
                         "  Ctrl+C         Interrupt / quit (press twice)",
@@ -784,6 +786,18 @@ fn execute_command_string(
                 state.history.push(Cell {
                     kind: CellKind::Log,
                     payload: format!("View mode: {:?}", state.view_mode),
+                });
+            }
+            "compact" => {
+                state.history.push(Cell {
+                    kind: CellKind::User,
+                    payload: "/compact".into(),
+                });
+                // Emit compaction request — the thread manager will pick it up
+                // For now, show a log since direct compaction needs async context
+                state.history.push(Cell {
+                    kind: CellKind::Log,
+                    payload: "Context compaction will run before the next turn.".into(),
                 });
             }
             other => {

@@ -77,6 +77,10 @@ pub async fn run_epistemic_loop(
             });
         }
 
+        observer.handle_event(AgentEvent::StateChanged {
+            from: "WaitingForInput".into(),
+            to: "Streaming".into(),
+        });
         observer.handle_event(AgentEvent::Thinking(
             epistemic_step as u32,
             MAX_EPISTEMIC_STEPS as u32,
@@ -99,6 +103,10 @@ pub async fn run_epistemic_loop(
 
         // If it's a SubmitPlan, return immediately before pushing to history.
         if let AgentAction::SubmitPlan { plan } = action {
+            observer.handle_event(AgentEvent::StateChanged {
+                from: "Streaming".into(),
+                to: "PlanReady".into(),
+            });
             observer.handle_event(AgentEvent::PlanSubmitted(plan.clone()));
             return Ok(plan);
         }
@@ -131,6 +139,10 @@ pub async fn run_epistemic_loop(
         // Track the agent's action in conversation history.
         messages.push_assistant(serde_json::to_string(&action)?);
 
+        observer.handle_event(AgentEvent::StateChanged {
+            from: "Streaming".into(),
+            to: "ExecutingTool".into(),
+        });
         match action {
             AgentAction::ReadFiles { paths, rationale } => {
                 let path_strs: Vec<String> = paths.iter().map(|p| p.as_str().to_string()).collect();
