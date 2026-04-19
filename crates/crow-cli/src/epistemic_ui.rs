@@ -74,6 +74,11 @@ impl SpinnerObserver {
     pub fn finish(self) {
         self.spinner.finish_and_clear();
     }
+
+    /// Update the spinner's display with a clean status suffix.
+    pub fn set_status(&mut self, status: String) {
+        self.spinner.set_message(format!("{} — {}", self.message_pattern, status));
+    }
 }
 
 impl EpistemicObserver for SpinnerObserver {

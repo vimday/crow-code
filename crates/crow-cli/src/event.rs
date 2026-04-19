@@ -41,12 +41,12 @@ pub trait EventHandler: Send {
     fn handle_event(&mut self, event: AgentEvent);
 }
 
-/// A rich CLI Event Handler with live streaming output and structured spinners.
+/// CLI event handler with spinner-based progress feedback.
 ///
-/// Key improvement over the old handler: when the model streams JSON (tool calls),
-/// we show a compact spinner. But when we detect conversational content, we could
-/// render it live. For now, the stream chunks feed the spinner's status line,
-/// providing real-time feedback about what the model is thinking.
+/// During model generation (tool calls / structured JSON), shows a spinner
+/// with a character counter. Discrete actions (file reads, recon, delegation)
+/// produce concise one-line output. The actual rendered markdown response
+/// happens after the IntentCompiler returns the parsed plan.
 pub struct CliEventHandler {
     spinner: Option<crate::epistemic_ui::SpinnerObserver>,
     stream_char_count: usize,
@@ -84,8 +84,11 @@ impl EventHandler for CliEventHandler {
             AgentEvent::StreamChunk(chunk) => {
                 self.stream_char_count += chunk.len();
                 if let Some(ref mut sp) = self.spinner {
-                    use crate::epistemic_ui::EpistemicObserver;
-                    sp.on_stream_chunk(&chunk);
+                    // Show character progress rather than truncated JSON fragments.
+                    // The stream chunks during tool calls are raw JSON that looks
+                    // like garbage when sliced into a spinner suffix.
+                    let kb = self.stream_char_count as f64 / 1024.0;
+                    sp.set_status(format!("{:.1}K received", kb));
                 }
             }
             AgentEvent::ActionStart(desc) => {
