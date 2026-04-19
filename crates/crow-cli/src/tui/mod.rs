@@ -539,13 +539,27 @@ async fn run_tui_loop(
                 TuiMessage::TurnComplete(success) => {
                     state.active_action = None;
                     state.task_start_time = None;
+                    let was_cancelled = state.cancellation.as_ref().is_some_and(|t| t.is_cancelled());
                     state.cancellation = None;
-                    if success {
+                    
+                    if success && !was_cancelled {
                         state.history.push(Cell {
                             kind: CellKind::Result,
                             payload: "Done".into(),
                         });
+                        
+                        if let Some(next_task) = state.task_queue.pop_front() {
+                            execute_command_string(state, next_task, tx, &cfg, thread_manager);
+                        }
+                    } else if !state.task_queue.is_empty() {
+                        let drop_count = state.task_queue.len();
+                        state.task_queue.clear();
+                        state.history.push(Cell {
+                            kind: CellKind::Error,
+                            payload: format!("Pipeline halted. Dropped {} queued queries.", drop_count),
+                        });
                     }
+                    
                     // Refresh git state post-turn in case files were modified
                     refresh_git_state(state, &cfg.workspace);
                 }
@@ -603,7 +617,7 @@ fn handle_enter(
     thread_manager: &Arc<crate::thread_manager::ThreadManager>,
 ) {
     let prompt = state.composer.clone();
-    if prompt.trim().is_empty() || state.is_task_running() {
+    if prompt.trim().is_empty() {
         return;
     }
 
@@ -740,6 +754,22 @@ fn execute_command_string(
                 });
             }
         }
+        state.composer.clear();
+        state.composer_cursor = 0;
+        return;
+    }
+
+    // ── Pre-execution Queue Check ────────────────────────────────────
+    if state.is_task_running() {
+        state.task_queue.push_back(prompt.clone());
+        state.history.push(Cell {
+            kind: CellKind::User,
+            payload: prompt.clone(),
+        });
+        state.history.push(Cell {
+            kind: CellKind::Log,
+            payload: "Queued for execution...".into(),
+        });
         state.composer.clear();
         state.composer_cursor = 0;
         return;

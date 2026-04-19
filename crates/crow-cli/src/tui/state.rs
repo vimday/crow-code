@@ -98,6 +98,7 @@ pub struct AppState {
     pub spinner_idx: usize,
     pub cancellation: Option<CancellationToken>,
     pub active_swarms: Vec<(String, String)>,
+    pub task_queue: std::collections::VecDeque<String>,
     
     // Approval Model
     pub approval_state: ApprovalState,
@@ -133,6 +134,7 @@ impl AppState {
             spinner_idx: 0,
             cancellation: None,
             active_swarms: Vec::new(),
+            task_queue: std::collections::VecDeque::new(),
             approval_state: ApprovalState::None,
             allowed_safe_patterns: std::collections::HashSet::new(),
             overlay_state: OverlayState::None,
