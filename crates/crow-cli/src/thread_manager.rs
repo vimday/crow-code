@@ -1,5 +1,6 @@
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
+use crate::event::EventHandler;
 use crate::runtime::SessionRuntime;
 use crate::session::{Session, SessionStore};
 use crate::tui::state::{CancellationToken, TuiMessage};
@@ -217,7 +218,7 @@ impl ThreadManager {
 
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
-            let mut worker = crate::subagent::SubagentWorker::new(compiler_instance);
+            let mut worker = crate::subagent::SubagentWorker::new(compiler_instance.clone());
             // Replace worker id for consistency with the UI
             worker.id = id.clone();
 
@@ -226,13 +227,15 @@ impl ThreadManager {
                     &prompt_clone,
                     &[], // No specific focus paths initially
                     "Swarm background task initiated via TUI.",
-                    sys_msgs,
+                    sys_msgs.clone(),
                     &root,
                     Some(&mcp),
                     &mut observer,
                 )
                 .await;
 
+            // Immediately check and update swarm state, releasing lock BEFORE running heavy crucible!
+            let mut plan_opt = None;
             {
                 let mut s = swarm_state.lock().await;
                 if let Some(mut state) = s.remove(&id) {
@@ -241,9 +244,8 @@ impl ThreadManager {
                         let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
                     } else {
                         match result {
-                            Ok(_) => {
-                                state.status = TurnStatus::Completed(None);
-                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                            Ok(plan) => {
+                                plan_opt = Some(plan);
                             }
                             Err(e) => {
                                 state.status = TurnStatus::Failed(e.to_string());
@@ -251,6 +253,101 @@ impl ThreadManager {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(plan) = plan_opt {
+                if !plan.operations.is_empty() {
+                    observer.handle_event(crate::event::AgentEvent::Log(format!(
+                        "Subagent Swarm proposed {} ops. Initiating Crucible Verification...",
+                        plan.operations.len()
+                    )));
+
+                    let Ok(cfg) = crate::config::CrowConfig::load() else {
+                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        return;
+                    };
+
+                    let frozen_root = root.clone();
+                    let Ok(profile) = crow_probe::scan_workspace(&frozen_root).map_err(|e| anyhow::anyhow!(e)) else {
+                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        return;
+                    };
+
+                    let Some(candidate) = profile.verification_candidates.first().cloned() else {
+                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        return;
+                    };
+
+                    let mcts_config = crate::mcts::MctsConfig::from_env();
+                    let mut messages_dup = crate::context::ConversationManager::new(sys_msgs);
+                    messages_dup.push_user(prompt_clone.clone());
+
+                    let snapshot_id = crate::snapshot::resolve_snapshot_id(&frozen_root);
+
+                    if !mcts_config.is_serial() {
+                        match crate::crucible_runner::run_mcts_crucible(
+                            &mcts_config,
+                            &profile,
+                            &candidate,
+                            &cfg.workspace,
+                            &frozen_root,
+                            &compiler_instance,
+                            &mut messages_dup,
+                            &snapshot_id,
+                            Some(&mcp),
+                            &mut observer,
+                        ).await {
+                            Ok(Some(winner)) => {
+                                let plan_id = format!("swarm-{}-{}", snapshot_id.0, chrono::Utc::now().timestamp_millis());
+                                match crate::crucible_runner::apply_winning_plan(
+                                    &cfg,
+                                    winner.sandbox.path(),
+                                    &winner.plan,
+                                    &plan_id,
+                                    &snapshot_id,
+                                    &rt_clone.ledger,
+                                    &mut observer,
+                                ).await {
+                                    Ok(_) => {
+                                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                                    }
+                                    Err(_) => {
+                                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                                    }
+                                }
+                            }
+                            _ => {
+                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                            }
+                        }
+                    } else {
+                        let crucible = crate::crucible::SerialCrucible {
+                            cfg: &cfg,
+                            profile: &profile,
+                            candidate: &candidate,
+                            frozen_root: &frozen_root,
+                            compiler: &compiler_instance,
+                            mcp_manager: Some(&mcp),
+                        };
+
+                        match crucible.execute_with_precompiled(
+                            &mut messages_dup,
+                            &snapshot_id,
+                            &rt_clone.ledger,
+                            plan,
+                            &mut observer,
+                        ).await {
+                            Ok(_) => {
+                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                            }
+                            Err(_) => {
+                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                            }
+                        }
+                    }
+                } else {
+                    let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
                 }
             }
         });

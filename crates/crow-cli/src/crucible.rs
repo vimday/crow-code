@@ -379,7 +379,7 @@ impl SerialCrucible<'_> {
                 "Verdict: PASSED (verification run {})",
                 verification_runs + 1
             )));
-            crate::apply_winning_plan(
+            crate::crucible_runner::apply_winning_plan(
                 self.cfg,
                 attempt_sandbox.path(),
                 &hydrated_plan,

@@ -188,7 +188,7 @@ impl SessionRuntime {
                 )));
             }
 
-            let winner = crate::run_mcts_crucible(
+            let winner = crate::crucible_runner::run_mcts_crucible(
                 &mcts_config,
                 &profile,
                 &candidate,
@@ -208,7 +208,7 @@ impl SessionRuntime {
                     snapshot_id.0,
                     chrono::Utc::now().timestamp_millis()
                 );
-                crate::apply_winning_plan(
+                crate::crucible_runner::apply_winning_plan(
                     cfg,
                     w.sandbox.path(),
                     &w.plan,
