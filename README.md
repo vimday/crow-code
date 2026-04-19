@@ -166,10 +166,15 @@ L0  crow-patch   crow-evidence   crow-probe
 - snapshot anchoring
 - multi-provider routing
 - MCP stdio transport
+- **streaming SSE with native tool calling**
+- **structured event bus (AgentEvent system)**
+- **orthogonal prompt architecture (Identity/Context/Skills/Contract)**
+- **unified SessionRuntime across all CLI entry points**
+- **subagent delegation with recursion limits**
 
 ### Partial or still evolving
 
-- replay harness
+- replay harness and time-travel
 - richer event-ledger productization
 - deeper intelligence/LSP integration
 - dashboard / dream / long-horizon memory UX
