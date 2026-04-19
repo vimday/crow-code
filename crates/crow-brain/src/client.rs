@@ -188,13 +188,13 @@ impl ReqwestLlmClient {
         }
 
         if self.json_mode {
-            let schema = schemars::schema_for!(crow_patch::AgentAction);
             body["tools"] = json!([{
                 "type": "function",
                 "function": {
                     "name": "agent_action",
-                    "description": "Perform an action in the repository.",
-                    "parameters": schema
+                    "description": "Perform an agent action: read_files, recon, submit_plan, or delegate_task. The 'action' field discriminates the type.",
+                    "parameters": openai_agent_action_schema(),
+                    "strict": false
                 }
             }]);
             body["tool_choice"] = json!({
@@ -354,13 +354,13 @@ impl ReqwestLlmClient {
 
         // Inject tools/tool_choice for structured output (CRITICAL: was missing before)
         if self.json_mode {
-            let schema = schemars::schema_for!(crow_patch::AgentAction);
             body["tools"] = json!([{
                 "type": "function",
                 "function": {
                     "name": "agent_action",
-                    "description": "Perform an action in the repository.",
-                    "parameters": schema
+                    "description": "Perform an agent action: read_files, recon, submit_plan, or delegate_task. The 'action' field discriminates the type.",
+                    "parameters": openai_agent_action_schema(),
+                    "strict": false
                 }
             }]);
             body["tool_choice"] = json!({
@@ -497,4 +497,72 @@ impl LlmClient for ReqwestLlmClient {
             self._generate(messages, temperature).await
         }
     }
+}
+
+/// Build an OpenAI-compatible function parameter schema for AgentAction.
+///
+/// OpenAI requires `type: "object"` at the root of function parameters.
+/// `schemars::schema_for!(AgentAction)` generates a `oneOf` root for tagged enums,
+/// which OpenAI rejects with "schema must be a JSON Schema of 'type: \"object\"'".
+///
+/// We use a permissive schema (`additionalProperties: true`, `strict: false`)
+/// so the model can freely use any of the action variants. The actual validation
+/// happens at deserialization time via serde, not at the schema level.
+fn openai_agent_action_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["read_files", "recon", "submit_plan", "delegate_task"],
+                "description": "The action type to perform."
+            },
+            "paths": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "File paths for read_files action."
+            },
+            "rationale": {
+                "type": "string",
+                "description": "Reason for performing this action."
+            },
+            "tool": {
+                "type": "string",
+                "enum": ["list_dir", "search", "file_info", "word_count", "dir_tree"],
+                "description": "Reconnaissance tool to use (for recon action)."
+            },
+            "pattern": {
+                "type": "string",
+                "description": "Search pattern (for recon search tool)."
+            },
+            "path": {
+                "type": "string",
+                "description": "Path for recon tools."
+            },
+            "glob": {
+                "type": "string",
+                "description": "Glob filter (for recon search tool)."
+            },
+            "max_depth": {
+                "type": "integer",
+                "description": "Max depth for dir_tree."
+            },
+            "plan": {
+                "type": "object",
+                "description": "The IntentPlan object (for submit_plan action).",
+                "additionalProperties": true
+            },
+            "task": {
+                "type": "string",
+                "description": "Task description (for delegate_task action)."
+            },
+            "focus_paths": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Paths to focus on (for delegate_task action)."
+            }
+        },
+        "required": ["action"],
+        "additionalProperties": true
+    })
 }
