@@ -58,7 +58,7 @@ impl Default for LlmProviderConfig {
             max_tokens: 8192,
             connect_timeout_secs: 10,
             request_timeout_secs: 300,
-            json_mode: false,
+            json_mode: true,
             prompt_caching: false,
             reasoning_effort: None,
         }
@@ -305,6 +305,170 @@ impl ReqwestLlmClient {
 
         Ok(content)
     }
+
+    async fn _generate_streaming(
+        &self,
+        messages: &[crate::ChatMessage],
+        temperature: Option<f64>,
+        observer: &mut dyn crate::compiler::StreamObserver,
+    ) -> Result<String, BrainError> {
+        use eventsource_stream::Eventsource;
+        use futures_util::StreamExt;
+
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{}/chat/completions", base);
+
+        // Build message array with prompt caching support (matching non-streaming path)
+        let api_messages: Vec<serde_json::Value> = if self.prompt_caching {
+            let last_sys_idx = messages
+                .iter()
+                .rposition(|m| m.role == crate::ChatRole::System);
+            messages
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    if m.role == crate::ChatRole::System {
+                        let mut block = json!({"type": "text", "text": m.content});
+                        if Some(i) == last_sys_idx {
+                            block["cache_control"] = json!({"type": "ephemeral"});
+                        }
+                        json!({"role": "system", "content": [block]})
+                    } else {
+                        json!({"role": m.role, "content": m.content})
+                    }
+                })
+                .collect()
+        } else {
+            messages
+                .iter()
+                .map(|m| json!({"role": m.role, "content": m.content}))
+                .collect()
+        };
+
+        let mut body = json!({
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": api_messages,
+            "stream": true
+        });
+
+        // Inject tools/tool_choice for structured output (CRITICAL: was missing before)
+        if self.json_mode {
+            let schema = schemars::schema_for!(crow_patch::AgentAction);
+            body["tools"] = json!([{
+                "type": "function",
+                "function": {
+                    "name": "agent_action",
+                    "description": "Perform an action in the repository.",
+                    "parameters": schema
+                }
+            }]);
+            body["tool_choice"] = json!({
+                "type": "function",
+                "function": { "name": "agent_action" }
+            });
+        }
+
+        if let Some(effort) = &self.reasoning_effort {
+            let model_lower = self.model.to_lowercase();
+            let supports_reasoning = model_lower.starts_with("o1")
+                || model_lower.starts_with("o3")
+                || model_lower.starts_with("o4")
+                || model_lower.starts_with("gpt-5");
+            if supports_reasoning {
+                body["reasoning_effort"] = json!(effort);
+            }
+        }
+
+        if let Some(temp) = temperature {
+            body["temperature"] = json!(temp);
+        }
+
+        // Retry logic matching non-streaming path
+        let mut retries = 0;
+        let max_retries = 3;
+        let mut delay_ms: u64 = 1000;
+
+        let resp = loop {
+            match self.client.post(&url).json(&body).send().await {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        break r;
+                    }
+                    let code = status.as_u16();
+                    if [429, 500, 502, 503, 529].contains(&code) && retries < max_retries {
+                        retries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                        continue;
+                    }
+                    let raw_text = r.text().await.unwrap_or_default();
+                    return Err(BrainError::ApiError { status: code, body: raw_text });
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        retries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                        continue;
+                    }
+                    return Err(BrainError::Transport(e));
+                }
+            }
+        };
+
+        let mut stream = resp.bytes_stream().eventsource();
+        let mut full_text = String::new();
+
+        while let Some(event_res) = stream.next().await {
+            match event_res {
+                Ok(event) => {
+                    let data_str = event.data;
+                    if data_str == "[DONE]" {
+                        break;
+                    }
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                        if let Some(choices) = data.get("choices").and_then(|c| c.as_array()) {
+                            if let Some(choice) = choices.first() {
+                                if let Some(delta) = choice.get("delta") {
+                                    let mut chunk_str = "";
+                                    if self.json_mode {
+                                        if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                            if let Some(tc) = tcs.first() {
+                                                if let Some(fn_obj) = tc.get("function") {
+                                                    if let Some(args) = fn_obj.get("arguments").and_then(|a| a.as_str()) {
+                                                        chunk_str = args;
+                                                    }
+                                                }
+                                            }
+                                        } else if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                            chunk_str = content;
+                                        }
+                                    } else if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                        chunk_str = content;
+                                    }
+                                    if !chunk_str.is_empty() {
+                                        full_text.push_str(chunk_str);
+                                        observer.on_chunk(chunk_str);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(BrainError::Config(format!("Stream error: {}", e)));
+                }
+            }
+        }
+
+        if full_text.is_empty() {
+            return Err(BrainError::MissingField("Empty stream response".into()));
+        }
+
+        Ok(full_text)
+    }
 }
 
 #[async_trait]
@@ -319,5 +483,18 @@ impl LlmClient for ReqwestLlmClient {
         temperature: f64,
     ) -> Result<String, BrainError> {
         self._generate(messages, Some(temperature)).await
+    }
+
+    async fn generate_streaming(
+        &self,
+        messages: &[crate::ChatMessage],
+        temperature: Option<f64>,
+        observer: Option<&mut dyn crate::compiler::StreamObserver>,
+    ) -> Result<String, BrainError> {
+        if let Some(obs) = observer {
+            self._generate_streaming(messages, temperature, obs).await
+        } else {
+            self._generate(messages, temperature).await
+        }
     }
 }

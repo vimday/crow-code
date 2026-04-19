@@ -217,6 +217,16 @@ pub enum AgentAction {
     /// Submit a patch plan for hydration, application, and verification.
     #[serde(rename = "submit_plan")]
     SubmitPlan { plan: IntentPlan },
+    /// Explicitly delegate a bounded task to a Worker Subagent.
+    #[serde(rename = "delegate_task")]
+    DelegateTask {
+        /// A strict, actionable text description of what the subagent must accomplish.
+        task: String,
+        /// Optional specific paths the subagent should focus on.
+        focus_paths: Vec<WorkspacePath>,
+        /// Reason for delegation.
+        rationale: String,
+    },
 }
 
 /// Validate semantic constraints that serde cannot enforce.
@@ -245,6 +255,11 @@ impl AgentAction {
             },
             AgentAction::SubmitPlan { plan: _ } => {
                 // We allow empty operations for pure conversational dialog
+            }
+            AgentAction::DelegateTask { task, .. } => {
+                if task.trim().is_empty() {
+                    return Err("DelegateTask must contain a valid string task description".into());
+                }
             }
         }
         Ok(())
@@ -598,5 +613,22 @@ mod tests {
             },
         };
         assert!(action.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_delegate_task() {
+        let action = AgentAction::DelegateTask {
+            task: "Refactor backend".into(),
+            focus_paths: vec![],
+            rationale: "Needs extraction".into(),
+        };
+        assert!(action.validate().is_ok());
+
+        let empty_action = AgentAction::DelegateTask {
+            task: "   ".into(),
+            focus_paths: vec![],
+            rationale: "Needs extraction".into(),
+        };
+        assert!(empty_action.validate().is_err());
     }
 }

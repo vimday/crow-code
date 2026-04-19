@@ -39,14 +39,14 @@ const MAX_EPISTEMIC_STEPS: usize = 30;
 /// `IntentPlan` when the LLM submits one.
 ///
 /// Used by both the serial crucible and MCTS pre-exploration.
-use crate::epistemic_ui::EpistemicObserver;
+use crate::event::{EventHandler, AgentEvent};
 
 pub async fn run_epistemic_loop(
     compiler: &IntentCompiler,
     messages: &mut ConversationManager,
     frozen_root: &Path,
     mcp_manager: Option<&crate::mcp::McpManager>,
-    observer: &mut dyn EpistemicObserver,
+    observer: &mut dyn EventHandler,
 ) -> Result<IntentPlan> {
     let mut epistemic_step = 0;
     // Track action signatures to detect duplicate recon loops.
@@ -62,15 +62,23 @@ pub async fn run_epistemic_loop(
             );
         }
 
-        observer.on_step(epistemic_step, MAX_EPISTEMIC_STEPS);
+        observer.handle_event(AgentEvent::Thinking(epistemic_step as u32, MAX_EPISTEMIC_STEPS as u32));
 
-        let action_result = compiler.compile_action(&messages.as_messages()).await;
+        struct StreamAdapter<'a>(&'a mut dyn EventHandler);
+        impl crow_brain::compiler::StreamObserver for StreamAdapter<'_> {
+            fn on_chunk(&mut self, chunk: &str) {
+                self.0.handle_event(AgentEvent::StreamChunk(chunk.to_string()));
+            }
+        }
+
+        let mut adapter = StreamAdapter(observer);
+        let action_result = compiler.compile_action_streaming(&messages.as_messages(), &mut adapter).await;
 
         let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
         // If it's a SubmitPlan, return immediately before pushing to history.
         if let AgentAction::SubmitPlan { plan } = action {
-            println!("    ✅ Agent submitted IntentPlan!");
+            observer.handle_event(AgentEvent::PlanSubmitted(plan.clone()));
             return Ok(plan);
         }
 
@@ -79,10 +87,10 @@ pub async fn run_epistemic_loop(
         if !seen_actions.insert(dedup_key) {
             consecutive_dupes += 1;
             if consecutive_dupes >= 2 {
-                println!(
+                observer.handle_event(AgentEvent::Log(format!(
                     "    ⚠️  Duplicate action detected ({} times). Nudging agent to submit plan...",
                     consecutive_dupes + 1
-                );
+                )));
                 messages.push_assistant(serde_json::to_string(&action)?);
                 messages.push_user(
                     "[SYSTEM: DUPLICATE ACTION DETECTED]\n\
@@ -104,8 +112,9 @@ pub async fn run_epistemic_loop(
 
         match action {
             AgentAction::ReadFiles { paths, rationale } => {
-                println!("    📖 Agent requests to read files: {:?}", paths);
-                println!("       Rationale: {}", rationale);
+                let path_strs: Vec<String> = paths.iter().map(|p| p.as_str().to_string()).collect();
+                observer.handle_event(AgentEvent::ReadFiles(path_strs.clone()));
+                observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
 
                 let file_contents = read_files_to_context(&paths, frozen_root);
                 let path_strings: Vec<String> =
@@ -113,13 +122,78 @@ pub async fn run_epistemic_loop(
                 messages.push_file_read(&path_strings, file_contents);
             }
             AgentAction::Recon { tool, rationale } => {
-                println!("    🔍 Agent Recon: {:?}", tool);
-                println!("       Rationale: {}", rationale);
+                observer.handle_event(AgentEvent::ReconStart(format!("{:?}", tool)));
+                observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
 
                 execute_recon(&tool, frozen_root, messages, mcp_manager).await;
             }
             AgentAction::SubmitPlan { .. } => {
                 unreachable!("SubmitPlan is intercepted before push_assistant")
+            }
+            AgentAction::DelegateTask { task, focus_paths, rationale } => {
+                observer.handle_event(AgentEvent::DelegateStart(task.clone()));
+                observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
+
+                // Check for recursion depth via parsing previous delegation messages
+                let delegation_count = messages.as_messages().iter()
+                    .filter(|m| m.content.contains("[SYSTEM: SUBAGENT DELEGATION COMPLETE]"))
+                    .count();
+                
+                if delegation_count >= 3 {
+                    observer.handle_event(AgentEvent::Log("    ⚠️ Subagent recursion limit reached. Halting delegation.".into()));
+                    messages.push_user("[SYSTEM] Subagent recursion limit exceeded (max 3). You must resolve the task yourself without delegating further.".to_string());
+                    continue;
+                }
+
+                // Hydrate context for standard subagent Worker
+                let identity = format!(
+                    "You are a specialized Subagent Worker. You have been delegated the following bounded task by the Architect Orchestrator:\n\n\
+                    TASK: {}\n\n\
+                    FOCUS PATHS: {:?}\n\n\
+                    RATIONALE: {}\n\n\
+                    Perform any necessary file reads or tool calls. When you have answers or a plan, emit a SubmitPlan action. \
+                    If you resolve the requested information without modifying code, emit an empty operations array and return your findings in the rationale.",
+                    task, focus_paths, rationale
+                );
+
+                // Preserve the architect's RepoMap and MCP states by carrying over System messages
+                let mut sys_msgs: Vec<_> = messages.as_messages().iter().filter(|m| m.role == crow_brain::ChatRole::System).cloned().collect();
+                
+                // Override the generic agent identity with the worker identity we just formatted.
+                if let Some(first) = sys_msgs.first_mut() {
+                    first.content = identity;
+                }
+
+                let mut sub_messages = crate::context::ConversationManager::new(sys_msgs);
+
+                observer.handle_event(AgentEvent::ActionStart("Spawning isolated epistemic core for subagent worker".into()));
+                
+                // Recursively call the epistemic loop!
+                // To keep terminal output clean, we use a basic SilentObserver or a special subagent observer wrapper,
+                // but we can just pass down the existing observer since it buffers appropriately.
+                match Box::pin(run_epistemic_loop(compiler, &mut sub_messages, frozen_root, mcp_manager, observer)).await {
+                    Ok(sub_plan) => {
+                        observer.handle_event(AgentEvent::ActionComplete("Subagent completed. Returning IntentPlan to Architect.".into()));
+                        messages.push_user(format!(
+                            "[SYSTEM: SUBAGENT DELEGATION COMPLETE]\n\
+                            The subagent successfully returned an IntentPlan.\n\
+                            Subagent Rationale / Findings: {}\n\
+                            Proposed Operations: {} operations.\n\n\
+                            (If operations were proposed, you may copy them precisely into your own final IntentPlan SubmitPlan if you agree. Or use the findings to continue your orchestration.)",
+                            sub_plan.rationale, sub_plan.operations.len()
+                        ));
+                    }
+                    Err(e) => {
+                        observer.handle_event(AgentEvent::Error(format!("Subagent crashed/failed: {}", e)));
+                        messages.push_user(format!(
+                            "[SYSTEM: SUBAGENT FAILURE]\n\
+                            The subagent failed to complete the delegation task.\n\
+                            Error: {}\n\
+                            You must rethink your strategy.",
+                            e
+                        ));
+                    }
+                }
             }
         }
     }
@@ -137,6 +211,10 @@ fn action_dedup_key(action: &AgentAction) -> String {
             format!("recon:{:?}", tool)
         }
         AgentAction::SubmitPlan { .. } => "submit".to_string(),
+        AgentAction::DelegateTask { task, .. } => {
+            let digest = crow_patch::sha256_hex(task.as_bytes());
+            format!("delegate:{}", &digest[0..10])
+        }
     }
 }
 

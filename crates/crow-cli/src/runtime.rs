@@ -59,10 +59,7 @@ impl SessionRuntime {
         prompt: &str,
         messages: &mut crate::context::ConversationManager,
     ) -> Result<SnapshotId> {
-        println!("🦅 crow-code Session Execution Turn initializing...\n");
-
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
-        println!("    📌 Snapshot ID (Live): {}", snapshot_id.0);
 
         let profile = crate::scan_workspace(&self.workspace).map_err(|e| anyhow::anyhow!(e))?;
         let candidate = match profile.verification_candidates.first() {
@@ -79,7 +76,6 @@ impl SessionRuntime {
         let mut repo_map_cloned = None;
         if let Some((cached_snap, map)) = &self.cached_repo_map {
             if cached_snap == &snapshot_id {
-                println!("    ⚡ Fast-Path: Re-using cached RepoMap for untouched baseline.");
                 repo_map_cloned = Some(Arc::clone(map));
             }
         }
@@ -87,11 +83,9 @@ impl SessionRuntime {
         let repo_map = match repo_map_cloned {
             Some(map) => map,
             None => {
-                println!("\n[1/3] Gathering Repomap Context from Live Workspace via tree-sitter...");
                 let map = cfg.build_repo_map_for(&self.workspace)
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from live workspace")?;
-                println!("    🎯 Fresh map length: {} bytes", map.map_text.len());
                 let arc_map = Arc::new(map);
                 self.cached_repo_map = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 arc_map
@@ -113,12 +107,12 @@ impl SessionRuntime {
         messages.set_system(sys_msgs);
 
         if messages.as_messages().len() <= 2 {
-            messages.push_user(format!("Task:\\n{}", prompt));
+            messages.push_user(format!("Task:\n{}", prompt));
         } else {
             messages.push_user(prompt);
         }
 
-        println!("\n[2/3] Entering Epistemic Loop (Fast-Path on Live Workspace)...");
+
 
         // We run the initial loop using the live workspace!
         let mut observer = crate::event::CliEventHandler::new();
@@ -139,7 +133,8 @@ impl SessionRuntime {
             return Ok(snapshot_id);
         }
 
-        println!("\n[3/3] Code modification proposed! Materializing Sandbox Crucible...");
+        println!();
+        println!("  📋 Code modification proposed ({} ops). Materializing sandbox...", plan.operations.len());
         
         // Setup Crucible sandbox and run test suite over the plan!
         let mcts_config = crate::mcts::MctsConfig::from_env();
@@ -164,7 +159,6 @@ impl SessionRuntime {
                 .context("Failed to materialize initial verifier sandbox")?;
                 
             let frozen_root = frozen_sandbox.path().to_path_buf();
-            println!("    🛡️  Frozen attempt sandbox for MCTS at: {}", frozen_root.display());
 
             let winner = crate::run_mcts_crucible(
                 &mcts_config,
@@ -205,7 +199,6 @@ impl SessionRuntime {
             .context("Failed to materialize initial verifier sandbox")?;
             
         let frozen_root = frozen_sandbox.path().to_path_buf();
-        println!("    🛡️  Frozen attempt sandbox at: {}", frozen_root.display());
 
         // Because we already got the plan, we might need to apply it directly.
         // Wait, `crucible.execute()` expects to call `run_epistemic_loop` to get the plan.

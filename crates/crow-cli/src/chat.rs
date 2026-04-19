@@ -205,6 +205,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
     let mut messages = crate::context::ConversationManager::new(vec![]);
     let mut state = SessionState::new();
+    let mut runtime = crate::runtime::SessionRuntime::boot(cfg).await?;
 
     // ── Main Loop ──
     loop {
@@ -252,7 +253,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                 );
                 let turn_start = Instant::now();
 
-                match crate::run_conversation_turn(cfg, input, &mut messages).await {
+                match runtime.execute_turn(cfg, input, &mut messages).await {
                     Ok(snapshot_id) => {
                         let elapsed = turn_start.elapsed();
                         state.total_duration_ms += elapsed.as_millis();

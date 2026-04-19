@@ -116,6 +116,7 @@ async fn autonomous_loop_direct_submit() {
         AgentAction::SubmitPlan { plan } => plan,
         AgentAction::ReadFiles { .. } => panic!("Expected SubmitPlan, got ReadFiles"),
         AgentAction::Recon { .. } => panic!("Expected SubmitPlan, got Recon"),
+        AgentAction::DelegateTask { .. } => panic!("Expected SubmitPlan, got DelegateTask"),
     };
 
     // Step 3: Hydrate against frozen sandbox
@@ -234,6 +235,9 @@ async fn autonomous_loop_read_then_submit() {
             }
             AgentAction::Recon { .. } => {
                 panic!("Unexpected Recon in scripted test");
+            }
+            AgentAction::DelegateTask { .. } => {
+                panic!("Unexpected DelegateTask in scripted test");
             }
             AgentAction::SubmitPlan { plan } => {
                 break plan;

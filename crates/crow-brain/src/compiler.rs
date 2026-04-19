@@ -53,6 +53,11 @@ pub enum CompilerError {
     MaxRetriesExceeded(Vec<SerdeError>),
 }
 
+/// Allows intercepting SSE chunk tokens during LLM generation.
+pub trait StreamObserver: Send {
+    fn on_chunk(&mut self, chunk: &str);
+}
+
 /// A generic LLM driver interface to allow substituting e.g. OpenAI vs Claude vs Mock.
 #[async_trait]
 pub trait LlmClient: Send + Sync {
@@ -68,6 +73,27 @@ pub trait LlmClient: Send + Sync {
         _temperature: f64,
     ) -> Result<String, crate::client::BrainError> {
         self.generate(messages).await
+    }
+
+    /// Extends `generate` to support Server-Sent Events (SSE) streaming.
+    /// Default implementation just blocks and feeds the whole chunk at the end.
+    async fn generate_streaming(
+        &self,
+        messages: &[ChatMessage],
+        temperature: Option<f64>,
+        observer: Option<&mut dyn StreamObserver>,
+    ) -> Result<String, crate::client::BrainError> {
+        let text = if let Some(t) = temperature {
+            self.generate_with_temperature(messages, t).await?
+        } else {
+            self.generate(messages).await?
+        };
+        
+        let mut obs_container = observer;
+        if let Some(ref mut obs) = obs_container {
+            obs.on_chunk(&text);
+        }
+        Ok(text)
     }
 }
 
@@ -134,7 +160,7 @@ impl IntentCompiler {
         &self,
         messages: &[ChatMessage],
     ) -> Result<crow_patch::AgentAction, CompilerError> {
-        self._compile_action(messages, None).await
+        self._compile_action(messages, None, None).await
     }
 
     /// Compiles a task directive into a strict `AgentAction`, using the specified temperature
@@ -144,7 +170,16 @@ impl IntentCompiler {
         messages: &[ChatMessage],
         temperature: f64,
     ) -> Result<crow_patch::AgentAction, CompilerError> {
-        self._compile_action(messages, Some(temperature)).await
+        self._compile_action(messages, Some(temperature), None).await
+    }
+
+    /// Compiles an IntentPlan from the conversation history, streaming partial output to the observer.
+    pub async fn compile_action_streaming(
+        &self,
+        messages: &[ChatMessage],
+        observer: &mut dyn StreamObserver,
+    ) -> Result<crow_patch::AgentAction, CompilerError> {
+        self._compile_action(messages, None, Some(observer)).await
     }
 
     /// Shared implementation for `compile_action` and `compile_action_with_temperature`.
@@ -152,6 +187,7 @@ impl IntentCompiler {
         &self,
         messages: &[ChatMessage],
         temperature: Option<f64>,
+        mut observer: Option<&mut dyn StreamObserver>,
     ) -> Result<crow_patch::AgentAction, CompilerError> {
         let schema_guide = crate::schema::intent_plan_schema();
         let mut conversation: Vec<ChatMessage> = Vec::new();
@@ -171,15 +207,13 @@ impl IntentCompiler {
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
-            let response = match temperature {
-                Some(temp) => {
-                    self.client
-                        .generate_with_temperature(&conversation, temp)
-                        .await
-                }
-                None => self.client.generate(&conversation).await,
-            }
-            .map_err(CompilerError::PromptFailed)?;
+            let obs_opt = observer.as_mut().map(|obs| &mut **obs as &mut dyn StreamObserver);
+            
+            let response = self.client.generate_streaming(
+                &conversation,
+                temperature,
+                obs_opt,
+            ).await.map_err(CompilerError::PromptFailed)?;
 
             let cleaned_json = extract_json_block(&response);
 
