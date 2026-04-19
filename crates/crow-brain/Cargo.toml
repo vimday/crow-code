@@ -17,3 +17,4 @@ chrono = { version = "0.4.44", features = ["serde"] }
 anyhow = "1.0.102"
 eventsource-stream = "0.2.3"
 futures-util = "0.3.32"
+serde_yaml = "0.9"

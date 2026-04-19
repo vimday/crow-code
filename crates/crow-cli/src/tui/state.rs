@@ -59,6 +59,13 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.inner.load(std::sync::atomic::Ordering::SeqCst)
     }
+
+    /// Reset the cancellation flag for a new turn.
+    /// Without this, a cancelled turn leaves the flag permanently set,
+    /// causing all subsequent turns to see a stale cancellation.
+    pub fn reset(&self) {
+        self.inner.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 // ── App State ────────────────────────────────────────────────────────────────

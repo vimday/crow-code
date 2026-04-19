@@ -137,9 +137,22 @@ impl SessionRuntime {
                 timestamp: chrono::Utc::now(),
             });
 
+        let mut skill_dirs = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            skill_dirs.push(home.join(".crow").join("skills"));
+        }
+        skill_dirs.push(self.workspace.join(".crow").join("skills"));
+
+        let skill_loader = crow_brain::skill::SkillLoader::new(skill_dirs);
+        let mut loaded_skills = Vec::new();
+        if let Ok(skills) = skill_loader.load_all() {
+            loaded_skills = skills;
+        }
+
         let sys_msgs = crate::prompt::PromptBuilder::new()
             .with_repo_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
+            .with_dynamic_skills(&loaded_skills)
             .with_contract(&snapshot_id)
             .build();
 
@@ -149,6 +162,13 @@ impl SessionRuntime {
             messages.push_user(format!("Task:\n{}", prompt));
         } else {
             messages.push_user(prompt);
+        }
+
+        // ── Phase 2 Integration: Compactor ──
+        if let Err(e) = messages.compact_history(&self.compiler).await {
+            observer.handle_event(crate::event::AgentEvent::Log(format!(
+                "Warning: Context compression failed: {}", e
+            )));
         }
 
         // ── Step 2: Epistemic loop against FROZEN baseline ──

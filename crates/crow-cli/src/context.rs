@@ -136,8 +136,40 @@ impl ConversationManager {
         self.enforce_budget();
     }
 
-    /// Appends a reconnaissance result to the conversation with domain-aware compression.
-    /// When the full output ages out, a compact semantic summary is preserved.
+    /// Evaluates if the current conversation history threatens the token limit,
+    /// and if so, runs a semantic LLM compaction on older messages.
+    /// Returns true if compaction occurred.
+    pub async fn compact_history(
+        &mut self,
+        compiler: &std::sync::Arc<crow_brain::IntentCompiler>,
+    ) -> anyhow::Result<bool> {
+        let messages = self.as_messages();
+        // We only want to compress the dynamic conversation history.
+        let dynamic_start = self.system_messages.len();
+        
+        let compactor_config = crow_brain::compactor::CompactorConfig::default();
+        let compactor = crow_brain::compactor::Compactor::new(compactor_config);
+
+        let dynamic_history = &messages[dynamic_start..];
+        
+        if compactor.should_compact(dynamic_history) {
+            let compacted = compactor.compact(dynamic_history, compiler).await?;
+            
+            // Rebuild conversation deque
+            self.conversation.clear();
+            for msg in compacted {
+                self.conversation.push_back(Memory {
+                    message: msg,
+                    summary: Some("[SYSTEM: Previously compacted]".into())
+                });
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+
     pub fn push_recon_result(&mut self, tool_name: &str, description: &str, output: &str) {
         let content = format!(
             "[RECON RESULT]\nTool: {}\nCommand: {}\nOutput:\n{}",
