@@ -259,15 +259,14 @@ impl fmt::Display for EvidenceReport {
             PreflightOutcome::Clean { duration_secs } => {
                 writeln!(
                     f,
-                    "    ✅ Passed in {:.1}s (0 errors, 0 warnings)",
-                    duration_secs
+                    "    ✅ Passed in {duration_secs:.1}s (0 errors, 0 warnings)"
                 )?;
             }
             PreflightOutcome::Errors { count, summary } => {
                 writeln!(
                     f,
                     "    ❌ {}",
-                    format!("{} error(s) detected", count).with(Color::AnsiValue(203))
+                    format!("{count} error(s) detected").with(Color::AnsiValue(203))
                 )?;
                 for line in summary.lines().take(5) {
                     writeln!(f, "       {}", line.with(Color::AnsiValue(203)))?;

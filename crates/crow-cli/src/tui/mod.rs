@@ -163,7 +163,7 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        eprintln!("Crow: {:?}", err);
+        eprintln!("Crow: {err:?}");
     }
     Ok(())
 }
@@ -194,8 +194,7 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
             }
             Err(e) => {
                 let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Error(format!(
-                    "Failed: {}",
-                    e
+                    "Failed: {e}"
                 ))));
             }
         }
@@ -207,7 +206,10 @@ fn handle_tab_completion(state: &mut AppState) {
     let text = state.composer.clone();
 
     // Universal file path completion for the last token in the composer.
-    let last_word_idx = text.rfind(|c: char| c.is_whitespace()).map(|idx| idx + 1).unwrap_or(0);
+    let last_word_idx = text
+        .rfind(|c: char| c.is_whitespace())
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
     let path_prefix = &text[last_word_idx..];
 
     if !path_prefix.is_empty() {
@@ -228,7 +230,7 @@ fn handle_tab_completion(state: &mut AppState) {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with(file_prefix) {
                     if entry.path().is_dir() {
-                        matches.push(format!("{}/", name));
+                        matches.push(format!("{name}/"));
                     } else {
                         matches.push(name);
                     }
@@ -243,13 +245,8 @@ fn handle_tab_completion(state: &mut AppState) {
                     parent_str.to_string()
                 };
 
-                let new_text = format!(
-                    "{}{}{}",
-                    &text[..last_word_idx],
-                    parent_part,
-                    matches[0]
-                );
-                
+                let new_text = format!("{}{}{}", &text[..last_word_idx], parent_part, matches[0]);
+
                 state.composer = new_text;
                 state.composer_cursor = state.composer.chars().count();
                 return;
@@ -363,9 +360,9 @@ async fn run_tui_loop(
                                 state.approval_state = crate::tui::state::ApprovalState::None;
                                 state.history.push(Cell {
                                     kind: CellKind::User,
-                                    payload: format!("!{}", cmd),
+                                    payload: format!("!{cmd}"),
                                 });
-                                state.active_action = Some(format!("$ {}", cmd));
+                                state.active_action = Some(format!("$ {cmd}"));
                                 execute_shell_command(cmd, tx.clone());
                             }
                             KeyCode::Char('a') | KeyCode::Char('A') => {
@@ -376,13 +373,13 @@ async fn run_tui_loop(
                                 state.allowed_safe_patterns.insert(prefix.clone());
                                 state.history.push(Cell {
                                     kind: CellKind::Log,
-                                    payload: format!("Whitelist updated: '{}' will auto-execute for this session.", prefix),
+                                    payload: format!("Whitelist updated: '{prefix}' will auto-execute for this session."),
                                 });
                                 state.history.push(Cell {
                                     kind: CellKind::User,
-                                    payload: format!("!{}", cmd),
+                                    payload: format!("!{cmd}"),
                                 });
-                                state.active_action = Some(format!("$ {}", cmd));
+                                state.active_action = Some(format!("$ {cmd}"));
                                 execute_shell_command(cmd, tx.clone());
                             }
                             _ => {
@@ -390,7 +387,7 @@ async fn run_tui_loop(
                                 state.approval_state = crate::tui::state::ApprovalState::None;
                                 state.history.push(Cell {
                                     kind: CellKind::Log,
-                                    payload: format!("Command cancelled: {}", cmd),
+                                    payload: format!("Command cancelled: {cmd}"),
                                 });
                             }
                         }
@@ -598,7 +595,7 @@ async fn run_tui_loop(
                     let was_cancelled = state
                         .cancellation
                         .as_ref()
-                        .is_some_and(|t| t.is_cancelled());
+                        .is_some_and(state::CancellationToken::is_cancelled);
                     state.cancellation = None;
 
                     if success && !was_cancelled {
@@ -616,8 +613,7 @@ async fn run_tui_loop(
                         state.history.push(Cell {
                             kind: CellKind::Error,
                             payload: format!(
-                                "Pipeline halted. Dropped {} queued queries.",
-                                drop_count
+                                "Pipeline halted. Dropped {drop_count} queued queries."
                             ),
                         });
                     }
@@ -644,7 +640,7 @@ async fn run_tui_loop(
                         } else {
                             CellKind::Error
                         },
-                        payload: format!("Swarm worker [{}] finished.", id),
+                        payload: format!("Swarm worker [{id}] finished."),
                     });
                 }
                 TuiMessage::Tick => {
@@ -833,8 +829,7 @@ fn execute_command_string(
                 state.history.push(Cell {
                     kind: CellKind::Error,
                     payload: format!(
-                        "Unknown command: /{}. Type /help for available commands.",
-                        other
+                        "Unknown command: /{other}. Type /help for available commands."
                     ),
                 });
             }
@@ -885,16 +880,16 @@ fn execute_command_string(
 
         let is_safe = safe_prefixes
             .iter()
-            .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe)))
+            .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{safe} ")))
             || state
                 .allowed_safe_patterns
                 .iter()
-                .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe)));
+                .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{safe} ")));
 
         if is_safe {
             state.history.push(Cell {
                 kind: CellKind::User,
-                payload: format!("!{}", bash_cmd),
+                payload: format!("!{bash_cmd}"),
             });
             execute_shell_command(bash_cmd, tx.clone());
         } else {
@@ -990,15 +985,15 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 };
                 state.history.push(Cell {
                     kind: CellKind::Evidence,
-                    payload: format!("Read {}", display),
+                    payload: format!("Read {display}"),
                 });
             }
         }
         AgentEvent::ReconStart(desc) => {
-            state.active_action = Some(format!("Recon: {}", desc));
+            state.active_action = Some(format!("Recon: {desc}"));
         }
         AgentEvent::DelegateStart(task) => {
-            state.active_action = Some(format!("Delegating: {}", task));
+            state.active_action = Some(format!("Delegating: {task}"));
         }
         AgentEvent::PlanSubmitted(plan) => {
             if !plan.operations.is_empty() {
@@ -1009,7 +1004,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             }
         }
         AgentEvent::CruciblePreflight(msg) => {
-            state.active_action = Some(format!("Verifying: {}", msg));
+            state.active_action = Some(format!("Verifying: {msg}"));
         }
         AgentEvent::Error(err) => {
             state.history.push(Cell {
@@ -1020,28 +1015,46 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.task_start_time = None;
         }
         // ── High-granularity events (Yomi-inspired) ─────────────────────
-        AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens, context_window } => {
+        AgentEvent::TokenUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            context_window,
+        } => {
             // Store on AppState for info bar rendering
-            let pct = (total_tokens * 100).checked_div(context_window).unwrap_or(0);
+            let pct = (total_tokens * 100)
+                .checked_div(context_window)
+                .unwrap_or(0);
             state.model_info = format!(
                 "{} | Tokens: {}+{}={} ({}%)",
-                state.model_info.split(" | Tokens:").next().unwrap_or(&state.model_info),
-                prompt_tokens, completion_tokens, total_tokens, pct
+                state
+                    .model_info
+                    .split(" | Tokens:")
+                    .next()
+                    .unwrap_or(&state.model_info),
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                pct
             );
         }
         AgentEvent::StateChanged { from, to } => {
             if state.view_mode == ViewMode::Audit {
                 state.history.push(Cell {
                     kind: CellKind::Log,
-                    payload: format!("State: {} → {}", from, to),
+                    payload: format!("State: {from} → {to}"),
                 });
             }
         }
-        AgentEvent::Retrying { attempt, max_attempts, reason } => {
-            state.active_action = Some(format!("Retrying ({}/{})… {}", attempt, max_attempts, reason));
+        AgentEvent::Retrying {
+            attempt,
+            max_attempts,
+            reason,
+        } => {
+            state.active_action = Some(format!("Retrying ({attempt}/{max_attempts})… {reason}"));
             state.history.push(Cell {
                 kind: CellKind::Log,
-                payload: format!("⚠ Retrying ({}/{}): {}", attempt, max_attempts, reason),
+                payload: format!("⚠ Retrying ({attempt}/{max_attempts}): {reason}"),
             });
         }
         AgentEvent::Compacting { active } => {
@@ -1055,7 +1068,10 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 });
             }
         }
-        AgentEvent::ToolProgress { tool_id: _, message } => {
+        AgentEvent::ToolProgress {
+            tool_id: _,
+            message,
+        } => {
             state.active_action = Some(message);
         }
     }

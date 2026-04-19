@@ -40,7 +40,6 @@ pub enum AgentEvent {
     Error(String),
 
     // ── High-granularity events (Yomi-inspired) ─────────────────────
-
     /// Token usage update from provider API response.
     TokenUsage {
         prompt_tokens: u32,
@@ -51,10 +50,7 @@ pub enum AgentEvent {
     },
 
     /// Agent state transition (for TUI state visualization).
-    StateChanged {
-        from: String,
-        to: String,
-    },
+    StateChanged { from: String, to: String },
 
     /// Agent is retrying after a transient error.
     Retrying {
@@ -64,15 +60,10 @@ pub enum AgentEvent {
     },
 
     /// Context compaction is starting or finishing.
-    Compacting {
-        active: bool,
-    },
+    Compacting { active: bool },
 
     /// Progress update for long-running tool/subagent.
-    ToolProgress {
-        tool_id: String,
-        message: String,
-    },
+    ToolProgress { tool_id: String, message: String },
 }
 
 /// A receiver trait for AgentEvents, separating the engine from TUI/CLI rendering.
@@ -130,7 +121,9 @@ impl EventHandler for TuiEventHandler {
     }
 
     fn is_cancelled(&self) -> bool {
-        self.cancellation.as_ref().is_some_and(|t| t.is_cancelled())
+        self.cancellation
+            .as_ref()
+            .is_some_and(super::tui::state::CancellationToken::is_cancelled)
     }
 }
 
@@ -232,11 +225,11 @@ impl EventHandler for CliEventHandler {
                 // We just keep the spinner updating to show flow health.
                 if let Some(ref mut sp) = self.spinner {
                     let kb = self.stream_char_count as f64 / 1024.0;
-                    sp.set_status(format!("{:.1} KB transferred", kb));
+                    sp.set_status(format!("{kb:.1} KB transferred"));
                 }
             }
             AgentEvent::ActionStart(desc) => {
-                self.update_spinner(format!("Running action: {}", desc));
+                self.update_spinner(format!("Running action: {desc}"));
             }
             AgentEvent::ActionComplete(desc) => {
                 self.print_trace("Action", &desc, Color::AnsiValue(114));
@@ -250,19 +243,19 @@ impl EventHandler for CliEventHandler {
                     };
                     self.print_trace(
                         "Evidence",
-                        &format!("Read {}", display),
+                        &format!("Read {display}"),
                         Color::AnsiValue(245),
                     );
                 }
             }
             AgentEvent::ReconStart(desc) => {
                 if self.view_mode != ViewMode::Focus {
-                    self.update_spinner(format!("Recon: {}", desc));
+                    self.update_spinner(format!("Recon: {desc}"));
                 }
             }
             AgentEvent::DelegateStart(task) => {
                 if self.view_mode != ViewMode::Focus {
-                    self.update_spinner(format!("Delegating: {}", task));
+                    self.update_spinner(format!("Delegating: {task}"));
                 }
             }
             AgentEvent::PlanSubmitted(plan) => {
@@ -272,7 +265,7 @@ impl EventHandler for CliEventHandler {
                 }
             }
             AgentEvent::CruciblePreflight(msg) => {
-                self.update_spinner(format!("Verifying: {}", msg));
+                self.update_spinner(format!("Verifying: {msg}"));
             }
             AgentEvent::Log(msg) => {
                 if msg.contains("⚠") {
@@ -283,17 +276,16 @@ impl EventHandler for CliEventHandler {
                             msg.with(Color::Yellow)
                         )
                     });
-                } else {
-                    if !msg.starts_with("       Rationale:") || self.view_mode == ViewMode::Audit {
-                        if msg.starts_with("✓ ") || msg.starts_with("↳") {
-                            self.print_trace(
-                                "Result",
-                                msg.trim_start_matches("✓ ").trim_start_matches("↳").trim(),
-                                Color::AnsiValue(245),
-                            );
-                        } else if self.view_mode != ViewMode::Focus {
-                            self.print_trace("Log", &msg, Color::AnsiValue(245));
-                        }
+                } else if !msg.starts_with("       Rationale:") || self.view_mode == ViewMode::Audit
+                {
+                    if msg.starts_with("✓ ") || msg.starts_with("↳") {
+                        self.print_trace(
+                            "Result",
+                            msg.trim_start_matches("✓ ").trim_start_matches("↳").trim(),
+                            Color::AnsiValue(245),
+                        );
+                    } else if self.view_mode != ViewMode::Focus {
+                        self.print_trace("Log", &msg, Color::AnsiValue(245));
                     }
                 }
             }
@@ -314,32 +306,50 @@ impl EventHandler for CliEventHandler {
                 renderer.print_markdown(&md);
                 println!();
             }
-            AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens, context_window } => {
+            AgentEvent::TokenUsage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                context_window,
+            } => {
                 if self.view_mode == ViewMode::Audit {
-                    let pct = (total_tokens as u64 * 100).checked_div(context_window as u64).unwrap_or(0);
+                    let pct = (total_tokens as u64 * 100)
+                        .checked_div(context_window as u64)
+                        .unwrap_or(0);
                     self.print_trace(
                         "Tokens",
-                        &format!("{}+{}={} ({}% of {})", prompt_tokens, completion_tokens, total_tokens, pct, context_window),
+                        &format!("{prompt_tokens}+{completion_tokens}={total_tokens} ({pct}% of {context_window})"),
                         Color::AnsiValue(117),
                     );
                 }
             }
             AgentEvent::StateChanged { from, to } => {
                 if self.view_mode == ViewMode::Audit {
-                    self.print_trace("State", &format!("{} → {}", from, to), Color::AnsiValue(245));
+                    self.print_trace("State", &format!("{from} → {to}"), Color::AnsiValue(245));
                 }
             }
-            AgentEvent::Retrying { attempt, max_attempts, reason } => {
-                self.update_spinner(format!("Retrying ({}/{})… {}", attempt, max_attempts, reason));
+            AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                reason,
+            } => {
+                self.update_spinner(format!("Retrying ({attempt}/{max_attempts})… {reason}"));
             }
             AgentEvent::Compacting { active } => {
                 if active {
                     self.update_spinner("Compacting context history…".to_string());
                 } else {
-                    self.print_trace("Action", "Context compaction complete", Color::AnsiValue(114));
+                    self.print_trace(
+                        "Action",
+                        "Context compaction complete",
+                        Color::AnsiValue(114),
+                    );
                 }
             }
-            AgentEvent::ToolProgress { tool_id: _, message } => {
+            AgentEvent::ToolProgress {
+                tool_id: _,
+                message,
+            } => {
                 if self.view_mode != ViewMode::Focus {
                     self.update_spinner(message);
                 }

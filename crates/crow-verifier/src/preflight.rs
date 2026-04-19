@@ -89,7 +89,7 @@ async fn cargo_check_preflight(
         match executor::execute(sandbox_root, &cmd, &exec_config, &aci_config, cache_root).await {
             Ok(r) => r,
             Err(e) => {
-                return PreflightResult::Skipped(format!("cargo check failed to execute: {}", e));
+                return PreflightResult::Skipped(format!("cargo check failed to execute: {e}"));
             }
         };
 
@@ -153,7 +153,7 @@ async fn tsc_check_preflight(
         match executor::execute(sandbox_root, &cmd, &exec_config, &aci_config, cache_root).await {
             Ok(r) => r,
             Err(e) => {
-                return PreflightResult::Skipped(format!("tsc failed to execute: {}", e));
+                return PreflightResult::Skipped(format!("tsc failed to execute: {e}"));
             }
         };
 
@@ -165,7 +165,7 @@ async fn tsc_check_preflight(
     let snippet = if result.test_run.truncated_log.len() > 1000 {
         result.test_run.truncated_log[..1000].to_string() + "...\n"
     } else {
-        result.test_run.truncated_log.clone()
+        result.test_run.truncated_log
     };
 
     PreflightResult::Errors(vec![CompileDiagnostic {

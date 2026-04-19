@@ -12,13 +12,12 @@ impl std::fmt::Display for HydrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HydrationError::IoError { path, reason } => {
-                write!(f, "Failed to hydrate {}: {}", path, reason)
+                write!(f, "Failed to hydrate {path}: {reason}")
             }
             HydrationError::SnapshotMismatch { expected, actual } => {
                 write!(
                     f,
-                    "Snapshot anchor mismatch! Plan was generated against '{}' but we are hydrating against '{}'. The timeline has drifted.",
-                    actual, expected
+                    "Snapshot anchor mismatch! Plan was generated against '{actual}' but we are hydrating against '{expected}'. The timeline has drifted."
                 )
             }
         }

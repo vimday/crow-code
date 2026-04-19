@@ -185,7 +185,7 @@ impl CrowConfig {
                         global_llm.prompt_caching = llm.prompt_caching;
                     }
                     if llm.reasoning_effort.is_some() {
-                        global_llm.reasoning_effort = llm.reasoning_effort.clone();
+                        global_llm.reasoning_effort = llm.reasoning_effort;
                     }
                 } else {
                     file_cfg.llm = Some(llm);
@@ -197,7 +197,7 @@ impl CrowConfig {
                         global_ws.map_budget = ws.map_budget;
                     }
                     if ws.write_mode.is_some() {
-                        global_ws.write_mode = ws.write_mode.clone();
+                        global_ws.write_mode = ws.write_mode;
                     }
                 } else {
                     file_cfg.workspace = Some(ws);
@@ -239,8 +239,7 @@ impl CrowConfig {
                 "on" | "true" | "1" | "yes" => true,
                 "off" | "false" | "0" | "no" => false,
                 other => anyhow::bail!(
-                    "Invalid LLM_JSON_MODE='{}'. Expected: on|off|true|false|1|0|yes|no",
-                    other
+                    "Invalid LLM_JSON_MODE='{other}'. Expected: on|off|true|false|1|0|yes|no"
                 ),
             },
             Err(_) => file_llm.json_mode.unwrap_or(true),
@@ -276,14 +275,12 @@ impl CrowConfig {
             Some(other) => {
                 let url = base_url.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Custom provider '{}' requires an explicitly set LLM_BASE_URL.",
-                        other
+                        "Custom provider '{other}' requires an explicitly set LLM_BASE_URL."
                     )
                 })?;
                 let m = model.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Custom provider '{}' requires an explicitly set LLM_MODEL.",
-                        other
+                        "Custom provider '{other}' requires an explicitly set LLM_MODEL."
                     )
                 })?;
                 (ProviderKind::Custom(other.to_string()), url, m)
@@ -291,11 +288,10 @@ impl CrowConfig {
             None => {
                 // If base_url is specified but not provider, treat as custom.
                 if let Some(url) = base_url {
-                    let m = model.clone().ok_or_else(|| {
+                    let m = model.ok_or_else(|| {
                         anyhow::anyhow!(
-                            "LLM_BASE_URL is set to '{}' but model is not specified. \
-                         Please set LLM_MODEL explicitly when using a custom provider.",
-                            url
+                            "LLM_BASE_URL is set to '{url}' but model is not specified. \
+                         Please set LLM_MODEL explicitly when using a custom provider."
                         )
                     })?;
                     (ProviderKind::Custom("custom".into()), url, m)
@@ -329,7 +325,7 @@ impl CrowConfig {
                 }
                 _ => "Set OPENAI_API_KEY or CROW_API_KEY.",
             };
-            anyhow::bail!("Missing API Key for {:?}. {}", provider_kind, hint);
+            anyhow::bail!("Missing API Key for {provider_kind:?}. {hint}");
         }
 
         let max_tokens = env::var("LLM_MAX_TOKENS")
@@ -403,10 +399,7 @@ impl CrowConfig {
         // ── Write Mode ──
         let write_mode = match env::var("CROW_WRITE_MODE") {
             Ok(v) => WriteMode::from_str_opt(&v).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid CROW_WRITE_MODE='{}'. Expected: sandbox|write|danger",
-                    v
-                )
+                anyhow::anyhow!("Invalid CROW_WRITE_MODE='{v}'. Expected: sandbox|write|danger")
             })?,
             Err(_) => file_ws
                 .write_mode

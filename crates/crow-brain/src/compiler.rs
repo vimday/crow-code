@@ -215,8 +215,7 @@ impl IntentCompiler {
             // ONLY contract for producing valid AgentAction JSON.
             let schema_guide = crate::schema::intent_plan_schema();
             conversation.push(ChatMessage::system(format!(
-                "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
-                schema_guide
+                "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{schema_guide}"
             )));
         }
 
@@ -243,12 +242,11 @@ impl IntentCompiler {
                     if let Err(reason) = action.validate() {
                         conversation.push(ChatMessage::assistant(response.clone()));
                         conversation.push(ChatMessage::user(format!(
-                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {}\n\nPlease fix and resubmit.",
-                            reason
+                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {reason}\n\nPlease fix and resubmit."
                         )));
                         // Use a synthetic serde error for the error list
                         errors.push(
-                            serde_json::from_str::<()>(&format!("\"validation: {}\"", reason))
+                            serde_json::from_str::<()>(&format!("\"validation: {reason}\""))
                                 .unwrap_err(),
                         );
                         continue;
@@ -260,8 +258,7 @@ impl IntentCompiler {
                     // assistant + user messages for the next retry.
                     conversation.push(ChatMessage::assistant(response.clone()));
                     conversation.push(ChatMessage::user(format!(
-                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{}\n\nPlease fix the JSON to strictly conform to the schema.",
-                        e
+                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{e}\n\nPlease fix the JSON to strictly conform to the schema."
                     )));
                     errors.push(e);
                 }

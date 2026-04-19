@@ -113,9 +113,9 @@ impl fmt::Display for VerifierError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SandboxNotFound(p) => write!(f, "sandbox not found: {}", p.display()),
-            Self::CommandNotFound(cmd) => write!(f, "command not found: {}", cmd),
-            Self::SpawnFailed(e) => write!(f, "spawn failed: {}", e),
-            Self::InvalidConfig(msg) => write!(f, "invalid config: {}", msg),
+            Self::CommandNotFound(cmd) => write!(f, "command not found: {cmd}"),
+            Self::SpawnFailed(e) => write!(f, "spawn failed: {e}"),
+            Self::InvalidConfig(msg) => write!(f, "invalid config: {msg}"),
         }
     }
 }

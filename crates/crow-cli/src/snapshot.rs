@@ -42,7 +42,7 @@ pub fn resolve_snapshot_id(workspace_root: &Path) -> SnapshotId {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    SnapshotId(format!("ts-{:x}", ts))
+    SnapshotId(format!("ts-{ts:x}"))
 }
 
 /// Run `git rev-parse HEAD` in the workspace root.
@@ -71,7 +71,7 @@ fn git_head_hash(workspace_root: &Path) -> Option<String> {
 
     let is_dirty = !status_output.stdout.is_empty();
     if is_dirty {
-        Some(format!("{}-dirty", hash))
+        Some(format!("{hash}-dirty"))
     } else {
         Some(hash)
     }
@@ -207,7 +207,7 @@ fn manifest_hash(workspace_root: &Path) -> Option<String> {
         }
     }
 
-    Some(format!("{:016x}", hash))
+    Some(format!("{hash:016x}"))
 }
 
 #[cfg(test)]

@@ -111,8 +111,7 @@ pub(crate) async fn warm_build_cache(
         }
         Err(e) => {
             observer.handle_event(crate::event::AgentEvent::Log(format!(
-                "    ⚠️  Build cache warm-up failed: {:?} — continuing without cache",
-                e
+                "    ⚠️  Build cache warm-up failed: {e:?} — continuing without cache"
             )));
         }
     }
@@ -131,55 +130,81 @@ pub(crate) async fn apply_winning_plan(
     match cfg.write_mode {
         crate::config::WriteMode::SandboxOnly => {
             observer.handle_event(crate::event::AgentEvent::Log("  📦 Write mode: sandbox-only — changes remain in sandbox (not applied to workspace)".into()));
-            observer.handle_event(crate::event::AgentEvent::Log("     Use CROW_WRITE_MODE=write to enable workspace application.".into()));
+            observer.handle_event(crate::event::AgentEvent::Log(
+                "     Use CROW_WRITE_MODE=write to enable workspace application.".into(),
+            ));
         }
         crate::config::WriteMode::WorkspaceWrite => {
             observer.handle_event(crate::event::AgentEvent::Log(
-                "  ✍️  Write mode: workspace-write — applying verified changes to workspace...".into()
+                "  ✍️  Write mode: workspace-write — applying verified changes to workspace..."
+                    .into(),
             ));
             if let Err(e) =
                 crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
             {
-                observer.handle_event(crate::event::AgentEvent::Log(format!("  ❌ Failed to apply to workspace: {:?}", e)));
-                observer.handle_event(crate::event::AgentEvent::Log(format!("     Sandbox remains at: {}", sandbox_path.display())));
-                anyhow::bail!("Workspace application failed: {:?}", e);
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "  ❌ Failed to apply to workspace: {e:?}"
+                )));
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "     Sandbox remains at: {}",
+                    sandbox_path.display()
+                )));
+                anyhow::bail!("Workspace application failed: {e:?}");
             } else {
-                observer.handle_event(crate::event::AgentEvent::Log("  ✅ Workspace updated successfully.".into()));
+                observer.handle_event(crate::event::AgentEvent::Log(
+                    "  ✅ Workspace updated successfully.".into(),
+                ));
                 if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, hydrated_plan)
                 {
-                    observer.handle_event(crate::event::AgentEvent::Log(format!("  ⚠️  Could not automatically commit changes: {}", e)));
+                    observer.handle_event(crate::event::AgentEvent::Log(format!(
+                        "  ⚠️  Could not automatically commit changes: {e}"
+                    )));
                 } else {
-                    observer.handle_event(crate::event::AgentEvent::Log("  ✅ Changes committed to git timeline.".into()));
+                    observer.handle_event(crate::event::AgentEvent::Log(
+                        "  ✅ Changes committed to git timeline.".into(),
+                    ));
                 }
             }
         }
         crate::config::WriteMode::DangerFullAccess => {
             observer.handle_event(crate::event::AgentEvent::Log(
-                "  ⚠️  Write mode: danger-full-access — applying without additional checks...".into()
+                "  ⚠️  Write mode: danger-full-access — applying without additional checks..."
+                    .into(),
             ));
             if let Err(e) =
                 crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
             {
-                observer.handle_event(crate::event::AgentEvent::Log(format!("  ❌ Failed to apply to workspace: {:?}", e)));
-                anyhow::bail!("Workspace application failed: {:?}", e);
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "  ❌ Failed to apply to workspace: {e:?}"
+                )));
+                anyhow::bail!("Workspace application failed: {e:?}");
             } else {
-                observer.handle_event(crate::event::AgentEvent::Log("  ✅ Workspace updated.".into()));
+                observer.handle_event(crate::event::AgentEvent::Log(
+                    "  ✅ Workspace updated.".into(),
+                ));
                 if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, hydrated_plan)
                 {
-                    observer.handle_event(crate::event::AgentEvent::Log(format!("  ⚠️  Could not automatically commit changes: {}", e)));
+                    observer.handle_event(crate::event::AgentEvent::Log(format!(
+                        "  ⚠️  Could not automatically commit changes: {e}"
+                    )));
                 } else {
-                    observer.handle_event(crate::event::AgentEvent::Log("  ✅ Changes committed to git timeline.".into()));
+                    observer.handle_event(crate::event::AgentEvent::Log(
+                        "  ✅ Changes committed to git timeline.".into(),
+                    ));
                 }
             }
         }
     }
 
     if cfg.write_mode != crate::config::WriteMode::SandboxOnly {
-        let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanApplied {
-            plan_id: plan_id.to_string(),
-            snapshot_id: snapshot_id.clone(),
-            timestamp: chrono::Utc::now(),
-        });
+        let _ = ledger
+            .lock()
+            .unwrap()
+            .append(crow_workspace::ledger::LedgerEvent::PlanApplied {
+                plan_id: plan_id.to_string(),
+                snapshot_id: snapshot_id.clone(),
+                timestamp: chrono::Utc::now(),
+            });
     }
 
     Ok(())
@@ -199,27 +224,38 @@ pub(crate) async fn run_mcts_crucible(
     observer: &mut dyn crate::event::EventHandler,
 ) -> Result<Option<crate::mcts::BranchOutcome>> {
     // 1. Initial Epistemic Loop (Serial Recon) — with hard timeout
-    observer.handle_event(crate::event::AgentEvent::Log("Entering Epistemic Recon Loop (MCTS Pre-exploration)...".into()));
+    observer.handle_event(crate::event::AgentEvent::Log(
+        "Entering Epistemic Recon Loop (MCTS Pre-exploration)...".into(),
+    ));
     let baseline_plan = match tokio::time::timeout(
         std::time::Duration::from_secs(180),
         epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, observer),
-    ).await {
+    )
+    .await
+    {
         Ok(result) => result?,
         Err(_) => {
             observer.handle_event(crate::event::AgentEvent::Error(
-                "MCTS pre-exploration timed out after 3 minutes (possible network hang). Aborting.".into()
+                "MCTS pre-exploration timed out after 3 minutes (possible network hang). Aborting."
+                    .into(),
             ));
             anyhow::bail!("MCTS pre-exploration timed out after 180s");
         }
     };
 
     if baseline_plan.operations.is_empty() {
-        observer.handle_event(crate::event::AgentEvent::Log("Conversational Intent Detected (No codebase changes proposed)".into()));
-        observer.handle_event(crate::event::AgentEvent::Markdown(baseline_plan.rationale.clone()));
+        observer.handle_event(crate::event::AgentEvent::Log(
+            "Conversational Intent Detected (No codebase changes proposed)".into(),
+        ));
+        observer.handle_event(crate::event::AgentEvent::Markdown(
+            baseline_plan.rationale.clone(),
+        ));
         return Ok(None);
     }
 
-    observer.handle_event(crate::event::AgentEvent::Log("Seeding baseline plan into MCTS branch 0...".into()));
+    observer.handle_event(crate::event::AgentEvent::Log(
+        "Seeding baseline plan into MCTS branch 0...".into(),
+    ));
 
     // Dynamic MCTS Downgrade for Non-code Changes
     // If the LLM just generated a pure documentation edit or a simple config,
@@ -288,7 +324,8 @@ pub(crate) async fn run_mcts_crucible(
 
             // Instead of printing diffuse directly to terminal over Ratatui, log it.
             observer.handle_event(crate::event::AgentEvent::Log(format!(
-                "Winning Patch (Branch {}) passed verifier.\nEvidence:\n{}", winner.branch_id, winner.log
+                "Winning Patch (Branch {}) passed verifier.\nEvidence:\n{}",
+                winner.branch_id, winner.log
             )));
 
             return Ok(Some(winner));
@@ -296,8 +333,7 @@ pub(crate) async fn run_mcts_crucible(
 
         // All branches failed. Feed diagnostics back and re-derive baseline.
         observer.handle_event(crate::event::AgentEvent::Log(format!(
-            "[❗] MCTS Round {} failed! Feeding diagnostics back to LLM...",
-            mcts_round
+            "[❗] MCTS Round {mcts_round} failed! Feeding diagnostics back to LLM..."
         )));
         let merged = crate::mcts::merge_diagnostics(&outcomes);
         messages.push_verifier_result("MCTS_AllBranchesFailed", &merged);
@@ -306,10 +342,14 @@ pub(crate) async fn run_mcts_crucible(
         // feedback. This ensures branch 0 in the next round gets an
         // informed plan instead of repeating the same stale one.
         if mcts_round < actual_mcts_config.max_rounds {
-            observer.handle_event(crate::event::AgentEvent::Log("  🧠 Re-deriving baseline plan from failure feedback...".into()));
+            observer.handle_event(crate::event::AgentEvent::Log(
+                "  🧠 Re-deriving baseline plan from failure feedback...".into(),
+            ));
             match compiler.compile_action(&messages.as_messages()).await {
                 Ok(crow_patch::AgentAction::SubmitPlan { plan }) => {
-                    observer.handle_event(crate::event::AgentEvent::Log("    ✅ New baseline plan generated for next round".into()));
+                    observer.handle_event(crate::event::AgentEvent::Log(
+                        "    ✅ New baseline plan generated for next round".into(),
+                    ));
                     current_baseline = plan;
                 }
                 Ok(other) => {
@@ -326,8 +366,7 @@ pub(crate) async fn run_mcts_crucible(
                 }
                 Err(e) => {
                     observer.handle_event(crate::event::AgentEvent::Log(format!(
-                        "    ⚠️  Baseline re-derivation failed: {:?} — reusing previous",
-                        e
+                        "    ⚠️  Baseline re-derivation failed: {e:?} — reusing previous"
                     )));
                 }
             }

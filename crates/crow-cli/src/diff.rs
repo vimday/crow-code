@@ -15,9 +15,9 @@ pub fn generate_patch_text(source_root: &Path, sandbox_root: &Path, op: &EditOp)
                 full_patch_text.push_str(&format!("diff --crow /dev/null b/{}\n", path.as_str()));
                 full_patch_text.push_str("--- /dev/null\n");
                 full_patch_text.push_str(&format!("+++ b/{}\n", path.as_str()));
-                full_patch_text.push_str(&format!("@@ -0,0 +1,{} @@\n", added));
+                full_patch_text.push_str(&format!("@@ -0,0 +1,{added} @@\n"));
                 for line in content.lines() {
-                    full_patch_text.push_str(&format!("+{}\n", line));
+                    full_patch_text.push_str(&format!("+{line}\n"));
                 }
             }
         }
@@ -30,7 +30,7 @@ pub fn generate_patch_text(source_root: &Path, sandbox_root: &Path, op: &EditOp)
                 full_patch_text.push_str(&format!("--- a/{}\n", path.as_str()));
                 full_patch_text.push_str(&format!("+++ b/{}\n", path.as_str()));
                 for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
-                    full_patch_text.push_str(&format!("{}", hunk));
+                    full_patch_text.push_str(&format!("{hunk}"));
                 }
             }
         }
@@ -40,9 +40,9 @@ pub fn generate_patch_text(source_root: &Path, sandbox_root: &Path, op: &EditOp)
                 full_patch_text.push_str(&format!("diff --crow a/{} /dev/null\n", path.as_str()));
                 full_patch_text.push_str(&format!("--- a/{}\n", path.as_str()));
                 full_patch_text.push_str("+++ /dev/null\n");
-                full_patch_text.push_str(&format!("@@ -1,{} +0,0 @@\n", removed));
+                full_patch_text.push_str(&format!("@@ -1,{removed} +0,0 @@\n"));
                 for line in content.lines() {
-                    full_patch_text.push_str(&format!("-{}\n", line));
+                    full_patch_text.push_str(&format!("-{line}\n"));
                 }
             }
         }
@@ -143,7 +143,7 @@ fn print_file_stat(path: &str, added: usize, removed: usize, op: &str) {
     let path_disp = format!("{}{}", display_path, " ".repeat(pad));
 
     let a_str = if added > 0 {
-        format!("+{}", added)
+        format!("+{added}")
             .with(crossterm::style::Color::AnsiValue(114))
             .to_string()
     } else {
@@ -151,7 +151,7 @@ fn print_file_stat(path: &str, added: usize, removed: usize, op: &str) {
     };
 
     let r_str = if removed > 0 {
-        format!("-{}", removed)
+        format!("-{removed}")
             .with(crossterm::style::Color::AnsiValue(203))
             .to_string()
     } else {
@@ -188,7 +188,7 @@ fn print_file_stat(path: &str, added: usize, removed: usize, op: &str) {
             .to_string();
     }
 
-    let total_stat = format!("{:>18} {:>18}", a_str, r_str);
+    let total_stat = format!("{a_str:>18} {r_str:>18}");
 
     println!(
         "    {} |{}| {} [{}]",

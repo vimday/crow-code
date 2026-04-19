@@ -85,7 +85,7 @@ impl ReqwestLlmClient {
         if let Some(ref key) = config.api_key {
             headers.insert(
                 header::AUTHORIZATION,
-                header::HeaderValue::from_str(&format!("Bearer {}", key))
+                header::HeaderValue::from_str(&format!("Bearer {key}"))
                     .map_err(|e| BrainError::Config(e.to_string()))?,
             );
         }
@@ -126,7 +126,7 @@ impl ReqwestLlmClient {
         temperature: Option<f64>,
     ) -> Result<String, BrainError> {
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{}/chat/completions", base);
+        let url = format!("{base}/chat/completions");
 
         // Build message array, optionally with Anthropic-style prompt caching.
         // When prompt_caching is enabled, system messages use structured content
@@ -222,20 +222,19 @@ impl ReqwestLlmClient {
                                 break; // Not a transient error, move on
                             } else {
                                 println!(
-                                    "    ⚠️ API returned transient error ({}). Retrying...",
-                                    final_status
+                                    "    ⚠️ API returned transient error ({final_status}). Retrying..."
                                 );
                             }
                         }
                         Err(e) => {
-                            println!("    ⚠️ API stream text read failed (IncompleteMessage?): {}. Retrying...", e);
+                            println!("    ⚠️ API stream text read failed (IncompleteMessage?): {e}. Retrying...");
                             final_status = status.as_u16();
                             last_error = Some(e);
                         }
                     }
                 }
                 Err(e) => {
-                    println!("    ⚠️ API connection transport failed: {}. Retrying...", e);
+                    println!("    ⚠️ API connection transport failed: {e}. Retrying...");
                     last_error = Some(e);
                 }
             }
@@ -247,8 +246,7 @@ impl ReqwestLlmClient {
                     return Err(BrainError::ApiError {
                         status: final_status,
                         body: format!(
-                            "Network/transient errors maxed out. Last content: {}",
-                            raw_text
+                            "Network/transient errors maxed out. Last content: {raw_text}"
                         ),
                     });
                 }
@@ -313,7 +311,7 @@ impl ReqwestLlmClient {
         use futures_util::StreamExt;
 
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{}/chat/completions", base);
+        let url = format!("{base}/chat/completions");
 
         // Build message array with prompt caching support (matching non-streaming path)
         let api_messages: Vec<serde_json::Value> = if self.prompt_caching {
@@ -464,7 +462,7 @@ impl ReqwestLlmClient {
                     }
                 }
                 Err(e) => {
-                    return Err(BrainError::Config(format!("Stream error: {}", e)));
+                    return Err(BrainError::Config(format!("Stream error: {e}")));
                 }
             }
         }

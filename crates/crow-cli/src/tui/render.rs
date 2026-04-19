@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -83,11 +83,8 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
     if let Some(action) = &state.active_action {
         let frame = SPINNER[state.spinner_idx % SPINNER.len()];
         let item = ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("{}{} ", GUTTER, frame),
-                Style::default().fg(ACCENT_CYAN),
-            ),
-            Span::styled(action.clone(), Style::default().fg(ACCENT_CYAN)),
+            format!("{GUTTER}{frame} ").fg(ACCENT_CYAN),
+            action.clone().fg(ACCENT_CYAN),
         ]));
         push_item!(item);
     }
@@ -105,13 +102,8 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
                 for (i, line) in cell.payload.lines().enumerate() {
                     let prefix = if i == 0 { USER_PREFIX } else { "  " };
                     lines.push(ListItem::new(Line::from(vec![
-                        Span::styled(
-                            prefix,
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD | Modifier::DIM),
-                        ),
-                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        prefix.white().bold().dim(),
+                        line.to_string().white(),
                     ])));
                 }
                 lines.push(ListItem::new(Line::from("")));
@@ -120,55 +112,46 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
                 for (i, line) in cell.payload.lines().enumerate() {
                     let prefix = if i == 0 { AGENT_PREFIX } else { "  " };
                     lines.push(ListItem::new(Line::from(vec![
-                        Span::styled(
-                            prefix,
-                            Style::default().fg(DIM_GRAY).add_modifier(Modifier::DIM),
-                        ),
-                        Span::raw(line.to_string()),
+                        prefix.fg(DIM_GRAY).dim(),
+                        line.into(),
                     ])));
                 }
             }
             CellKind::Evidence => {
                 lines.push(ListItem::new(Line::from(vec![
-                    Span::styled(format!("{}◎ ", GUTTER), Style::default().fg(MID_GRAY)),
-                    Span::styled(
-                        cell.payload.clone(),
-                        Style::default().fg(MID_GRAY).add_modifier(Modifier::DIM),
-                    ),
+                    format!("{GUTTER}◎ ").fg(MID_GRAY),
+                    cell.payload.clone().fg(MID_GRAY).dim(),
                 ])));
             }
             CellKind::Action => {
                 lines.push(ListItem::new(Line::from(vec![
-                    Span::styled(format!("{}▰ ", GUTTER), Style::default().fg(ACCENT_GREEN)),
-                    Span::styled(cell.payload.clone(), Style::default().fg(ACCENT_GREEN)),
+                    format!("{GUTTER}▰ ").fg(ACCENT_GREEN),
+                    cell.payload.clone().fg(ACCENT_GREEN),
                 ])));
             }
             CellKind::Result => {
                 lines.push(ListItem::new(Line::from(vec![
-                    Span::styled(format!("{}✓ ", GUTTER), Style::default().fg(VERDICT_BLUE)),
-                    Span::styled(cell.payload.clone(), Style::default().fg(VERDICT_BLUE)),
+                    format!("{GUTTER}✓ ").fg(VERDICT_BLUE),
+                    cell.payload.clone().fg(VERDICT_BLUE),
                 ])));
             }
             CellKind::Log => {
                 for (i, line) in cell.payload.lines().enumerate() {
                     let prefix = if i == 0 {
-                        format!("{}• ", GUTTER)
+                        format!("{GUTTER}• ")
                     } else {
-                        format!("{}  ", GUTTER)
+                        format!("{GUTTER}  ")
                     };
                     lines.push(ListItem::new(Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(DIM_GRAY)),
-                        Span::styled(line.to_string(), Style::default().fg(MID_GRAY)),
+                        prefix.fg(DIM_GRAY),
+                        line.to_string().fg(MID_GRAY),
                     ])));
                 }
             }
             CellKind::Error => {
                 lines.push(ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("{}✘ ", GUTTER),
-                        Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(cell.payload.clone(), Style::default().fg(ACCENT_RED)),
+                    format!("{GUTTER}✘ ").fg(ACCENT_RED).bold(),
+                    cell.payload.clone().fg(ACCENT_RED),
                 ])));
             }
         }
@@ -197,12 +180,7 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
         return;
     }
 
-    let mut spans = vec![Span::styled(
-        "⚡ Swarm Active | ",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )];
+    let mut spans = vec!["⚡ Swarm Active | ".yellow().bold()];
 
     let frame = SPINNER[state.spinner_idx % SPINNER.len()];
 
@@ -212,16 +190,14 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
         } else {
             task.clone()
         };
-        spans.push(Span::styled(
-            format!("{}{} [{}]", frame, id, display_task),
-            Style::default().fg(Color::Cyan),
-        ));
+        spans.push(format!("{frame}{id} [{display_task}]").cyan());
         if i < state.active_swarms.len() - 1 {
             spans.push(Span::raw("   "));
         }
     }
 
-    let p = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Indexed(236)));
+    let p = Paragraph::new(Line::from(spans))
+        .style(ratatui::style::Style::default().bg(Color::Indexed(236)));
     f.render_widget(p, area);
 }
 
@@ -260,10 +236,7 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
 
     let right = format!(" {} ", right_parts.join(" · "));
 
-    let left_span = Line::from(vec![
-        Span::styled(left, Style::default().fg(DIM_GRAY)),
-        Span::styled(git_info, Style::default().fg(risk_color)),
-    ]);
+    let left_span = Line::from(vec![left.fg(DIM_GRAY), git_info.fg(risk_color)]);
 
     let left_w = left_span.width().min(area.width as usize);
     let right_w = right.chars().count().min(area.width as usize);
@@ -278,12 +251,12 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         .split(area);
 
     let left_widget = Paragraph::new(left_span);
-    let right_widget = Paragraph::new(right).style(Style::default().fg(DIM_GRAY));
+    let right_widget = Paragraph::new(right.fg(DIM_GRAY));
 
     // Fill middle with `─`
     let mid_w = status_chunks[1].width as usize;
     let mid_fill = "─".repeat(mid_w);
-    let mid_widget = Paragraph::new(mid_fill).style(Style::default().fg(Color::Indexed(236)));
+    let mid_widget = Paragraph::new(mid_fill.fg(Color::Indexed(236)));
 
     f.render_widget(left_widget, status_chunks[0]);
     f.render_widget(mid_widget, status_chunks[1]);
@@ -298,29 +271,25 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     // If there is a pending command approval, render the security prompt instead
     if let crate::tui::state::ApprovalState::PendingCommand(ref cmd) = state.approval_state {
-        let warning_style = Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD);
-        composer_lines.push(Line::from(vec![Span::styled(
-            "⚠️  Security Approval Required",
-            warning_style,
-        )]));
+        let warning_style = ratatui::style::Style::default().fg(ACCENT_RED).bold();
         composer_lines.push(Line::from(vec![
-            Span::styled("Command: ", Style::default().fg(DIM_GRAY)),
-            Span::raw(cmd.clone()),
+            Span::styled("⚠️  Security Approval Required", warning_style)
         ]));
         composer_lines.push(Line::from(vec![
-            Span::styled(
-                "Execute this command? [y/N/a (always)]: ",
-                Style::default()
-                    .fg(Color::Indexed(221))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("█", Style::default().fg(ACCENT_CYAN)),
+            "Command: ".fg(DIM_GRAY),
+            cmd.clone().into(),
+        ]));
+        composer_lines.push(Line::from(vec![
+            "Execute this command? [y/N/a (always)]: "
+                .fg(Color::Indexed(221))
+                .bold(),
+            "█".fg(ACCENT_CYAN),
         ]));
 
         let composer_widget = Paragraph::new(composer_lines).block(
             Block::default()
                 .borders(Borders::TOP)
-                .border_style(Style::default().fg(ACCENT_RED)), // Red border for danger
+                .border_style(ratatui::style::Style::default().fg(ACCENT_RED)), // Red border for danger
         );
 
         f.render_widget(composer_widget, area);
@@ -333,7 +302,7 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
     let (before_cursor, after_cursor) = if text.is_empty() {
         ("".to_string(), "".to_string())
     } else {
-        let byte_idx = text.chars().take(cursor_idx).map(|c| c.len_utf8()).sum();
+        let byte_idx = text.chars().take(cursor_idx).map(char::len_utf8).sum();
         let b = text[..byte_idx].to_string();
         let a = text[byte_idx..].to_string();
         (b, a)
@@ -348,13 +317,8 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     if text.is_empty() {
         composer_lines.push(Line::from(vec![
-            Span::styled(
-                "❯ ",
-                Style::default()
-                    .fg(prompt_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(block_cursor, Style::default().fg(ACCENT_CYAN)),
+            "❯ ".fg(prompt_color).bold(),
+            block_cursor.fg(ACCENT_CYAN),
         ]));
     } else {
         // Reconstruct the lines with the cursor inserted
@@ -384,9 +348,11 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
             after_first
         };
 
-        let cursor_style = Style::default().fg(Color::Black).bg(ACCENT_CYAN);
+        let cursor_style = ratatui::style::Style::default()
+            .bg(ACCENT_CYAN)
+            .fg(Color::Black);
         mid_line.push(Span::styled(cursor_char.clone(), cursor_style));
-        mid_line.push(Span::raw(after_rest));
+        mid_line.push(after_rest.into());
 
         if cursor_char == block_cursor && after_first.starts_with('\n') {
             mid_line.push(Span::raw("\n"));
@@ -400,12 +366,7 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
         for (i, line_spans) in reconstructed_lines.into_iter().enumerate() {
             let prefix = if i == 0 { "❯ " } else { "  " };
-            let mut final_spans = vec![Span::styled(
-                prefix,
-                Style::default()
-                    .fg(prompt_color)
-                    .add_modifier(Modifier::BOLD),
-            )];
+            let mut final_spans = vec![prefix.fg(prompt_color).bold()];
             final_spans.extend(line_spans);
             composer_lines.push(Line::from(final_spans));
         }
@@ -414,7 +375,7 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
     let composer_widget = Paragraph::new(composer_lines).block(
         Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::Indexed(236))),
+            .border_style(ratatui::style::Style::default().fg(Color::Indexed(236))),
     );
 
     f.render_widget(composer_widget, area);
@@ -450,18 +411,20 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, query: &str, selected_i
     let mut items = Vec::new();
     for (i, (cmd, desc)) in commands.iter().enumerate() {
         let style = if i == selected_idx {
-            Style::default().bg(Color::Indexed(238)).fg(Color::White)
+            ratatui::style::Style::default()
+                .bg(Color::Indexed(238))
+                .fg(Color::White)
         } else {
-            Style::default().fg(Color::Indexed(245))
+            ratatui::style::Style::default().fg(Color::Indexed(245))
         };
-        items.push(ListItem::new(format!("{:<15} {}", cmd, desc)).style(style));
+        items.push(ListItem::new(format!("{cmd:<15} {desc}")).style(style));
     }
 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Command Palette ({}) ", query))
-            .border_style(Style::default().fg(ACCENT_CYAN)),
+            .title(format!(" Command Palette ({query}) "))
+            .border_style(ratatui::style::Style::default().fg(ACCENT_CYAN)),
     );
 
     f.render_widget(list, popup_area);

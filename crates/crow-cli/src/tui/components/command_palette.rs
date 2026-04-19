@@ -2,8 +2,7 @@ use crate::tui::components::Component;
 use crate::tui::state::TuiMessage;
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
+use ratatui::style::Stylize;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
@@ -70,11 +69,8 @@ impl Component for CommandPalette {
     fn render(&self, f: &mut Frame, area: Rect) {
         let palette_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " Command Palette ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
+            .border_style(ratatui::style::Style::default().dark_gray())
+            .title(" Command Palette ".bold());
 
         let input_text = format!("> {}", self.composer);
 

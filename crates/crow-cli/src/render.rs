@@ -957,9 +957,9 @@ pub fn format_tokens(n: u64) -> String {
 /// Format a cost in USD with 4 decimal places.
 pub fn format_cost(usd: f64) -> String {
     if usd < 0.01 {
-        format!("${:.4}", usd)
+        format!("${usd:.4}")
     } else {
-        format!("${:.2}", usd)
+        format!("${usd:.2}")
     }
 }
 

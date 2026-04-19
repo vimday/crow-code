@@ -26,7 +26,7 @@ impl SessionRuntime {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&cfg.workspace);
 
         let ledger = crate::open_ledger(&cfg.workspace).unwrap_or_else(|e| {
-            eprintln!("  ⚠️  Failed to open Event Ledger: {}", e);
+            eprintln!("  ⚠️  Failed to open Event Ledger: {e}");
             let fallback = std::env::temp_dir().join(format!(
                 "crow_ledger_{}_{}.jsonl",
                 snapshot_id.0,
@@ -122,20 +122,19 @@ impl SessionRuntime {
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
-                *self.cached_repo_map.lock().unwrap() = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+                *self.cached_repo_map.lock().unwrap() =
+                    Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 arc_map
             }
         };
 
-        let _ = self
-            .ledger
-            .lock()
-            .unwrap()
-            .append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
+        let _ = self.ledger.lock().unwrap().append(
+            crow_workspace::ledger::LedgerEvent::SnapshotCreated {
                 id: snapshot_id.clone(),
                 git_hash: snapshot_id.0.clone(),
                 timestamp: chrono::Utc::now(),
-            });
+            },
+        );
 
         let mut skill_dirs = Vec::new();
         if let Some(home) = dirs::home_dir() {
@@ -159,7 +158,7 @@ impl SessionRuntime {
         messages.set_system(sys_msgs);
 
         if messages.as_messages().len() <= 2 {
-            messages.push_user(format!("Task:\n{}", prompt));
+            messages.push_user(format!("Task:\n{prompt}"));
         } else {
             messages.push_user(prompt);
         }
@@ -177,7 +176,7 @@ impl SessionRuntime {
             Err(e) => {
                 observer.handle_event(crate::event::AgentEvent::Compacting { active: false });
                 observer.handle_event(crate::event::AgentEvent::Log(format!(
-                    "Warning: Context compression failed: {}", e
+                    "Warning: Context compression failed: {e}"
                 )));
             }
         }
@@ -296,7 +295,7 @@ impl SessionRuntime {
             .map_err(|e| anyhow::anyhow!(e))
             .context("Failed to build repo map")?;
         let arc_map = Arc::new(map);
-        *self.cached_repo_map.lock().unwrap() = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+        *self.cached_repo_map.lock().unwrap() = Some((snapshot_id, Arc::clone(&arc_map)));
         Ok(arc_map)
     }
 
@@ -323,7 +322,7 @@ impl SessionRuntime {
             .build();
 
         let mut messages = crate::context::ConversationManager::new(sys_msgs);
-        messages.push_user(format!("Task:\n{}", prompt));
+        messages.push_user(format!("Task:\n{prompt}"));
 
         match self.compiler.compile_action(&messages.as_messages()).await {
             Ok(action) => {
@@ -333,7 +332,7 @@ impl SessionRuntime {
                 Ok(())
             }
             Err(e) => {
-                eprintln!("\n[✗] Compilation Failed: {:?}", e);
+                eprintln!("\n[✗] Compilation Failed: {e:?}");
                 anyhow::bail!("Failed to compile AgentAction")
             }
         }
@@ -350,7 +349,7 @@ impl SessionRuntime {
         let profile = crate::scan_workspace(&self.workspace).map_err(|e| anyhow::anyhow!(e))?;
 
         let file_count = std::fs::read_dir(&self.workspace)
-            .map(|entries| entries.count())
+            .map(std::iter::Iterator::count)
             .unwrap_or(0);
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
 
@@ -389,7 +388,7 @@ impl SessionRuntime {
             .build();
 
         let mut messages = crate::context::ConversationManager::new(sys_msgs);
-        messages.push_user(format!("Task:\n{}", prompt));
+        messages.push_user(format!("Task:\n{prompt}"));
 
         let mut obs = crate::event::CliEventHandler::default();
         let compiled_plan = crate::epistemic::run_epistemic_loop(
@@ -499,7 +498,7 @@ impl SessionRuntime {
             preflight,
             verdict,
         };
-        println!("{}", report);
+        println!("{report}");
         println!("\n─── Planned Changes ───");
         crate::diff::render_plan_diff(&frozen_root, sandbox.path(), &hydrated_plan);
 
@@ -651,7 +650,7 @@ impl SessionRuntime {
             crow_verifier::preflight::PreflightResult::Errors(diags) => {
                 let summary = crow_verifier::preflight::format_diagnostics(diags);
                 eprintln!("  ❌ Preflight: {} compile error(s)", diags.len());
-                eprintln!("{}", summary);
+                eprintln!("{summary}");
                 anyhow::bail!(
                     "Resume aborted: preflight compile check failed with {} error(s).\n\
                      Re-enter the session and fix the compile errors before resuming.\n{}",
@@ -660,7 +659,7 @@ impl SessionRuntime {
                 );
             }
             crow_verifier::preflight::PreflightResult::Skipped(reason) => {
-                eprintln!("  ⚠️  Preflight skipped: {}", reason);
+                eprintln!("  ⚠️  Preflight skipped: {reason}");
             }
         }
 
@@ -680,7 +679,7 @@ impl SessionRuntime {
 
         let outcome = &result.test_run.outcome;
         if outcome != &crow_evidence::TestOutcome::Passed {
-            println!("  ❌ Resume verdict: {:?}", outcome);
+            println!("  ❌ Resume verdict: {outcome:?}");
             anyhow::bail!("Resumed session: verification failed.");
         }
         println!("  ✅ Resume verdict: PASSED");
@@ -693,13 +692,13 @@ impl SessionRuntime {
             if let Err(e) =
                 crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan)
             {
-                eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
+                eprintln!("  ❌ Failed to apply to workspace: {e:?}");
                 anyhow::bail!("Workspace mutation failed during resume.");
             }
 
             println!("  ✅ Workspace updated successfully.");
             if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, &hydrated_plan) {
-                println!("  ⚠️  Could not automatically commit changes: {}", e);
+                println!("  ⚠️  Could not automatically commit changes: {e}");
             } else {
                 println!("  ✅ Changes committed to git timeline.");
             }

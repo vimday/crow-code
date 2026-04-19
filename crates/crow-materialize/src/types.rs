@@ -185,9 +185,9 @@ impl fmt::Display for MaterializeError {
                 attempted,
                 last_error,
             } => {
-                write!(f, "all drivers failed ({:?}): {}", attempted, last_error)
+                write!(f, "all drivers failed ({attempted:?}): {last_error}")
             }
-            Self::Io(e) => write!(f, "IO error: {}", e),
+            Self::Io(e) => write!(f, "IO error: {e}"),
         }
     }
 }
@@ -220,7 +220,7 @@ pub fn materialize(config: &MaterializeConfig) -> Result<SandboxHandle, Material
         match driver::execute(driver, config) {
             Ok(handle) => return Ok(handle),
             Err(e) => {
-                last_error = format!("{}: {}", driver, e);
+                last_error = format!("{driver}: {e}");
             }
         }
     }

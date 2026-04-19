@@ -41,7 +41,7 @@ impl SkillLoader {
                 Self::load_from_folder(folder, folder, &mut skills)?;
             }
         }
-        
+
         let mut seen_names = std::collections::HashSet::new();
         skills.retain(|skill| {
             if seen_names.contains(&skill.name) {

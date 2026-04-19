@@ -57,8 +57,7 @@ pub async fn run_epistemic_loop(
         epistemic_step += 1;
         if epistemic_step > MAX_EPISTEMIC_STEPS {
             anyhow::bail!(
-                "Epistemic loop exceeded {} steps without producing a SubmitPlan. Aborting.",
-                MAX_EPISTEMIC_STEPS
+                "Epistemic loop exceeded {MAX_EPISTEMIC_STEPS} steps without producing a SubmitPlan. Aborting."
             );
         }
 
@@ -99,7 +98,7 @@ pub async fn run_epistemic_loop(
             .compile_action_streaming(&messages.as_messages(), &mut adapter)
             .await;
 
-        let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
+        let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {e:?}"))?;
 
         // If it's a SubmitPlan, return immediately before pushing to history.
         if let AgentAction::SubmitPlan { plan } = action {
@@ -147,7 +146,7 @@ pub async fn run_epistemic_loop(
             AgentAction::ReadFiles { paths, rationale } => {
                 let path_strs: Vec<String> = paths.iter().map(|p| p.as_str().to_string()).collect();
                 observer.handle_event(AgentEvent::ReadFiles(path_strs.clone()));
-                observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
+                observer.handle_event(AgentEvent::Log(format!("       Rationale: {rationale}")));
 
                 let file_contents = read_files_to_context(&paths, frozen_root);
                 let path_strings: Vec<String> =
@@ -155,8 +154,8 @@ pub async fn run_epistemic_loop(
                 messages.push_file_read(&path_strings, file_contents);
             }
             AgentAction::Recon { tool, rationale } => {
-                observer.handle_event(AgentEvent::ReconStart(format!("{:?}", tool)));
-                observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
+                observer.handle_event(AgentEvent::ReconStart(format!("{tool:?}")));
+                observer.handle_event(AgentEvent::Log(format!("       Rationale: {rationale}")));
 
                 execute_recon(&tool, frozen_root, messages, mcp_manager).await;
             }
@@ -169,7 +168,7 @@ pub async fn run_epistemic_loop(
                 rationale,
             } => {
                 observer.handle_event(AgentEvent::DelegateStart(task.clone()));
-                observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
+                observer.handle_event(AgentEvent::Log(format!("       Rationale: {rationale}")));
 
                 // Check for recursion depth via parsing previous delegation messages
                 let delegation_count = messages
@@ -225,15 +224,13 @@ pub async fn run_epistemic_loop(
                     }
                     Err(e) => {
                         observer.handle_event(AgentEvent::Error(format!(
-                            "Subagent crashed/failed: {}",
-                            e
+                            "Subagent crashed/failed: {e}"
                         )));
                         messages.push_user(format!(
                             "[SYSTEM: SUBAGENT FAILURE]\n\
                             The subagent failed to complete the delegation task.\n\
-                            Error: {}\n\
-                            You must rethink your strategy.",
-                            e
+                            Error: {e}\n\
+                            You must rethink your strategy."
                         ));
                     }
                 }
@@ -246,12 +243,15 @@ pub async fn run_epistemic_loop(
 fn action_dedup_key(action: &AgentAction) -> String {
     match action {
         AgentAction::ReadFiles { paths, .. } => {
-            let mut sorted: Vec<&str> = paths.iter().map(|p| p.as_str()).collect();
+            let mut sorted: Vec<&str> = paths
+                .iter()
+                .map(crow_patch::WorkspacePath::as_str)
+                .collect();
             sorted.sort();
             format!("read:{}", sorted.join(","))
         }
         AgentAction::Recon { tool, .. } => {
-            format!("recon:{:?}", tool)
+            format!("recon:{tool:?}")
         }
         AgentAction::SubmitPlan { .. } => "submit".to_string(),
         AgentAction::DelegateTask { task, .. } => {
@@ -358,21 +358,19 @@ async fn execute_recon(
                     };
                     messages.push_recon_result(
                         "mcp_call",
-                        &format!("{} / {}", server_name, tool_name),
+                        &format!("{server_name} / {tool_name}"),
                         &formatted_res,
                     );
                 }
                 Err(e) => {
                     messages.push_user(format!(
-                        "[MCP ERROR]\nFailed to execute {}/{}: {:?}",
-                        server_name, tool_name, e
+                        "[MCP ERROR]\nFailed to execute {server_name}/{tool_name}: {e:?}"
                     ));
                 }
             }
         } else {
             messages.push_user(format!(
-                "[MCP ERROR]\nMCP is not enabled or MCP manager unavailable, cannot call {}/{}",
-                server_name, tool_name
+                "[MCP ERROR]\nMCP is not enabled or MCP manager unavailable, cannot call {server_name}/{tool_name}"
             ));
         }
         return;
@@ -391,8 +389,7 @@ async fn execute_recon(
             Ok(c) => c,
             Err(e) => {
                 messages.push_user(format!(
-                    "[WEB FETCH ERROR]\nFailed to initialize HTTP client: {:?}",
-                    e
+                    "[WEB FETCH ERROR]\nFailed to initialize HTTP client: {e:?}"
                 ));
                 return;
             }
@@ -402,15 +399,12 @@ async fn execute_recon(
             Ok(res) => {
                 let status = res.status();
                 if !status.is_success() {
-                    messages.push_user(format!(
-                        "[WEB FETCH ERROR]\n{} returned HTTP {}",
-                        url, status
-                    ));
+                    messages.push_user(format!("[WEB FETCH ERROR]\n{url} returned HTTP {status}"));
                 } else {
                     if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE) {
                         let ct_str = ct.to_str().unwrap_or("");
                         if !ct_str.contains("text/") && !ct_str.contains("application/json") {
-                            messages.push_user(format!("[WEB FETCH ERROR]\nUnsupported Content-Type '{}'. Only text or json supported.", ct_str));
+                            messages.push_user(format!("[WEB FETCH ERROR]\nUnsupported Content-Type '{ct_str}'. Only text or json supported."));
                             return;
                         }
                     }
@@ -419,10 +413,7 @@ async fn execute_recon(
                         Ok(mut text) => {
                             let truncated = if text.len() > max_fetch_bytes {
                                 text.truncate(max_fetch_bytes);
-                                format!(
-                                    "{}...\n\n[SYSTEM WARNING: Response truncated to 50KB]",
-                                    text
-                                )
+                                format!("{text}...\n\n[SYSTEM WARNING: Response truncated to 50KB]")
                             } else {
                                 text
                             };
@@ -430,18 +421,14 @@ async fn execute_recon(
                         }
                         Err(e) => {
                             messages.push_user(format!(
-                                "[WEB FETCH ERROR]\nFailed to decode response from {}: {:?}",
-                                url, e
+                                "[WEB FETCH ERROR]\nFailed to decode response from {url}: {e:?}"
                             ));
                         }
                     }
                 }
             }
             Err(e) => {
-                messages.push_user(format!(
-                    "[WEB FETCH ERROR]\nFailed to fetch {}: {:?}",
-                    url, e
-                ));
+                messages.push_user(format!("[WEB FETCH ERROR]\nFailed to fetch {url}: {e:?}"));
             }
         }
         return;
@@ -475,8 +462,7 @@ async fn execute_recon(
         }
         Err(e) => {
             messages.push_user(format!(
-                "[RECON ERROR]\nFailed to execute `{}`: {:?}",
-                program, e
+                "[RECON ERROR]\nFailed to execute `{program}`: {e:?}"
             ));
         }
     }
@@ -523,7 +509,9 @@ fn build_recon_command(tool: &ReconAction) -> (String, Vec<String>, String) {
             let desc = format!(
                 "rg -rn -e '{}' {}",
                 pattern,
-                path.as_ref().map(|p| p.as_str()).unwrap_or(".")
+                path.as_ref()
+                    .map(crow_patch::WorkspacePath::as_str)
+                    .unwrap_or(".")
             );
             ("rg".to_string(), a, desc)
         }

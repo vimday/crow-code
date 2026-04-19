@@ -48,8 +48,8 @@ impl SandboxGuard {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("crow_vfs_{}_{}", id, seq));
-        fs::create_dir_all(&path).map_err(|e| format!("failed to create sandbox dir: {}", e))?;
+        let path = std::env::temp_dir().join(format!("crow_vfs_{id}_{seq}"));
+        fs::create_dir_all(&path).map_err(|e| format!("failed to create sandbox dir: {e}"))?;
         Ok(Self {
             path,
             disarmed: false,
@@ -97,12 +97,12 @@ fn build_skip_set(config: &MaterializeConfig) -> Result<globset::GlobSet, String
     for p in &config.skip_patterns {
         let pattern = p.trim_end_matches('/');
         let glob = globset::Glob::new(pattern)
-            .map_err(|e| format!("invalid glob pattern '{}': {}", pattern, e))?;
+            .map_err(|e| format!("invalid glob pattern '{pattern}': {e}"))?;
         builder.add(glob);
     }
     builder
         .build()
-        .map_err(|e| format!("failed to build globset: {}", e))
+        .map_err(|e| format!("failed to build globset: {e}"))
 }
 
 /// Check if an entry matches any skip pattern.
@@ -239,7 +239,7 @@ fn safe_copy_tree(
         fs::read_dir(source).map_err(|e| format!("failed to read {}: {}", source.display(), e))?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| format!("dir entry error: {}", e))?;
+        let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
         let src_path = entry.path();
@@ -252,7 +252,7 @@ fn safe_copy_tree(
 
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("file_type error: {}", e))?;
+            .map_err(|e| format!("file_type error: {e}"))?;
 
         if file_type.is_symlink() {
             recreate_symlink(&src_path, &dst_path, &config.source)?;
@@ -265,7 +265,7 @@ fn safe_copy_tree(
                 safe_copy_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
             }
         } else if file_type.is_file() {
-            fs::copy(&src_path, &dst_path).map_err(|e| format!("copy {} failed: {}", name, e))?;
+            fs::copy(&src_path, &dst_path).map_err(|e| format!("copy {name} failed: {e}"))?;
         }
     }
     Ok(())
@@ -295,10 +295,10 @@ fn apfs_clone_tree(
     skip_set: &globset::GlobSet,
     rel_prefix: &Path,
 ) -> Result<(), String> {
-    let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {}", e))?;
+    let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {e}"))?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| format!("dir entry: {}", e))?;
+        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
         let src_path = entry.path();
@@ -309,7 +309,7 @@ fn apfs_clone_tree(
             continue;
         }
 
-        let file_type = entry.file_type().map_err(|e| format!("file_type: {}", e))?;
+        let file_type = entry.file_type().map_err(|e| format!("file_type: {e}"))?;
 
         if file_type.is_symlink() {
             recreate_symlink(&src_path, &dst_path, &config.source)?;
@@ -317,7 +317,7 @@ fn apfs_clone_tree(
             if is_artifact_dir(&name, config) {
                 create_empty_artifact_dir(&dst_path)?;
             } else {
-                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
+                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {e}"))?;
                 apfs_clone_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
             }
         } else if file_type.is_file() {
@@ -327,7 +327,7 @@ fn apfs_clone_tree(
                 .map_err(|_| "invalid path for clonefile")?;
             let ret = unsafe { libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0) };
             if ret != 0 {
-                fs::copy(&src_path, &dst_path).map_err(|e| format!("copy fallback: {}", e))?;
+                fs::copy(&src_path, &dst_path).map_err(|e| format!("copy fallback: {e}"))?;
             }
         }
     }
@@ -361,10 +361,10 @@ fn hardlink_copy_tree(
     skip_set: &globset::GlobSet,
     rel_prefix: &Path,
 ) -> Result<(), String> {
-    let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {}", e))?;
+    let entries = fs::read_dir(source).map_err(|e| format!("read_dir: {e}"))?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| format!("dir entry: {}", e))?;
+        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
         let src_path = entry.path();
@@ -375,7 +375,7 @@ fn hardlink_copy_tree(
             continue;
         }
 
-        let file_type = entry.file_type().map_err(|e| format!("file_type: {}", e))?;
+        let file_type = entry.file_type().map_err(|e| format!("file_type: {e}"))?;
 
         if file_type.is_symlink() {
             recreate_symlink(&src_path, &dst_path, &config.source)?;
@@ -383,13 +383,13 @@ fn hardlink_copy_tree(
             if is_artifact_dir(&name, config) {
                 create_empty_artifact_dir(&dst_path)?;
             } else {
-                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {}", e))?;
+                fs::create_dir_all(&dst_path).map_err(|e| format!("mkdir: {e}"))?;
                 hardlink_copy_tree(&src_path, &dst_path, config, skip_set, &rel_path)?;
             }
         } else if file_type.is_file() {
             if let Err(e) = fs::hard_link(&src_path, &dst_path) {
                 fs::copy(&src_path, &dst_path)
-                    .map_err(|ce| format!("hardlink fallback failed: {} (orig: {})", ce, e))?;
+                    .map_err(|ce| format!("hardlink fallback failed: {ce} (orig: {e})"))?;
             }
         }
     }

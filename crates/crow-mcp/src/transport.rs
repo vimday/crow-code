@@ -34,7 +34,7 @@ impl StdioTransport {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // Pass stderr through for debugging
             .spawn()
-            .with_context(|| format!("Failed to spawn MCP server '{}'", cmd))?;
+            .with_context(|| format!("Failed to spawn MCP server '{cmd}'"))?;
 
         let stdin = child.stdin.take().context("Failed to open child stdin")?;
         let stdout = child.stdout.take().context("Failed to open child stdout")?;
@@ -50,15 +50,15 @@ impl StdioTransport {
             async move {
                 while let Some(msg) = stdin_rx.recv().await {
                     if let Err(e) = stdin.write_all(msg.as_bytes()).await {
-                        eprintln!("[MCP Transport] Failed to write to stdin: {}", e);
+                        eprintln!("[MCP Transport] Failed to write to stdin: {e}");
                         break;
                     }
                     if let Err(e) = stdin.write_all(b"\n").await {
-                        eprintln!("[MCP Transport] Failed to write newline to stdin: {}", e);
+                        eprintln!("[MCP Transport] Failed to write newline to stdin: {e}");
                         break;
                     }
                     if let Err(e) = stdin.flush().await {
-                        eprintln!("[MCP Transport] Failed to flush stdin: {}", e);
+                        eprintln!("[MCP Transport] Failed to flush stdin: {e}");
                         break;
                     }
                 }
@@ -99,13 +99,13 @@ impl StdioTransport {
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("[MCP Transport] Failed to parse JSON-RPC: {}", e);
-                                    eprintln!("[MCP Transport] Raw line: {}", trimmed);
+                                    eprintln!("[MCP Transport] Failed to parse JSON-RPC: {e}");
+                                    eprintln!("[MCP Transport] Raw line: {trimmed}");
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("[MCP Transport] Read error: {}", e);
+                            eprintln!("[MCP Transport] Read error: {e}");
                             break;
                         }
                     }

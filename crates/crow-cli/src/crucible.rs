@@ -188,7 +188,7 @@ impl SerialCrucible<'_> {
                 .await
             {
                 messages
-                    .compact_into_summary(format!("[SYSTEM AUTO-COMPACTED HISTORY]\n{}", summary));
+                    .compact_into_summary(format!("[SYSTEM AUTO-COMPACTED HISTORY]\n{summary}"));
             }
         }
 
@@ -244,15 +244,14 @@ impl SerialCrucible<'_> {
         {
             Ok(Ok(p)) => p,
             Ok(Err(e)) => {
-                observer.handle_event(AgentEvent::Error(format!("Hydration failed: {:?}", e)));
+                observer.handle_event(AgentEvent::Error(format!("Hydration failed: {e:?}")));
                 messages.push_user(format!(
-                    "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
-                    e
+                    "[HYDRATION FAILED]\nYour plan failed physical hydration: {e:?}\n\nPlease reflect and output a new AgentAction to fix the issue."
                 ));
                 return Ok(EpochOutcome::RetryCompile);
             }
             Err(e) => {
-                anyhow::bail!("Hydration task panicked: {:?}", e);
+                anyhow::bail!("Hydration task panicked: {e:?}");
             }
         };
 
@@ -269,11 +268,14 @@ impl SerialCrucible<'_> {
             .context("Failed to apply plan to sandbox")?;
         }
 
-        let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
-            plan_id: plan_id.clone(),
-            snapshot_id: snapshot_id.clone(),
-            timestamp: chrono::Utc::now(),
-        });
+        let _ = ledger
+            .lock()
+            .unwrap()
+            .append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
+                plan_id: plan_id.clone(),
+                snapshot_id: snapshot_id.clone(),
+                timestamp: chrono::Utc::now(),
+            });
 
         observer.handle_event(AgentEvent::ActionComplete("Plan applied to sandbox".into()));
 
@@ -292,7 +294,7 @@ impl SerialCrucible<'_> {
                         op,
                     );
                     use std::io::Write;
-                    let _ = write!(f, "{}", patch_text);
+                    let _ = write!(f, "{patch_text}");
                 }
             }
         }
@@ -302,11 +304,13 @@ impl SerialCrucible<'_> {
             use crow_verifier::preflight::{self, PreflightResult};
             // Preflight compile check
             let start_preflight = std::time::Instant::now();
-            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
-                plan_id: plan_id.clone(),
-                sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
-                timestamp: chrono::Utc::now(),
-            });
+            let _ = ledger.lock().unwrap().append(
+                crow_workspace::ledger::LedgerEvent::PreflightStarted {
+                    plan_id: plan_id.clone(),
+                    sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
+                    timestamp: chrono::Utc::now(),
+                },
+            );
 
             observer.handle_event(AgentEvent::CruciblePreflight("Compile check".into()));
 
@@ -322,12 +326,14 @@ impl SerialCrucible<'_> {
                 preflight_result,
                 PreflightResult::Clean | PreflightResult::Skipped(_)
             );
-            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PreflightTested {
-                plan_id: plan_id.clone(),
-                passed: passed_preflight,
-                duration_ms: start_preflight.elapsed().as_millis() as u64,
-                timestamp: chrono::Utc::now(),
-            });
+            let _ = ledger.lock().unwrap().append(
+                crow_workspace::ledger::LedgerEvent::PreflightTested {
+                    plan_id: plan_id.clone(),
+                    passed: passed_preflight,
+                    duration_ms: start_preflight.elapsed().as_millis() as u64,
+                    timestamp: chrono::Utc::now(),
+                },
+            );
 
             match preflight_result {
                 PreflightResult::Clean => {
@@ -342,14 +348,12 @@ impl SerialCrucible<'_> {
                         diags.len()
                     )));
                     messages.push_user(format!(
-                        "[PREFLIGHT COMPILE CHECK FAILED]\n{}\n\nPlease fix these compile errors and resubmit your plan.",
-                        summary
+                        "[PREFLIGHT COMPILE CHECK FAILED]\n{summary}\n\nPlease fix these compile errors and resubmit your plan."
                     ));
                     return Ok(EpochOutcome::RetryCompile);
                 }
                 PreflightResult::Skipped(reason) => {
-                    observer
-                        .handle_event(AgentEvent::Log(format!("Preflight skipped: {}", reason)));
+                    observer.handle_event(AgentEvent::Log(format!("Preflight skipped: {reason}")));
                 }
             }
         }
@@ -400,11 +404,13 @@ impl SerialCrucible<'_> {
                 &format!("{:?}", result.test_run.outcome),
                 &result.test_run.truncated_log,
             );
-            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
-                plan_id,
-                reason: format!("Verification failed: {:?}", result.test_run.outcome),
-                timestamp: chrono::Utc::now(),
-            });
+            let _ = ledger.lock().unwrap().append(
+                crow_workspace::ledger::LedgerEvent::PlanRolledBack {
+                    plan_id,
+                    reason: format!("Verification failed: {:?}", result.test_run.outcome),
+                    timestamp: chrono::Utc::now(),
+                },
+            );
         }
 
         Ok(EpochOutcome::RetryVerification)

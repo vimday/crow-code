@@ -255,7 +255,9 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                 let start_idx = match_indices[0];
                 lines.splice(
                     start_idx..start_idx + target_len,
-                    hunk.insert_lines.iter().map(|s| s.to_string()),
+                    hunk.insert_lines
+                        .iter()
+                        .map(std::string::ToString::to_string),
                 );
             }
             0 => {
@@ -263,10 +265,7 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
                 return Err(ApplyError::HunkConflict {
                     path: file_path.into(),
                     line: hunk.original_start,
-                    reason: format!(
-                        "context not found within ±{} lines ('{}').",
-                        max_drift, context
-                    ),
+                    reason: format!("context not found within ±{max_drift} lines ('{context}')."),
                 });
             }
             _ => {
@@ -489,12 +488,12 @@ pub fn apply_sandbox_to_workspace(
             );
             if let Err(e) = apply_plan_to_sandbox(&hydrated_workspace_plan, &live_view) {
                 apply_failed = true;
-                apply_error = format!("Workspace Applier Failed: {}", e);
+                apply_error = format!("Workspace Applier Failed: {e}");
             }
         }
         Err(e) => {
             apply_failed = true;
-            apply_error = format!("Failed to hydrate plan for live workspace: {}", e);
+            apply_error = format!("Failed to hydrate plan for live workspace: {e}");
         }
     }
 
@@ -515,7 +514,7 @@ pub fn apply_sandbox_to_workspace(
                 let _ = std::fs::remove_dir_all(&dir);
             }
         }
-        anyhow::bail!("Transaction failed and rolled back. Cause: {}", apply_error);
+        anyhow::bail!("Transaction failed and rolled back. Cause: {apply_error}");
     }
     Ok(())
 }

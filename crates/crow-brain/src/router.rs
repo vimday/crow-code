@@ -86,7 +86,7 @@ pub fn describe_provider(config: &LlmProviderConfig) -> String {
             } else if DEEPSEEK_ALIASES.iter().any(|a| *a == lower) {
                 "DeepSeek".to_string()
             } else {
-                format!("Custom ({})", name)
+                format!("Custom ({name})")
             }
         }
     };

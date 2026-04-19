@@ -86,7 +86,7 @@ impl EventLedger {
             .append(true)
             .open(&self.log_path)?;
 
-        writeln!(file, "{}", serialized)?;
+        writeln!(file, "{serialized}")?;
 
         self.events.push(event);
         Ok(())

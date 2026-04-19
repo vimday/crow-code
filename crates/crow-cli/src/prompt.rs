@@ -57,7 +57,8 @@ impl PromptBuilder {
 
     pub fn with_dynamic_skills(mut self, skills: &[crow_brain::skill::Skill]) -> Self {
         if !skills.is_empty() {
-            self.skills.push_str("\n\n## Available Skills\n\nLoad the following skills on demand\n");
+            self.skills
+                .push_str("\n\n## Available Skills\n\nLoad the following skills on demand\n");
             for skill in skills {
                 let location = skill.source_path.to_string_lossy();
                 let triggers = skill.triggers.join(", ");

@@ -245,7 +245,7 @@ impl AgentAction {
                 ReconAction::DirTree {
                     max_depth: Some(d), ..
                 } if *d > 10 => {
-                    return Err(format!("dir_tree max_depth {} exceeds limit of 10", d));
+                    return Err(format!("dir_tree max_depth {d} exceeds limit of 10"));
                 }
                 _ => {}
             },

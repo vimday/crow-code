@@ -61,7 +61,7 @@ impl<'a> AutoDream<'a> {
         let ledger_path = home
             .join(".crow")
             .join("ledger")
-            .join(format!("{}.jsonl", hash));
+            .join(format!("{hash}.jsonl"));
 
         if !ledger_path.exists() {
             println!("  🌙 [AutoDream] No recent memories to consolidate.");
@@ -73,10 +73,7 @@ impl<'a> AutoDream<'a> {
         let lines: Vec<&str> = ledger_content.lines().collect();
         let event_count = lines.len();
 
-        println!(
-            "  🌙 [AutoDream] Collected {} raw events from the ledger.",
-            event_count
-        );
+        println!("  🌙 [AutoDream] Collected {event_count} raw events from the ledger.");
 
         if event_count < 10 {
             // Not enough to justify an LLM call yet.
@@ -121,17 +118,14 @@ Limit to 3 critical architectural or context insights.";
                         );
                     }
                     Err(e) => {
-                        eprintln!(
-                            "  🌙 [AutoDream] Discarded malformed memory fragment: {}",
-                            e
-                        );
+                        eprintln!("  🌙 [AutoDream] Discarded malformed memory fragment: {e}");
                     }
                 }
 
                 // We would then truncate or rotate the ledger here to compress the log
             }
             Err(e) => {
-                eprintln!("  🌙 [AutoDream] Dream interrupted by error: {}", e);
+                eprintln!("  🌙 [AutoDream] Dream interrupted by error: {e}");
             }
         }
 

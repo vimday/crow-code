@@ -63,7 +63,7 @@ pub fn compute_target_dir_path(hash_source: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     hash_source.hash(&mut hasher);
     let cache_hash = format!("{:016x}", hasher.finish());
-    std::env::temp_dir().join(format!("crow_target_{}", cache_hash))
+    std::env::temp_dir().join(format!("crow_target_{cache_hash}"))
 }
 
 /// Execute a verification command async inside an isolated workspace context.
@@ -103,7 +103,7 @@ pub async fn execute(
 
         let canonical_target = if target.exists() {
             target.canonicalize().map_err(|e| {
-                VerifierError::CommandNotFound(format!("cwd canonicalize failed: {}", e))
+                VerifierError::CommandNotFound(format!("cwd canonicalize failed: {e}"))
             })?
         } else {
             normalize_path(&target)
@@ -144,9 +144,9 @@ pub async fn execute(
     // Rustup fallback: since we scrubbed HOME, rustup wrapper will fail unless it knows where its settings are
     if let Ok(real_home) = std::env::var("HOME") {
         let rustup_home =
-            std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{}/.rustup", real_home));
+            std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{real_home}/.rustup"));
         let cargo_home =
-            std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{}/.cargo", real_home));
+            std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{real_home}/.cargo"));
         cmd.env("RUSTUP_HOME", rustup_home);
         cmd.env("CARGO_HOME", cargo_home);
     }
@@ -280,7 +280,7 @@ pub async fn execute(
         if command.program.contains("cargo") || command.program.contains("rustc") {
             crate::semantic_compress::compress_rust_logs(&combined_str)
         } else {
-            combined_str.clone()
+            combined_str
         };
 
     // ACI truncation as a hard physical guard limit

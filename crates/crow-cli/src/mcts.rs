@@ -131,7 +131,9 @@ pub async fn explore_round(
             match tokio::time::timeout(
                 std::time::Duration::from_secs(120),
                 run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd, &lang_clone, &snap_clone),
-            ).await {
+            )
+            .await
+            {
                 Ok(outcome) => outcome,
                 Err(_) => BranchOutcome {
                     branch_id: 0,
@@ -169,14 +171,16 @@ pub async fn explore_round(
                     &lang_clone,
                     &snap_clone,
                 ),
-            ).await {
+            )
+            .await
+            {
                 Ok(outcome) => outcome,
                 Err(_) => BranchOutcome {
                     branch_id,
                     plan: empty_plan(),
                     sandbox: dummy_sandbox(),
                     passed: false,
-                    log: format!("Branch {} timed out after 120s (likely network hang)", branch_id),
+                    log: format!("Branch {branch_id} timed out after 120s (likely network hang)"),
                 },
             }
         });
@@ -195,8 +199,7 @@ pub async fn explore_round(
                     let remaining = join_set.len();
                     if remaining > 0 {
                         println!(
-                            "    ⚡ Early termination: aborting {} remaining branch(es)",
-                            remaining
+                            "    ⚡ Early termination: aborting {remaining} remaining branch(es)"
                         );
                         join_set.abort_all();
                     }
@@ -208,7 +211,7 @@ pub async fn explore_round(
                     // Expected from abort_all(); don't report as error.
                     continue;
                 }
-                eprintln!("    ⚠️  MCTS branch panicked: {:?}", e);
+                eprintln!("    ⚠️  MCTS branch panicked: {e:?}");
             }
         }
     }
@@ -237,7 +240,7 @@ async fn run_branch(
     let mut aligned_messages = messages.to_vec();
     if let Some(last) = aligned_messages.last_mut() {
         last.content
-            .push_str(&format!("\n\n[MCTS EXPLORATION ARM: {}]", branch_id));
+            .push_str(&format!("\n\n[MCTS EXPLORATION ARM: {branch_id}]"));
     }
 
     // LLM generate with temperature for diversity.
@@ -252,7 +255,7 @@ async fn run_branch(
                 plan: empty_plan(),
                 sandbox: dummy_sandbox(),
                 passed: false,
-                log: format!("LLM generation failed: {:?}", e),
+                log: format!("LLM generation failed: {e:?}"),
             };
         }
     };
@@ -265,7 +268,7 @@ async fn run_branch(
                 plan: empty_plan(),
                 sandbox: dummy_sandbox(),
                 passed: false,
-                log: format!("Branch produced non-SubmitPlan action: {:?}", other),
+                log: format!("Branch produced non-SubmitPlan action: {other:?}"),
             };
         }
     };
@@ -284,7 +287,7 @@ async fn run_branch(
             plan,
             sandbox: dummy_sandbox(),
             passed: false,
-            log: format!("Early Pruning: Syntactic invalidity or out-of-bounds mutation detected against frozen root: {:?}", e),
+            log: format!("Early Pruning: Syntactic invalidity or out-of-bounds mutation detected against frozen root: {e:?}"),
         };
     }
 
@@ -384,10 +387,7 @@ pub async fn clone_cache_dir(src: &Path, dst: &Path) {
                 eprintln!("    ⚠️  macOS fast path clone failed with exit code {:?}, falling back to cp -a", st.code());
             }
         } else if let Err(e) = status {
-            eprintln!(
-                "    ⚠️  macOS fast path clone execution failed: {}, falling back to cp -a",
-                e
-            );
+            eprintln!("    ⚠️  macOS fast path clone execution failed: {e}, falling back to cp -a");
         }
     }
 
@@ -405,7 +405,7 @@ pub async fn clone_cache_dir(src: &Path, dst: &Path) {
             }
         }
         Err(e) => {
-            eprintln!("    ⚠️  Failed to execute cache clone command: {} — MCTS branch will use cold cache", e);
+            eprintln!("    ⚠️  Failed to execute cache clone command: {e} — MCTS branch will use cold cache");
         }
     }
 }
@@ -427,14 +427,14 @@ async fn materialize_sandbox(
             plan: empty_plan(),
             sandbox: dummy_sandbox(),
             passed: false,
-            log: format!("Materialization failed: {:?}", e),
+            log: format!("Materialization failed: {e:?}"),
         }),
         Err(e) => Err(BranchOutcome {
             branch_id,
             plan: empty_plan(),
             sandbox: dummy_sandbox(),
             passed: false,
-            log: format!("Materialization panicked: {:?}", e),
+            log: format!("Materialization panicked: {e:?}"),
         }),
     }
 }
@@ -466,7 +466,7 @@ async fn evaluate_plan(
                 plan,
                 sandbox,
                 passed: false,
-                log: format!("Hydration failed: {:?}", e),
+                log: format!("Hydration failed: {e:?}"),
             };
         }
         Err(e) => {
@@ -475,7 +475,7 @@ async fn evaluate_plan(
                 plan,
                 sandbox,
                 passed: false,
-                log: format!("Hydration task panicked: {:?}", e),
+                log: format!("Hydration task panicked: {e:?}"),
             };
         }
     };
@@ -496,7 +496,7 @@ async fn evaluate_plan(
                     plan: hydrated_plan,
                     sandbox,
                     passed: false,
-                    log: format!("Sandbox patch injection failed: {:?}", e),
+                    log: format!("Sandbox patch injection failed: {e:?}"),
                 };
             }
             Err(e) => {
@@ -505,7 +505,7 @@ async fn evaluate_plan(
                     plan: hydrated_plan,
                     sandbox,
                     passed: false,
-                    log: format!("Apply task panicked: {:?}", e),
+                    log: format!("Apply task panicked: {e:?}"),
                 };
             }
         }
@@ -534,7 +534,7 @@ async fn evaluate_plan(
             plan: hydrated_plan,
             sandbox,
             passed: false,
-            log: format!("Preflight compile failed:\n{}", summary),
+            log: format!("Preflight compile failed:\n{summary}"),
         };
     }
 
@@ -566,7 +566,7 @@ async fn evaluate_plan(
             plan: hydrated_plan,
             sandbox,
             passed: false,
-            log: format!("Verification error: {:?}", e),
+            log: format!("Verification error: {e:?}"),
         },
     }
 }

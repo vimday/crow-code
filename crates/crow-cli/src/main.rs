@@ -3,9 +3,9 @@ pub mod chat;
 mod config;
 mod context;
 pub mod crucible;
+pub mod crucible_runner;
 mod diff;
 mod epistemic;
-pub mod crucible_runner;
 pub mod epistemic_ui;
 pub mod event;
 mod evidence_report;
@@ -30,7 +30,7 @@ use std::env;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    let cmd = args.get(1).map(|s| s.as_str());
+    let cmd = args.get(1).map(std::string::String::as_str);
 
     match cmd {
         Some("run") => run_dry_run(&args[2..]).await,
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
             tui::run_workbench(&CrowConfig::load()?, true).await
         }
         Some(unknown) => {
-            eprintln!("Unknown command: {}", unknown);
+            eprintln!("Unknown command: {unknown}");
             print_help();
             std::process::exit(1);
         }
@@ -102,7 +102,7 @@ SAFETY:
 }
 
 async fn handle_session_command(args: &[String]) -> Result<()> {
-    let subcmd = args.first().map(|s| s.as_str());
+    let subcmd = args.first().map(std::string::String::as_str);
     match subcmd {
         Some("list") => {
             let store = session::SessionStore::open()?;
@@ -117,7 +117,7 @@ async fn handle_session_command(args: &[String]) -> Result<()> {
                     "  ─────────┼──────────────────────────────────────────┼───────────┼────────"
                 );
                 for s in &sessions {
-                    println!("{}", s);
+                    println!("{s}");
                 }
             }
             Ok(())
@@ -194,22 +194,20 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 
 // `apply_sandbox_to_workspace` moved to `crow_workspace::applier`.
 
-
-
 // ─── MCP Commands ───────────────────────────────────────────────────
 
 async fn handle_mcp_command(args: &[String]) -> Result<()> {
-    let subcmd = args.first().map(|s| s.as_str());
+    let subcmd = args.first().map(std::string::String::as_str);
     match subcmd {
         Some("list-tools") => {
-            let server_name = args.get(1).map(|s| s.as_str());
+            let server_name = args.get(1).map(std::string::String::as_str);
             let cfg = CrowConfig::load()?;
 
             let (name, mcp_cfg) = if let Some(n) = server_name {
                 let conf = cfg
                     .mcp_servers
                     .get(n)
-                    .ok_or_else(|| anyhow::anyhow!("MCP server '{}' not found in config", n))?;
+                    .ok_or_else(|| anyhow::anyhow!("MCP server '{n}' not found in config"))?;
                 (n, conf)
             } else {
                 if cfg.mcp_servers.is_empty() {
@@ -231,7 +229,11 @@ async fn handle_mcp_command(args: &[String]) -> Result<()> {
                 mcp_cfg.args.join(" ")
             );
 
-            let args_refs: Vec<&str> = mcp_cfg.args.iter().map(|s| s.as_str()).collect();
+            let args_refs: Vec<&str> = mcp_cfg
+                .args
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
             let client = crow_mcp::McpClient::spawn(&mcp_cfg.command, &args_refs)?;
 
             println!("  Initializing handshake...");
@@ -281,7 +283,7 @@ pub(crate) fn open_ledger(
     let ledger_dir = home.join(".crow").join("ledger");
     std::fs::create_dir_all(&ledger_dir)?;
 
-    let log_path = ledger_dir.join(format!("{}.jsonl", hash));
+    let log_path = ledger_dir.join(format!("{hash}.jsonl"));
     Ok(crow_workspace::ledger::EventLedger::open(&log_path)?)
 }
 

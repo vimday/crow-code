@@ -123,7 +123,7 @@ impl ThreadManager {
             let result = rt_clone
                 .execute_turn_with_observer(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
                 .await;
-            
+
             // Sync mutated messages back
             *msgs_clone.lock().await = local_msgs.clone();
 
@@ -269,7 +269,9 @@ impl ThreadManager {
                     };
 
                     let frozen_root = root.clone();
-                    let Ok(profile) = crow_probe::scan_workspace(&frozen_root).map_err(|e| anyhow::anyhow!(e)) else {
+                    let Ok(profile) =
+                        crow_probe::scan_workspace(&frozen_root).map_err(|e| anyhow::anyhow!(e))
+                    else {
                         let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
                         return;
                     };
@@ -297,9 +299,15 @@ impl ThreadManager {
                             &snapshot_id,
                             Some(&mcp),
                             &mut observer,
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok(Some(winner)) => {
-                                let plan_id = format!("swarm-{}-{}", snapshot_id.0, chrono::Utc::now().timestamp_millis());
+                                let plan_id = format!(
+                                    "swarm-{}-{}",
+                                    snapshot_id.0,
+                                    chrono::Utc::now().timestamp_millis()
+                                );
                                 match crate::crucible_runner::apply_winning_plan(
                                     &cfg,
                                     winner.sandbox.path(),
@@ -308,12 +316,16 @@ impl ThreadManager {
                                     &snapshot_id,
                                     &rt_clone.ledger,
                                     &mut observer,
-                                ).await {
+                                )
+                                .await
+                                {
                                     Ok(_) => {
-                                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                                        let _ =
+                                            ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
                                     }
                                     Err(_) => {
-                                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                                        let _ = ui_tx
+                                            .send(TuiMessage::SwarmComplete(id.clone(), false));
                                     }
                                 }
                             }
@@ -331,13 +343,16 @@ impl ThreadManager {
                             mcp_manager: Some(&mcp),
                         };
 
-                        match crucible.execute_with_precompiled(
-                            &mut messages_dup,
-                            &snapshot_id,
-                            &rt_clone.ledger,
-                            plan,
-                            &mut observer,
-                        ).await {
+                        match crucible
+                            .execute_with_precompiled(
+                                &mut messages_dup,
+                                &snapshot_id,
+                                &rt_clone.ledger,
+                                plan,
+                                &mut observer,
+                            )
+                            .await
+                        {
                             Ok(_) => {
                                 let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
                             }

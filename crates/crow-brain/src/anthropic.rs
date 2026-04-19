@@ -77,7 +77,7 @@ impl AnthropicClient {
         temperature: Option<f64>,
     ) -> Result<String, BrainError> {
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{}/messages", base);
+        let url = format!("{base}/messages");
 
         // Anthropic separates system messages from the conversation.
         // All system messages are concatenated into a single top-level `system` field.
@@ -200,7 +200,7 @@ impl AnthropicClient {
         use futures_util::StreamExt;
 
         let base = self.base_url.trim_end_matches('/');
-        let url = format!("{}/messages", base);
+        let url = format!("{base}/messages");
 
         let mut system_parts: Vec<serde_json::Value> = Vec::new();
         let mut conversation: Vec<serde_json::Value> = Vec::new();
@@ -315,7 +315,7 @@ impl AnthropicClient {
                     }
                 }
                 Err(e) => {
-                    return Err(BrainError::Config(format!("Stream error: {}", e)));
+                    return Err(BrainError::Config(format!("Stream error: {e}")));
                 }
             }
         }

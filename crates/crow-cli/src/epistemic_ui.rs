@@ -98,8 +98,7 @@ impl EpistemicObserver for SpinnerObserver {
     fn on_step(&mut self, step: usize, max: usize) {
         self.stream_buffer.clear(); // Reset text when a new step starts
         let msg = self.message_pattern.replace("{}", &step.to_string());
-        self.spinner
-            .set_message(format!("{} (of {} max)", msg, max));
+        self.spinner.set_message(format!("{msg} (of {max} max)"));
     }
 
     fn on_stream_chunk(&mut self, chunk: &str) {
@@ -110,7 +109,7 @@ impl EpistemicObserver for SpinnerObserver {
         let suffix = if cleaned.chars().count() > display_len {
             let start = cleaned.chars().count() - display_len;
             let substr: String = cleaned.chars().skip(start).collect();
-            format!("...{}", substr)
+            format!("...{substr}")
         } else {
             cleaned
         };

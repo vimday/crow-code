@@ -2,11 +2,11 @@ use crate::tui::components::Component;
 use crate::tui::state::TuiMessage;
 use crossterm::event::Event;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Stylize};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout};
 
 /// Token usage state tracked from AgentEvent::TokenUsage
 #[derive(Default, Clone)]
@@ -19,7 +19,9 @@ pub struct TokenState {
 
 impl TokenState {
     pub fn usage_pct(&self) -> f64 {
-        if self.context_window == 0 { return 0.0; }
+        if self.context_window == 0 {
+            return 0.0;
+        }
         self.total_tokens as f64 / self.context_window as f64
     }
 
@@ -54,10 +56,7 @@ impl Component for InfoBar {
         // Split into left info and right token bar
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(55),
-                Constraint::Percentage(45),
-            ])
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
             .split(area);
 
         // Left: model + branch info
@@ -68,19 +67,12 @@ impl Component for InfoBar {
         };
 
         let left = Line::from(vec![
-            Span::styled(
-                format!(" {} ", self.current_model),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!(" {} ", branch_display),
-                Style::default().fg(Color::Yellow),
-            ),
+            format!(" {} ", self.current_model).cyan().bold(),
+            " │ ".dark_gray(),
+            format!(" {branch_display} ").yellow(),
         ]);
 
-        let left_widget = Paragraph::new(left)
-            .block(Block::default().borders(Borders::NONE));
+        let left_widget = Paragraph::new(left).block(Block::default().borders(Borders::NONE));
         f.render_widget(left_widget, chunks[0]);
 
         // Right: token usage gauge (Yomi-style usage bar)
@@ -92,21 +84,22 @@ impl Component for InfoBar {
                 self.token_state.context_window / 1000,
                 pct * 100.0,
             );
+
+            // Cannot easily eliminate Style entirely here since color is dynamic,
+            // but we can start with Style::default() and combine Stylize.
+            let gauge_style = ratatui::style::Style::default()
+                .fg(self.token_state.bar_color())
+                .bold();
+
             let gauge = Gauge::default()
                 .block(Block::default().borders(Borders::NONE))
-                .gauge_style(
-                    Style::default()
-                        .fg(self.token_state.bar_color())
-                        .add_modifier(Modifier::BOLD),
-                )
+                .gauge_style(gauge_style)
                 .ratio(pct.min(1.0))
                 .label(label);
             f.render_widget(gauge, chunks[1]);
         } else {
             // No token data yet — show placeholder
-            let placeholder = Paragraph::new(
-                Span::styled(" Tokens: —", Style::default().fg(Color::DarkGray))
-            );
+            let placeholder = Paragraph::new(" Tokens: —".dark_gray());
             f.render_widget(placeholder, chunks[1]);
         }
     }

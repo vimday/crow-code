@@ -90,7 +90,10 @@ impl Session {
 
     /// Restore the conversation as `ChatMessage`s.
     pub fn restore_messages(&self) -> Vec<ChatMessage> {
-        self.messages.iter().map(|m| m.to_chat_message()).collect()
+        self.messages
+            .iter()
+            .map(StoredMessage::to_chat_message)
+            .collect()
     }
 
     /// Record a new snapshot in the timeline.
@@ -222,7 +225,7 @@ fn generate_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    format!("{:x}", ts)
+    format!("{ts:x}")
 }
 
 fn chrono_now() -> String {
@@ -232,7 +235,7 @@ fn chrono_now() -> String {
         .unwrap_or_default()
         .as_secs();
     // ISO 8601 approximate (no chrono dependency)
-    format!("{}", secs)
+    format!("{secs}")
 }
 
 fn dirs_home() -> Result<PathBuf> {

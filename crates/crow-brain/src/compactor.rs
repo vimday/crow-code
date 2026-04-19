@@ -44,7 +44,9 @@ impl Compactor {
     /// Replaces old tool result content with a cleared marker,
     /// preserving message structure. Returns None if nothing to clear.
     pub fn micro_compact(&self, messages: &[ChatMessage]) -> Option<Vec<ChatMessage>> {
-        let keep_start = messages.len().saturating_sub(self.config.preservation_turns);
+        let keep_start = messages
+            .len()
+            .saturating_sub(self.config.preservation_turns);
         if keep_start == 0 {
             return None;
         }
@@ -67,7 +69,11 @@ impl Compactor {
             }
         }
 
-        if modified { Some(result) } else { None }
+        if modified {
+            Some(result)
+        } else {
+            None
+        }
     }
 
     /// Auto-compact: try micro-compaction first, then full LLM summarization.
@@ -99,13 +105,18 @@ impl Compactor {
         messages: &[ChatMessage],
         compiler: &Arc<IntentCompiler>,
     ) -> Result<Vec<ChatMessage>> {
-        let split_idx = messages.len().saturating_sub(self.config.preservation_turns);
+        let split_idx = messages
+            .len()
+            .saturating_sub(self.config.preservation_turns);
         let (old_messages, recent_messages) = messages.split_at(split_idx);
 
-        let summary = compiler.compile_summary_of_history(old_messages).await
+        let summary = compiler
+            .compile_summary_of_history(old_messages)
+            .await
             .context("Failed to run LLM compaction")?;
 
-        let compressed_msg = ChatMessage::assistant(format!("[COMPACTED HISTORY SUMMARY]\n{}", summary));
+        let compressed_msg =
+            ChatMessage::assistant(format!("[COMPACTED HISTORY SUMMARY]\n{summary}"));
 
         let mut next_messages = Vec::with_capacity(recent_messages.len() + 1);
         next_messages.push(compressed_msg);

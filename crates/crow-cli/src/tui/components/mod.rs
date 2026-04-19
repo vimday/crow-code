@@ -1,7 +1,7 @@
+use crate::tui::state::TuiMessage;
+use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::Frame;
-use crossterm::event::Event;
-use crate::tui::state::TuiMessage;
 
 /// Core interface for Elm/Redux style UI components in Crow Console.
 pub trait Component {
@@ -13,6 +13,6 @@ pub trait Component {
     fn render(&self, f: &mut Frame, area: Rect);
 }
 
-pub mod command_palette;
 pub mod chat_view;
+pub mod command_palette;
 pub mod info_bar;

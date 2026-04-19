@@ -62,7 +62,7 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
     if let Ok(content) = fs::read_to_string(root.join(".gitignore")) {
         for line in content
             .lines()
-            .map(|l| l.trim())
+            .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
         {
             // Skip negation/re-inclusion rules (e.g. "!keep.rs")

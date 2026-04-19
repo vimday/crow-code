@@ -48,3 +48,6 @@ crow-evidence = { path = "../crow-evidence" }
 crow-probe = { path = "../crow-probe" }
 crow-verifier = { path = "../crow-verifier" }
 crow-workspace = { path = "../crow-workspace" }
+
+[lints]
+workspace = true

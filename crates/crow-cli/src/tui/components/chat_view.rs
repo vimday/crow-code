@@ -2,8 +2,8 @@ use crate::tui::components::Component;
 use crate::tui::state::{Cell, CellKind, TuiMessage};
 use crossterm::event::Event;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem};
 use ratatui::Frame;
 
@@ -28,8 +28,8 @@ impl Component for ChatView {
                     for (i, line) in cell.payload.lines().enumerate() {
                         let prefix = if i == 0 { "› " } else { "  " };
                         list_items.push(ListItem::new(Line::from(vec![
-                            Span::styled(prefix, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                            prefix.cyan().bold(),
+                            line.white(),
                         ])));
                     }
                     list_items.push(ListItem::new(Line::from("")));
@@ -38,41 +38,41 @@ impl Component for ChatView {
                     for (i, line) in cell.payload.lines().enumerate() {
                         let prefix = if i == 0 { "• " } else { "  " };
                         list_items.push(ListItem::new(Line::from(vec![
-                            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-                            Span::raw(line.to_string()),
+                            prefix.dark_gray(),
+                            line.into(),
                         ])));
                     }
                 }
                 CellKind::Action => {
                     list_items.push(ListItem::new(Line::from(vec![
-                        Span::styled("  ▰ ", Style::default().fg(Color::Green)),
-                        Span::styled(cell.payload.clone(), Style::default().fg(Color::Green)),
+                        "  ▰ ".green(),
+                        cell.payload.clone().green(),
                     ])));
                 }
                 CellKind::Result => {
                     list_items.push(ListItem::new(Line::from(vec![
-                        Span::styled("  ✓ ", Style::default().fg(Color::Blue)),
-                        Span::styled(cell.payload.clone(), Style::default().fg(Color::Blue)),
+                        "  ✓ ".blue(),
+                        cell.payload.clone().blue(),
                     ])));
                 }
                 CellKind::Log => {
                     for line in cell.payload.lines() {
                         list_items.push(ListItem::new(Line::from(vec![
-                            Span::styled("  • ", Style::default().fg(Color::DarkGray)),
-                            Span::styled(line.to_string(), Style::default().fg(Color::Gray)),
+                            "  • ".dark_gray(),
+                            line.gray(),
                         ])));
                     }
                 }
                 CellKind::Error => {
                     list_items.push(ListItem::new(Line::from(vec![
-                        Span::styled("  ✘ ", Style::default().fg(Color::Red)),
-                        Span::styled(cell.payload.clone(), Style::default().fg(Color::Red)),
+                        "  ✘ ".red(),
+                        cell.payload.clone().red(),
                     ])));
                 }
                 CellKind::Evidence => {
                     list_items.push(ListItem::new(Line::from(vec![
-                        Span::styled("  ◎ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(cell.payload.clone(), Style::default().fg(Color::DarkGray)),
+                        "  ◎ ".dark_gray(),
+                        cell.payload.clone().dark_gray(),
                     ])));
                 }
             }

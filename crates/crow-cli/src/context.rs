@@ -39,15 +39,14 @@ impl ConversationManager {
                 // Pre-compute the suffix so we can subtract its length from the content budget.
                 // This prevents the formatted result from overshooting MAX_SYSTEM_BYTES.
                 let suffix = format!(
-                    "...\n\n[SYSTEM: Anchor context truncated (original size {} bytes) to preserve conversation budget]",
-                    orig_len
+                    "...\n\n[SYSTEM: Anchor context truncated (original size {orig_len} bytes) to preserve conversation budget]"
                 );
                 let content_budget = MAX_SYSTEM_BYTES
                     .saturating_sub(other_bytes)
                     .saturating_sub(suffix.len());
 
                 let truncated = safe_truncate(&largest.content, content_budget);
-                largest.content = format!("{}{}", truncated, suffix);
+                largest.content = format!("{truncated}{suffix}");
             }
         }
 
@@ -95,8 +94,7 @@ impl ConversationManager {
 
         // When this massive file dump ages out, we retain the memory of WHAT was read
         let summary = format!(
-            "[SYSTEM: Agent previously read files: {:?}. Full content pruned from history.]",
-            paths
+            "[SYSTEM: Agent previously read files: {paths:?}. Full content pruned from history.]"
         );
 
         self.conversation.push_back(Memory {
@@ -110,8 +108,7 @@ impl ConversationManager {
     /// When pruned, the huge log is dropped but the logical outcome is preserved in the summary.
     pub fn push_verifier_result(&mut self, outcome_str: &str, log: &str) {
         let content = format!(
-            "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nOutcome: {}\nLog:\n{}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action.",
-            outcome_str, log
+            "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nOutcome: {outcome_str}\nLog:\n{log}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action."
         );
 
         // Extract first error-like line for a richer pruned summary
@@ -125,8 +122,7 @@ impl ConversationManager {
         let truncated_error = safe_truncate(first_error, 200);
 
         let summary = format!(
-            "[SYSTEM: Previous verification failed ({}). First error: {}. Full logs pruned.]",
-            outcome_str, truncated_error
+            "[SYSTEM: Previous verification failed ({outcome_str}). First error: {truncated_error}. Full logs pruned.]"
         );
 
         self.conversation.push_back(Memory {
@@ -146,21 +142,21 @@ impl ConversationManager {
         let messages = self.as_messages();
         // We only want to compress the dynamic conversation history.
         let dynamic_start = self.system_messages.len();
-        
+
         let compactor_config = crow_brain::compactor::CompactorConfig::default();
         let compactor = crow_brain::compactor::Compactor::new(compactor_config);
 
         let dynamic_history = &messages[dynamic_start..];
-        
+
         if compactor.should_compact(dynamic_history) {
             let compacted = compactor.compact(dynamic_history, compiler).await?;
-            
+
             // Rebuild conversation deque
             self.conversation.clear();
             for msg in compacted {
                 self.conversation.push_back(Memory {
                     message: msg,
-                    summary: Some("[SYSTEM: Previously compacted]".into())
+                    summary: Some("[SYSTEM: Previously compacted]".into()),
                 });
             }
             Ok(true)
@@ -169,19 +165,15 @@ impl ConversationManager {
         }
     }
 
-
     pub fn push_recon_result(&mut self, tool_name: &str, description: &str, output: &str) {
-        let content = format!(
-            "[RECON RESULT]\nTool: {}\nCommand: {}\nOutput:\n{}",
-            tool_name, description, output
-        );
+        let content =
+            format!("[RECON RESULT]\nTool: {tool_name}\nCommand: {description}\nOutput:\n{output}");
 
         // Generate a domain-aware summary based on the tool type
         let line_count = output.lines().count();
         let summary = match tool_name {
             "list_dir" => format!(
-                "[SYSTEM: Listed {} entries via `{}`. Full output pruned.]",
-                line_count, description
+                "[SYSTEM: Listed {line_count} entries via `{description}`. Full output pruned.]"
             ),
             "search" => {
                 let match_count = output
@@ -189,17 +181,14 @@ impl ConversationManager {
                     .filter(|l| !l.is_empty() && !l.starts_with("--"))
                     .count();
                 format!(
-                    "[SYSTEM: Search found ~{} matches via `{}`. Full output pruned.]",
-                    match_count, description
+                    "[SYSTEM: Search found ~{match_count} matches via `{description}`. Full output pruned.]"
                 )
             }
             "dir_tree" => format!(
-                "[SYSTEM: Tree showed {} lines via `{}`. Full output pruned.]",
-                line_count, description
+                "[SYSTEM: Tree showed {line_count} lines via `{description}`. Full output pruned.]"
             ),
             _ => format!(
-                "[SYSTEM: Recon `{}` returned {} lines. Full output pruned.]",
-                description, line_count
+                "[SYSTEM: Recon `{description}` returned {line_count} lines. Full output pruned.]"
             ),
         };
 

@@ -7,11 +7,11 @@
 pub mod anthropic;
 pub mod autodream;
 pub mod client;
+pub mod compactor;
 pub mod compiler;
 pub mod router;
 pub mod schema;
 pub mod skill;
-pub mod compactor;
 
 pub mod usage;
 

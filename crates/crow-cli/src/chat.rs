@@ -259,7 +259,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         println!(
                             "  {} {}",
                             "│  ✘".bold().with(Color::AnsiValue(203)),
-                            format!("{:#}", e).with(Color::AnsiValue(203))
+                            format!("{e:#}").with(Color::AnsiValue(203))
                         );
                         println!(
                             "  {} {}",
@@ -275,7 +275,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                 let ctx_bytes = format_bytes(messages.get_total_bytes());
                 println!(
                     "  {}",
-                    format!("╰── completed in {}ms · ctx {}", elapsed_ms, ctx_bytes)
+                    format!("╰── completed in {elapsed_ms}ms · ctx {ctx_bytes}")
                         .with(Color::DarkGrey)
                 );
                 println!();
@@ -295,7 +295,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                 break;
             }
             Err(err) => {
-                eprintln!("  Input error: {:?}", err);
+                eprintln!("  Input error: {err:?}");
                 break;
             }
         }
@@ -322,7 +322,7 @@ fn print_help(theme: &ColorTheme) {
     for (cmd, desc) in &commands {
         println!(
             "  {}  {}",
-            format!("{:<10}", cmd).bold().with(Color::Green),
+            format!("{cmd:<10}").bold().with(Color::Green),
             desc.with(Color::AnsiValue(245))
         );
     }
@@ -385,7 +385,7 @@ fn print_status(
 
 fn format_bytes(bytes: usize) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
@@ -395,7 +395,7 @@ fn format_bytes(bytes: usize) -> String {
 
 fn format_duration_ms(ms: u128) -> String {
     if ms < 1000 {
-        format!("{}ms", ms)
+        format!("{ms}ms")
     } else {
         format!("{:.1}s", ms as f64 / 1000.0)
     }
@@ -532,7 +532,7 @@ fn handle_slash_command(cmd: SlashCommand, ctx: &mut ReplContext) -> CommandOutc
             ctx.state.view_mode = mode;
             println!(
                 "  {}",
-                format!("👁 View mode set to: {:?}", mode).with(Color::Green)
+                format!("👁 View mode set to: {mode:?}").with(Color::Green)
             );
             CommandOutcome::Continue
         }

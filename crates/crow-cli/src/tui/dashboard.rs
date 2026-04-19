@@ -49,7 +49,7 @@ impl App {
         let ledger_path = home
             .join(".crow")
             .join("ledger")
-            .join(format!("{}.jsonl", hash));
+            .join(format!("{hash}.jsonl"));
         let memory_dir = home.join(".crow").join("memory").join(&hash);
 
         self.ledger_events.clear();
@@ -96,7 +96,7 @@ pub async fn run_dashboard(workspace: PathBuf) -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        println!("{:?}", err)
+        println!("{err:?}")
     }
 
     Ok(())
@@ -180,7 +180,7 @@ fn ui(f: &mut Frame, app: &App) {
             let time_str = ts.format("%H:%M:%S").to_string();
             let content = Line::from(vec![
                 Span::styled(
-                    format!("[{}] ", time_str),
+                    format!("[{time_str}] "),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(
