@@ -564,6 +564,16 @@ async fn run_tui_loop(
                     handle_agent_event(state, ev);
                 }
                 TuiMessage::TurnComplete(success) => {
+                    // Flush any remaining stream buffer
+                    let renderer = crate::render::TerminalRenderer::new();
+                    if let Some(flushed) = state.stream_state.flush(&renderer) {
+                        for line in flushed.lines() {
+                            state.history.push(Cell {
+                                kind: CellKind::AgentMessage,
+                                payload: line.to_string(),
+                            });
+                        }
+                    }
                     state.active_action = None;
                     state.task_start_time = None;
                     let was_cancelled = state
@@ -904,20 +914,38 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_action = Some("Thinking...".into());
         }
         AgentEvent::StreamChunk(chunk) => {
-            if state.view_mode == ViewMode::Audit {
-                // In audit mode, show raw streaming chunks
-                state.history.push(Cell {
-                    kind: CellKind::AgentMessage,
-                    payload: chunk,
-                });
+            // Incremental markdown streaming: accumulate chunks and flush
+            // rendered ANSI at safe paragraph/fence boundaries.
+            let renderer = crate::render::TerminalRenderer::new();
+            if let Some(rendered) = state.stream_state.push(&renderer, &chunk) {
+                // A safe boundary was found — push rendered markdown to history
+                for line in rendered.lines() {
+                    state.history.push(Cell {
+                        kind: CellKind::AgentMessage,
+                        payload: line.to_string(),
+                    });
+                }
             }
-            // In other modes, we just let the spinner run
         }
         AgentEvent::Markdown(md) => {
-            state.history.push(Cell {
-                kind: CellKind::AgentMessage,
-                payload: md,
-            });
+            // Flush any remaining stream buffer before rendering final markdown
+            let renderer = crate::render::TerminalRenderer::new();
+            if let Some(flushed) = state.stream_state.flush(&renderer) {
+                for line in flushed.lines() {
+                    state.history.push(Cell {
+                        kind: CellKind::AgentMessage,
+                        payload: line.to_string(),
+                    });
+                }
+            }
+            // Then render the final markdown block
+            let rendered = renderer.render_markdown(&md);
+            for line in rendered.lines() {
+                state.history.push(Cell {
+                    kind: CellKind::AgentMessage,
+                    payload: line.to_string(),
+                });
+            }
         }
         AgentEvent::Log(msg) => {
             state.history.push(Cell {

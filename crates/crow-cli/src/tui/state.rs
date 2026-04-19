@@ -119,6 +119,9 @@ pub struct AppState {
     pub workspace_name: String,
     pub git_branch: String,
     pub is_dirty: bool,
+
+    // Incremental Markdown Streaming (Yomi-inspired)
+    pub stream_state: crate::render::MarkdownStreamState,
 }
 
 impl AppState {
@@ -147,6 +150,7 @@ impl AppState {
             workspace_name,
             git_branch: "detecting...".into(),
             is_dirty: false,
+            stream_state: crate::render::MarkdownStreamState::default(),
         }
     }
 
