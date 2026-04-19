@@ -98,10 +98,8 @@ impl CliEventHandler {
         if self.streaming_markdown_started {
             return;
         }
-
         self.sync_print(|| {
-            println!();
-            println!("  {}", "╭─ Reasoning".bold().with(Color::AnsiValue(81)));
+            println!(); // Blank line before AI response
         });
         self.streaming_markdown_started = true;
     }
@@ -118,10 +116,6 @@ impl CliEventHandler {
         }
 
         if self.streaming_markdown_started {
-            self.sync_print(|| {
-                println!();
-                println!("  {}", "╰─".with(Color::AnsiValue(240)));
-            });
             self.streaming_markdown_started = false;
         }
     }
@@ -151,18 +145,13 @@ impl CliEventHandler {
 impl EventHandler for CliEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::Thinking(step, _max) => {
+            AgentEvent::Thinking(_step, _max) => {
                 self.stop_spinner();
                 self.stream_char_count = 0;
                 self.rationale_processor = RationaleStreamProcessor::default();
                 self.markdown_state = crate::render::MarkdownStreamState::default();
 
-                let text = if step <= 1 {
-                    "Analyzing workspace...".to_string()
-                } else {
-                    "Planning changes...".to_string()
-                };
-                self.spinner = Some(crate::epistemic_ui::SpinnerObserver::new(text));
+                self.spinner = Some(crate::epistemic_ui::SpinnerObserver::new("Thinking...".to_string()));
             }
             AgentEvent::StreamChunk(chunk) => {
                 self.stream_char_count += chunk.len();

@@ -211,7 +211,6 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
                 // ── Execute Turn ──
                 state.turns += 1;
-                print_turn_header(state.turns, input, cfg, &messages, &theme);
                 let turn_start = Instant::now();
 
                 match runtime.execute_turn(cfg, input, &mut messages).await {
@@ -233,7 +232,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         }
 
                         // ── Turn Footer ──
-                        print_turn_footer(elapsed, &messages, &theme);
+                        print_turn_footer(cfg, &messages, &theme);
                     }
                     Err(e) => {
                         let elapsed = turn_start.elapsed();
@@ -349,24 +348,18 @@ fn print_status(
     println!();
 }
 
-// ─── Turn Footer ────────────────────────────────────────────────────
-
 fn print_turn_footer(
-    elapsed: std::time::Duration,
+    cfg: &CrowConfig,
     messages: &crate::context::ConversationManager,
     theme: &ColorTheme,
 ) {
-    let ctx_bytes = messages.get_total_bytes();
-    let msg_count = messages.as_messages().len();
+    let ctx_bytes = format_bytes(messages.get_total_bytes());
+    let write_mode = write_mode_badge(cfg);
+    let model = compact_model_name(cfg);
     println!(
-        "\n  {}",
-        format!(
-            "╰─ Completed in {} · ctx {} · {} messages · synced",
-            format_duration(elapsed),
-            format_bytes(ctx_bytes),
-            msg_count
-        )
-        .with(theme.dim),
+        "\n{}",
+        format!("[{}] crow-code · {} · ctx {}", model, write_mode, ctx_bytes)
+            .with(theme.dim)
     );
 }
 
@@ -382,14 +375,7 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-fn format_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs < 60 {
-        format!("{:.1}s", d.as_secs_f64())
-    } else {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    }
-}
+
 
 fn format_duration_ms(ms: u128) -> String {
     if ms < 1000 {
@@ -431,73 +417,28 @@ fn truncate_middle(input: &str, max_chars: usize) -> String {
     format!("{left}…{right}")
 }
 
-fn compact_preview(input: &str, max_chars: usize) -> String {
-    let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_middle(&normalized, max_chars)
-}
 
-fn print_repl_banner(cfg: &CrowConfig, theme: &ColorTheme, session: &Session) {
+
+fn print_repl_banner(_cfg: &CrowConfig, theme: &ColorTheme, _session: &Session) {
     println!();
-    print_section_title("Crow Code", "Evidence-driven terminal coding agent", theme);
-    print_kv_line("Model", &compact_model_name(cfg));
-    print_kv_line("Provider", &cfg.describe_provider());
-    print_kv_line("Workspace", &cfg.workspace.display().to_string());
-    print_kv_line("Write Mode", &write_mode_badge(cfg));
-    print_kv_line("Session", &session.id.0);
     println!(
-        "  {}",
-        "Type /help for commands. Ctrl+J or Shift+Enter inserts a newline.".with(theme.dim)
+        "  {} {}",
+        "🦅 Crow Code".bold().with(theme.heading),
+        "— Type /help for commands. Ctrl+J for newline.".with(theme.dim)
     );
     println!();
 }
 
 fn build_prompt(
-    state: &SessionState,
-    cfg: &CrowConfig,
-    messages: &crate::context::ConversationManager,
+    _state: &SessionState,
+    _cfg: &CrowConfig,
+    _messages: &crate::context::ConversationManager,
     theme: &ColorTheme,
 ) -> String {
-    let turn = state.turns + 1;
-    let status = format!(
-        "{} · {} · {}",
-        compact_model_name(cfg),
-        write_mode_badge(cfg),
-        format_bytes(messages.get_total_bytes())
-    );
-
-    format!(
-        "{} {} {} ",
-        format!("crow:{turn:02}").bold().with(theme.heading),
-        status.with(Color::AnsiValue(245)),
-        "›".bold().with(theme.heading),
-    )
+    format!("{} ", "crow ›".bold().with(theme.heading))
 }
 
-fn print_turn_header(
-    turn: usize,
-    input: &str,
-    cfg: &CrowConfig,
-    messages: &crate::context::ConversationManager,
-    theme: &ColorTheme,
-) {
-    let meta = format!(
-        "Turn {:02} · {} · {} · ctx {}",
-        turn,
-        compact_model_name(cfg),
-        write_mode_badge(cfg),
-        format_bytes(messages.get_total_bytes())
-    );
-    let preview = compact_preview(input, terminal_width().saturating_sub(12).max(24));
-
-    println!();
-    println!("  {}", format!("╭─ {meta}").bold().with(theme.heading));
-    println!(
-        "  {} {}",
-        "›".bold().with(theme.emphasis),
-        preview.with(Color::White)
-    );
-    println!("  {}", "╰─ analyzing workspace".with(theme.dim));
-}
+// Print turn header removed in pursuit of minimalism.
 
 fn print_section_title(title: &str, subtitle: &str, theme: &ColorTheme) {
     let width = terminal_width().saturating_sub(6).max(18);
