@@ -417,11 +417,11 @@ async fn run_tui_loop(
                                 let commands =
                                     crate::tui::state::get_palette_commands(&state.composer);
                                 let cmd = if let Some((c, _)) = commands.get(*selected_idx) {
-                                    *c
+                                    c.clone()
                                 } else {
-                                    ""
+                                    String::new()
                                 };
-                                let cmd_string = cmd.to_string();
+                                let cmd_string = cmd;
                                 state.overlay_state = crate::tui::state::OverlayState::None;
                                 state.composer.clear();
                                 state.composer_cursor = 0;
@@ -818,12 +818,59 @@ fn execute_command_string(
                     kind: CellKind::User,
                     payload: "/compact".into(),
                 });
-                // Emit compaction request — the thread manager will pick it up
-                // For now, show a log since direct compaction needs async context
                 state.history.push(Cell {
                     kind: CellKind::Log,
                     payload: "Context compaction will run before the next turn.".into(),
                 });
+            }
+            "session" => {
+                let action = parts.next().unwrap_or("list");
+                state.history.push(Cell {
+                    kind: CellKind::User,
+                    payload: format!("/session {action}"),
+                });
+                
+                if action == "list" {
+                    match crate::session::SessionStore::open() {
+                        Ok(store) => match store.list() {
+                            Ok(summaries) => {
+                                let mut out = String::from("Saved sessions:\n");
+                                for summary in summaries.into_iter().take(10) {
+                                    out.push_str(&format!("{summary}\n"));
+                                }
+                                state.history.push(Cell {
+                                    kind: CellKind::Log,
+                                    payload: out,
+                                });
+                            }
+                            Err(e) => {
+                                state.history.push(Cell {
+                                    kind: CellKind::Error,
+                                    payload: format!("Failed to list sessions: {e}"),
+                                });
+                            }
+                        },
+                        Err(e) => {
+                            state.history.push(Cell {
+                                kind: CellKind::Error,
+                                payload: format!("Failed to open session store: {e}"),
+                            });
+                        }
+                    }
+                } else if action == "resume" {
+                    let maybe_id = parts.next();
+                    if let Some(_id) = maybe_id {
+                        state.history.push(Cell {
+                            kind: CellKind::Log,
+                            payload: "To resume a session, restart crow using: crow -r <id>".into(),
+                        });
+                    } else {
+                        state.history.push(Cell {
+                            kind: CellKind::Error,
+                            payload: "Usage: /session resume <id>".into(),
+                        });
+                    }
+                }
             }
             other => {
                 state.history.push(Cell {

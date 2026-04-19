@@ -159,7 +159,30 @@ impl AppState {
     }
 }
 
-pub fn get_palette_commands(query: &str) -> Vec<(&'static str, &'static str)> {
+pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
+    if query.starts_with('!') {
+        let all = vec![
+            ("!cargo check", "Run cargo check"),
+            ("!cargo test", "Run cargo test"),
+            ("!cargo build", "Run cargo build"),
+            ("!git status", "Check git status"),
+            ("!git diff", "Show git diff"),
+            ("!git add .", "Stage all changes"),
+            ("!ls -la", "List directory contents"),
+            ("!pwd", "Print working directory"),
+        ];
+        
+        let trimmed_query = query.trim_end();
+        if trimmed_query == "!" || trimmed_query.is_empty() {
+            return all.into_iter().map(|(c, d)| (c.to_string(), d.to_string())).collect();
+        } else {
+            return all.into_iter()
+                .filter(|(cmd, _)| cmd.starts_with(trimmed_query))
+                .map(|(c, d)| (c.to_string(), d.to_string()))
+                .collect();
+        }
+    }
+
     let all = vec![
         ("/help", "Show manual"),
         ("/status", "Print system status"),
@@ -172,10 +195,11 @@ pub fn get_palette_commands(query: &str) -> Vec<(&'static str, &'static str)> {
         ("/session resume", "Resume a saved session"),
     ];
     if query == "/" || query.is_empty() {
-        all
+        all.into_iter().map(|(c, d)| (c.to_string(), d.to_string())).collect()
     } else {
         all.into_iter()
             .filter(|(cmd, _)| cmd.starts_with(query))
+            .map(|(c, d)| (c.to_string(), d.to_string()))
             .collect()
     }
 }
