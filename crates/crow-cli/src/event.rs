@@ -86,47 +86,65 @@ impl CliEventHandler {
         self.finish_stream_block();
     }
 
+    fn sync_print<F: FnOnce()>(&self, f: F) {
+        if let Some(sp) = &self.spinner {
+            sp.suspend(f);
+        } else {
+            f();
+        }
+    }
+
     fn ensure_stream_block(&mut self) {
         if self.streaming_markdown_started {
             return;
         }
 
-        println!();
-        println!("  {}", "╭─ Reasoning".bold().with(Color::AnsiValue(81)));
+        self.sync_print(|| {
+            println!();
+            println!("  {}", "╭─ Reasoning".bold().with(Color::AnsiValue(81)));
+        });
         self.streaming_markdown_started = true;
     }
 
     fn finish_stream_block(&mut self) {
         if let Some(final_md) = self.markdown_state.flush(&self.renderer) {
             self.ensure_stream_block();
-            print!("{final_md}");
-            if !final_md.ends_with('\n') {
-                println!();
-            }
+            self.sync_print(|| {
+                print!("{final_md}");
+                if !final_md.ends_with('\n') {
+                    println!();
+                }
+            });
         }
 
         if self.streaming_markdown_started {
-            println!();
-            println!("  {}", "╰─".with(Color::AnsiValue(240)));
+            self.sync_print(|| {
+                println!();
+                println!("  {}", "╰─".with(Color::AnsiValue(240)));
+            });
             self.streaming_markdown_started = false;
         }
     }
 
-    fn print_activity(icon: &str, label: &str, body: &str, accent: Color) {
-        println!(
-            "  {} {} {}",
-            icon.bold().with(accent),
-            label.bold().with(accent),
-            body.with(Color::White)
-        );
+    fn print_activity(&self, icon: &str, label: &str, body: &str, accent: Color) {
+        self.sync_print(|| {
+            println!(
+                "  {} {} {}",
+                icon.bold().with(accent),
+                label.bold().with(accent),
+                body.with(Color::White)
+            );
+        });
     }
 
-    fn print_detail(label: &str, body: &str) {
-        println!(
-            "    {} {}",
-            label.with(Color::AnsiValue(242)),
-            body.with(Color::AnsiValue(245))
-        );
+    fn print_detail(&self, label: &str, body: &str) {
+        self.sync_print(|| {
+            println!(
+                "    {} {}",
+                label.with(Color::AnsiValue(242)),
+                body.with(Color::AnsiValue(245))
+            );
+        });
     }
 }
 
@@ -160,9 +178,11 @@ impl EventHandler for CliEventHandler {
                     if let Some(rendered) =
                         self.markdown_state.push(&self.renderer, &extracted_text)
                     {
-                        use std::io::Write;
-                        print!("{}", rendered);
-                        let _ = std::io::stdout().flush();
+                        self.sync_print(|| {
+                            use std::io::Write;
+                            print!("{}", rendered);
+                            let _ = std::io::stdout().flush();
+                        });
                     }
                 } else if let Some(ref mut sp) = self.spinner {
                     let kb = self.stream_char_count as f64 / 1024.0;
@@ -171,10 +191,10 @@ impl EventHandler for CliEventHandler {
             }
             AgentEvent::ActionStart(desc) => {
                 self.stop_spinner();
-                Self::print_activity("◦", "Action", &desc, Color::AnsiValue(81));
+                self.print_activity("◦", "Action", &desc, Color::AnsiValue(81));
             }
             AgentEvent::ActionComplete(desc) => {
-                Self::print_activity("✓", "Done", &desc, Color::AnsiValue(114));
+                self.print_activity("✓", "Done", &desc, Color::AnsiValue(114));
             }
             AgentEvent::ReadFiles(paths) => {
                 self.stop_spinner();
@@ -183,15 +203,15 @@ impl EventHandler for CliEventHandler {
                 } else {
                     format!("{}, ... ({} files)", paths[..2].join(", "), paths.len())
                 };
-                Self::print_activity("◦", "Read", &display, Color::AnsiValue(110));
+                self.print_activity("◦", "Read", &display, Color::AnsiValue(110));
             }
             AgentEvent::ReconStart(desc) => {
                 self.stop_spinner();
-                Self::print_activity("◦", "Recon", &desc, Color::AnsiValue(75));
+                self.print_activity("◦", "Recon", &desc, Color::AnsiValue(75));
             }
             AgentEvent::DelegateStart(task) => {
                 self.stop_spinner();
-                Self::print_activity("◦", "Delegate", &task, Color::AnsiValue(176));
+                self.print_activity("◦", "Delegate", &task, Color::AnsiValue(176));
             }
             AgentEvent::PlanSubmitted(plan) => {
                 self.stop_spinner();
@@ -201,33 +221,35 @@ impl EventHandler for CliEventHandler {
                         plan.operations.len(),
                         plan.confidence
                     );
-                    Self::print_activity("◆", "Plan Ready", &summary, Color::AnsiValue(221));
+                    self.print_activity("◆", "Plan Ready", &summary, Color::AnsiValue(221));
                     let targets = summarize_plan_targets(&plan);
                     if !targets.is_empty() {
-                        Self::print_detail("Files", &targets);
+                        self.print_detail("Files", &targets);
                     }
                 }
             }
             AgentEvent::CruciblePreflight(msg) => {
                 self.stop_spinner();
-                Self::print_activity("◦", "Verify", &msg, Color::AnsiValue(180));
+                self.print_activity("◦", "Verify", &msg, Color::AnsiValue(180));
             }
             AgentEvent::Log(msg) => {
                 if let Some(rationale) = msg.strip_prefix("       Rationale: ") {
-                    Self::print_detail("Why", rationale);
+                    self.print_detail("Why", rationale);
                 } else if msg.contains("⚠") {
-                    println!("  {}", msg.with(Color::Yellow));
+                    self.sync_print(|| println!("  {}", msg.with(Color::Yellow)));
                 } else {
-                    println!("  {}", msg.with(Color::AnsiValue(245)));
+                    self.sync_print(|| println!("  {}", msg.with(Color::AnsiValue(245))));
                 }
             }
             AgentEvent::Error(err) => {
                 self.stop_spinner();
-                eprintln!(
-                    "  {} {}",
-                    "✘".bold().with(Color::AnsiValue(203)),
-                    err.with(Color::AnsiValue(203))
-                );
+                self.sync_print(|| {
+                    eprintln!(
+                        "  {} {}",
+                        "✘".bold().with(Color::AnsiValue(203)),
+                        err.with(Color::AnsiValue(203))
+                    );
+                });
             }
         }
     }

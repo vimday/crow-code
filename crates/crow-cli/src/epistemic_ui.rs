@@ -75,9 +75,15 @@ impl SpinnerObserver {
         self.spinner.finish_and_clear();
     }
 
+    /// Temporarily suspend the spinner to print standard output above it.
+    pub fn suspend<F: FnOnce()>(&self, f: F) {
+        self.spinner.suspend(f);
+    }
+
     /// Update the spinner's display with a clean status suffix.
     pub fn set_status(&mut self, status: String) {
-        self.spinner.set_message(format!("{} — {}", self.message_pattern, status));
+        self.spinner
+            .set_message(format!("{} — {}", self.message_pattern, status));
     }
 }
 
@@ -91,7 +97,7 @@ impl EpistemicObserver for SpinnerObserver {
 
     fn on_stream_chunk(&mut self, chunk: &str) {
         self.stream_buffer.push_str(chunk);
-        
+
         let cleaned = self.stream_buffer.replace('\n', " ");
         let display_len = 60;
         let suffix = if cleaned.chars().count() > display_len {
@@ -103,8 +109,9 @@ impl EpistemicObserver for SpinnerObserver {
         };
 
         // We embed the real-time reasoning trace directly into the spinner output
-        self.spinner.set_message(format!("{} ⚡ {}", 
-            self.message_pattern.replace("{}", "?"), 
+        self.spinner.set_message(format!(
+            "{} ⚡ {}",
+            self.message_pattern.replace("{}", "?"),
             suffix
         ));
     }
