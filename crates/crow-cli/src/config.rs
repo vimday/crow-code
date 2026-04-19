@@ -243,7 +243,7 @@ impl CrowConfig {
                     other
                 ),
             },
-            Err(_) => file_llm.json_mode.unwrap_or(false),
+            Err(_) => file_llm.json_mode.unwrap_or(true),
         };
 
         // Resolve ProviderKind

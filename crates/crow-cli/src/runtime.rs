@@ -53,9 +53,10 @@ impl SessionRuntime {
         })
     }
 
-    /// Fast-Path Epistemic Target.
-    /// Runs epistemic recon loop using the Live Workspace. Only materializes the frozen sandbox if
-    /// the LLM requests a crucible verification with proposed modifying operations.
+    /// Snapshot-safe execution turn.
+    /// Freezes the workspace baseline first, then runs the epistemic loop against
+    /// the frozen snapshot. This ensures planning context and verification baseline
+    /// are always the same snapshot — no time-of-check/time-of-use divergence.
     pub async fn execute_turn(
         &mut self,
         cfg: &CrowConfig,
@@ -75,6 +76,23 @@ impl SessionRuntime {
             }
         };
 
+        // ── Step 1: Freeze baseline BEFORE planning ──
+        // This ensures the epistemic loop reads from the same snapshot that
+        // will be used for verification. No live workspace mutations can
+        // invalidate planning context.
+        let baseline_mat_config = MaterializeConfig {
+            source: self.workspace.clone(),
+            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+            allow_hardlinks: false,
+        };
+        let frozen_sandbox = tokio::task::spawn_blocking(move || materialize(&baseline_mat_config))
+            .await
+            .context("Materialization task panicked")?
+            .context("Failed to materialize baseline snapshot")?;
+
+        let frozen_root = frozen_sandbox.path().to_path_buf();
+
         // Leverage cached repo_map if snapshot hasn't changed.
         let mut repo_map_cloned = None;
         if let Some((cached_snap, map)) = &self.cached_repo_map {
@@ -83,12 +101,14 @@ impl SessionRuntime {
             }
         }
 
+        // Build repo map from the FROZEN snapshot, not live workspace
         let repo_map = match repo_map_cloned {
             Some(map) => map,
             None => {
-                let map = cfg.build_repo_map_for(&self.workspace)
+                let frozen_for_map = frozen_root.clone();
+                let map = cfg.build_repo_map_for(&frozen_for_map)
                     .map_err(|e| anyhow::anyhow!(e))
-                    .context("Failed to build repo map from live workspace")?;
+                    .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
                 self.cached_repo_map = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 arc_map
@@ -115,31 +135,28 @@ impl SessionRuntime {
             messages.push_user(prompt);
         }
 
-
-
-        // We run the initial loop using the live workspace!
+        // ── Step 2: Epistemic loop against FROZEN baseline ──
         let mut observer = crate::event::CliEventHandler::new();
 
         let plan = crate::epistemic::run_epistemic_loop(
             &self.compiler,
             messages,
-            &self.workspace,   // LIVE WORKSPACE
+            &frozen_root,   // FROZEN SNAPSHOT — not live workspace
             Some(&self.mcp_manager),
             &mut observer,
         ).await?;
 
 
         if plan.operations.is_empty() {
-            println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
             let renderer = crate::render::TerminalRenderer::new();
             renderer.print_markdown(&plan.rationale);
             return Ok(snapshot_id);
         }
 
         println!();
-        println!("  📋 Code modification proposed ({} ops). Materializing sandbox...", plan.operations.len());
+        println!("  📋 Code modification proposed ({} ops). Verifying...", plan.operations.len());
         
-        // Setup Crucible sandbox and run test suite over the plan!
+        // ── Step 3: Crucible verification against the SAME frozen baseline ──
         let mcts_config = crate::mcts::MctsConfig::from_env();
         if !mcts_config.is_serial() {
             if !cfg.llm.prompt_caching {
@@ -150,19 +167,6 @@ impl SessionRuntime {
                 );
             }
             
-            let attempt_mat_config = MaterializeConfig {
-                source: self.workspace.clone(),
-                artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-                skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-                allow_hardlinks: false,
-            };
-            let frozen_sandbox = tokio::task::spawn_blocking(move || materialize(&attempt_mat_config))
-                .await
-                .context("Materialization task panicked")?
-                .context("Failed to materialize initial verifier sandbox")?;
-                
-            let frozen_root = frozen_sandbox.path().to_path_buf();
-
             let winner = crate::run_mcts_crucible(
                 &mcts_config,
                 &profile,
@@ -189,25 +193,7 @@ impl SessionRuntime {
             return Ok(snapshot_id);
         }
 
-        // We materialize a sandbox and hand it off to the SerialCrucible logic
-        let attempt_mat_config = MaterializeConfig {
-            source: self.workspace.clone(),
-            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-            allow_hardlinks: false,
-        };
-        let frozen_sandbox = tokio::task::spawn_blocking(move || materialize(&attempt_mat_config))
-            .await
-            .context("Materialization task panicked")?
-            .context("Failed to materialize initial verifier sandbox")?;
-            
-        let frozen_root = frozen_sandbox.path().to_path_buf();
-
-        // Because we already got the plan, we might need to apply it directly.
-        // Wait, `crucible.execute()` expects to call `run_epistemic_loop` to get the plan.
-        // The serial crucible assumes it drives the loop from scratch!
-        // To bridge the Fast Path: we can modify `SerialCrucible::execute` to optionally take a pre-compiled plan!
-        
+        // Serial crucible: use the same frozen baseline for verification
         let crucible = crate::crucible::SerialCrucible {
             cfg,
             profile: &profile,
@@ -520,14 +506,21 @@ impl SessionRuntime {
 
         match &preflight_result {
             crow_verifier::preflight::PreflightResult::Clean => {
-                println!("  ✅ Preflight: code compiles cleanly");
+                println!("  ✅ Preflight: compiles cleanly");
             }
             crow_verifier::preflight::PreflightResult::Errors(diags) => {
-                println!("  ❌ Preflight: {} compile error(s)", diags.len());
-                println!("{}", crow_verifier::preflight::format_diagnostics(diags));
+                let summary = crow_verifier::preflight::format_diagnostics(diags);
+                eprintln!("  ❌ Preflight: {} compile error(s)", diags.len());
+                eprintln!("{}", summary);
+                anyhow::bail!(
+                    "Resume aborted: preflight compile check failed with {} error(s).\n\
+                     Re-enter the session and fix the compile errors before resuming.\n{}",
+                    diags.len(),
+                    summary
+                );
             }
             crow_verifier::preflight::PreflightResult::Skipped(reason) => {
-                println!("  ⚠️  Preflight skipped: {}", reason);
+                eprintln!("  ⚠️  Preflight skipped: {}", reason);
             }
         }
 
@@ -544,17 +537,11 @@ impl SessionRuntime {
         ).await.context("Verification execution failed")?;
 
         let outcome = &result.test_run.outcome;
-        println!("\n╔══════════════════════════════════════╗");
-        println!("║  Resume Verdict: {:?}", outcome);
-        println!("╚══════════════════════════════════════╝");
-        println!("Evidence:\n{}", result.test_run.truncated_log);
-
-        println!("\n--- Changes ---");
-        crate::diff::render_plan_diff(&frozen_root, attempt_sandbox.path(), &hydrated_plan);
-
         if outcome != &crow_evidence::TestOutcome::Passed {
+            println!("  ❌ Resume verdict: {:?}", outcome);
             anyhow::bail!("Resumed session: verification failed.");
         }
+        println!("  ✅ Resume verdict: PASSED");
 
         if matches!(cfg.write_mode, crate::config::WriteMode::WorkspaceWrite | crate::config::WriteMode::DangerFullAccess) {
             println!("\n[4] Writing verified changes to workspace...");
