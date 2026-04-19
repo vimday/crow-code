@@ -38,18 +38,18 @@ pub struct ColorTheme {
 impl Default for ColorTheme {
     fn default() -> Self {
         Self {
-            heading: Color::Cyan,
-            emphasis: Color::Magenta,
-            strong: Color::Yellow,
-            inline_code: Color::Green,
-            link: Color::Blue,
-            quote: Color::DarkGrey,
-            table_border: Color::DarkCyan,
-            code_block_border: Color::DarkGrey,
-            spinner_active: Color::Blue,
-            spinner_done: Color::Green,
-            spinner_failed: Color::Red,
-            dim: Color::DarkGrey,
+            heading: Color::AnsiValue(81),
+            emphasis: Color::AnsiValue(176),
+            strong: Color::AnsiValue(221),
+            inline_code: Color::AnsiValue(114),
+            link: Color::AnsiValue(75),
+            quote: Color::AnsiValue(245),
+            table_border: Color::AnsiValue(66),
+            code_block_border: Color::AnsiValue(240),
+            spinner_active: Color::AnsiValue(81),
+            spinner_done: Color::AnsiValue(114),
+            spinner_failed: Color::AnsiValue(203),
+            dim: Color::AnsiValue(242),
         }
     }
 }
@@ -193,9 +193,9 @@ impl RenderState {
         if let Some(level) = self.heading_level {
             style = match level {
                 1 => style.with(theme.heading),
-                2 => style.white(),
-                3 => style.with(Color::Blue),
-                _ => style.with(Color::Grey),
+                2 => style.with(Color::AnsiValue(255)),
+                3 => style.with(Color::AnsiValue(110)),
+                _ => style.with(Color::AnsiValue(250)),
             };
         } else if self.strong > 0 {
             style = style.with(theme.strong);
@@ -238,10 +238,7 @@ pub struct TerminalRenderer {
 impl Default for TerminalRenderer {
     fn default() -> Self {
         let syntax_set = SyntaxSet::load_defaults_newlines();
-        let syntax_theme = ThemeSet::load_defaults()
-            .themes
-            .remove("base16-ocean.dark")
-            .unwrap_or_default();
+        let syntax_theme = resolve_syntax_theme();
         Self {
             syntax_set,
             syntax_theme,
@@ -264,13 +261,14 @@ impl TerminalRenderer {
     /// Render markdown to a styled ANSI string for terminal display.
     #[must_use]
     pub fn render_markdown(&self, markdown: &str) -> String {
+        let normalized = normalize_nested_fences(markdown);
         let mut output = String::new();
         let mut state = RenderState::default();
         let mut code_language = String::new();
         let mut code_buffer = String::new();
         let mut in_code_block = false;
 
-        for event in Parser::new_ext(markdown, Options::all()) {
+        for event in Parser::new_ext(&normalized, Options::all()) {
             self.render_event(
                 event,
                 &mut state,
@@ -650,6 +648,31 @@ impl MarkdownStreamState {
 
 // ─── Utility Helpers ────────────────────────────────────────────────
 
+fn resolve_syntax_theme() -> Theme {
+    let mut themes = ThemeSet::load_defaults().themes;
+    let requested = std::env::var("CROW_SYNTAX_THEME").ok();
+
+    if let Some(theme_name) = requested.as_deref().and_then(resolve_theme_alias) {
+        if let Some(theme) = themes.remove(theme_name) {
+            return theme;
+        }
+    }
+
+    themes.remove("base16-ocean.dark").unwrap_or_default()
+}
+
+fn resolve_theme_alias(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "ocean" | "ocean-dark" | "base16-ocean" => Some("base16-ocean.dark"),
+        "ocean-light" => Some("base16-ocean.light"),
+        "github" | "light" | "inspired-github" => Some("InspiredGitHub"),
+        "solarized-dark" => Some("Solarized (dark)"),
+        "solarized-light" => Some("Solarized (light)"),
+        "" => None,
+        _ => None,
+    }
+}
+
 fn apply_code_block_background(line: &str) -> String {
     let trimmed = line.trim_end_matches('\n');
     let trailing_newline = if trimmed.len() == line.len() {
@@ -661,8 +684,156 @@ fn apply_code_block_background(line: &str) -> String {
     format!("\u{1b}[48;5;236m{with_background}\u{1b}[0m{trailing_newline}")
 }
 
+#[allow(clippy::too_many_lines)]
+fn normalize_nested_fences(markdown: &str) -> String {
+    #[derive(Debug, Clone)]
+    struct FenceLine {
+        character: char,
+        length: usize,
+        has_info: bool,
+        indent: usize,
+    }
+
+    fn parse_fence_line(line: &str) -> Option<FenceLine> {
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        let indent = trimmed.chars().take_while(|c| *c == ' ').count();
+        if indent > 3 {
+            return None;
+        }
+
+        let rest = &trimmed[indent..];
+        let character = rest.chars().next()?;
+        if character != '`' && character != '~' {
+            return None;
+        }
+
+        let length = rest.chars().take_while(|c| *c == character).count();
+        if length < 3 {
+            return None;
+        }
+
+        let after = &rest[length..];
+        if character == '`' && after.contains('`') {
+            return None;
+        }
+
+        Some(FenceLine {
+            character,
+            length,
+            has_info: !after.trim().is_empty(),
+            indent,
+        })
+    }
+
+    let lines: Vec<&str> = markdown.split_inclusive('\n').collect();
+    let fence_info: Vec<Option<FenceLine>> =
+        lines.iter().map(|line| parse_fence_line(line)).collect();
+
+    struct StackEntry {
+        line_idx: usize,
+        fence: FenceLine,
+    }
+
+    let mut stack = Vec::new();
+    let mut pairs = Vec::new();
+
+    for (idx, fence) in fence_info.iter().enumerate() {
+        let Some(fence) = fence else { continue };
+
+        if fence.has_info {
+            stack.push(StackEntry {
+                line_idx: idx,
+                fence: fence.clone(),
+            });
+            continue;
+        }
+
+        let closes_top = stack.last().is_some_and(|top| {
+            top.fence.character == fence.character && fence.length >= top.fence.length
+        });
+
+        if closes_top {
+            let opener = stack.pop().expect("stack must contain opener");
+            let inner_max = fence_info[opener.line_idx + 1..idx]
+                .iter()
+                .filter_map(|candidate| candidate.as_ref().map(|f| f.length))
+                .max()
+                .unwrap_or(0);
+            pairs.push((opener.line_idx, idx, inner_max));
+        } else {
+            stack.push(StackEntry {
+                line_idx: idx,
+                fence: fence.clone(),
+            });
+        }
+    }
+
+    struct Rewrite {
+        character: char,
+        new_length: usize,
+        indent: usize,
+    }
+
+    let mut rewrites = std::collections::HashMap::new();
+    for (opener_idx, closer_idx, inner_max) in pairs {
+        let opener = fence_info[opener_idx]
+            .as_ref()
+            .expect("paired opener must exist");
+        if opener.length > inner_max {
+            continue;
+        }
+
+        let new_length = inner_max + 1;
+        rewrites.insert(
+            opener_idx,
+            Rewrite {
+                character: opener.character,
+                new_length,
+                indent: opener.indent,
+            },
+        );
+
+        let closer = fence_info[closer_idx]
+            .as_ref()
+            .expect("paired closer must exist");
+        rewrites.insert(
+            closer_idx,
+            Rewrite {
+                character: closer.character,
+                new_length,
+                indent: closer.indent,
+            },
+        );
+    }
+
+    if rewrites.is_empty() {
+        return markdown.to_string();
+    }
+
+    let mut output = String::with_capacity(markdown.len() + rewrites.len() * 4);
+    for (idx, line) in lines.iter().enumerate() {
+        if let Some(rewrite) = rewrites.get(&idx) {
+            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+            let fence = fence_info[idx]
+                .as_ref()
+                .expect("rewrite target must be fence");
+            let after = &trimmed[fence.indent + fence.length..];
+            let trailing = &line[trimmed.len()..];
+
+            output.push_str(&" ".repeat(rewrite.indent));
+            output.push_str(&rewrite.character.to_string().repeat(rewrite.new_length));
+            output.push_str(after);
+            output.push_str(trailing);
+        } else {
+            output.push_str(line);
+        }
+    }
+
+    output
+}
+
 fn find_stream_safe_boundary(markdown: &str) -> Option<usize> {
-    let mut in_fence = false;
+    let mut open_fence: Option<FenceMarker> = None;
     let mut last_boundary = None;
 
     for (offset, line) in markdown.split_inclusive('\n').scan(0usize, |cursor, line| {
@@ -670,25 +841,73 @@ fn find_stream_safe_boundary(markdown: &str) -> Option<usize> {
         *cursor += line.len();
         Some((start, line))
     }) {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fence = !in_fence;
-            if !in_fence {
+        let line_without_newline = line.trim_end_matches('\n');
+
+        if let Some(opener) = open_fence {
+            if line_closes_fence(line_without_newline, opener) {
+                open_fence = None;
                 last_boundary = Some(offset + line.len());
             }
             continue;
         }
 
-        if in_fence {
+        if let Some(opener) = parse_fence_opener(line_without_newline) {
+            open_fence = Some(opener);
             continue;
         }
 
-        if trimmed.is_empty() {
+        if line_without_newline.trim().is_empty() {
             last_boundary = Some(offset + line.len());
         }
     }
 
     last_boundary
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FenceMarker {
+    character: char,
+    length: usize,
+}
+
+fn parse_fence_opener(line: &str) -> Option<FenceMarker> {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    if indent > 3 {
+        return None;
+    }
+
+    let rest = &line[indent..];
+    let character = rest.chars().next()?;
+    if character != '`' && character != '~' {
+        return None;
+    }
+
+    let length = rest.chars().take_while(|c| *c == character).count();
+    if length < 3 {
+        return None;
+    }
+
+    let info = &rest[length..];
+    if character == '`' && info.contains('`') {
+        return None;
+    }
+
+    Some(FenceMarker { character, length })
+}
+
+fn line_closes_fence(line: &str, opener: FenceMarker) -> bool {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    if indent > 3 {
+        return false;
+    }
+
+    let rest = &line[indent..];
+    let length = rest.chars().take_while(|c| *c == opener.character).count();
+    if length < opener.length {
+        return false;
+    }
+
+    rest[length..].chars().all(|c| c == ' ' || c == '\t')
 }
 
 fn visible_width(input: &str) -> usize {
@@ -790,5 +1009,33 @@ mod tests {
         let mut state = MarkdownStreamState::default();
         assert!(state.push(&r, "# Heading").is_none());
         assert!(state.push(&r, "\n\nParagraph\n\n").is_some());
+    }
+
+    #[test]
+    fn renders_nested_fenced_code_blocks() {
+        let r = TerminalRenderer::new();
+        let out = r.render_markdown("````markdown\n```rust\nfn nested() {}\n```\n````");
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("╭─ markdown"));
+        assert!(plain.contains("```rust"));
+        assert!(plain.contains("fn nested()"));
+    }
+
+    #[test]
+    fn streaming_waits_for_outer_fence_to_close() {
+        let r = TerminalRenderer::new();
+        let mut state = MarkdownStreamState::default();
+
+        assert!(state
+            .push(&r, "````markdown\n```rust\nfn inner() {}\n")
+            .is_none());
+        assert!(state.push(&r, "```\n").is_none());
+
+        let flushed = state
+            .push(&r, "````\n")
+            .expect("closing outer fence should flush");
+        let plain = strip_ansi(&flushed);
+        assert!(plain.contains("fn inner()"));
+        assert!(plain.contains("```rust"));
     }
 }

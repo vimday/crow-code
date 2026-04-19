@@ -2,7 +2,10 @@ use crate::config::CrowConfig;
 use crate::render::{ColorTheme, TerminalRenderer};
 use crate::session::{Session, SessionStore};
 use anyhow::Result;
-use crossterm::style::{Color, Stylize};
+use crossterm::{
+    style::{Color, Stylize},
+    terminal::size,
+};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -141,31 +144,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
     let theme = *renderer.color_theme();
 
     // ── Welcome Banner ──
-    println!();
-    println!(
-        "{}",
-        "  🦅 Crow Code — Evidence-Driven Coding Agent"
-            .bold()
-            .with(Color::Cyan)
-    );
-    println!(
-        "  {}",
-        format!(
-            "Model: {} │ Write: {:?}",
-            cfg.describe_provider(),
-            cfg.write_mode
-        )
-        .with(Color::DarkGrey)
-    );
-    println!(
-        "  {}",
-        "Type /help for commands. Ctrl+J or Shift+Enter for newlines.".with(Color::DarkGrey)
-    );
-    println!(
-        "  {}",
-        "───────────────────────────────────────────────".with(Color::DarkGrey)
-    );
-    println!();
+    print_repl_banner(cfg, &theme);
 
     // ── Editor Setup ──
     let editor_config = Config::builder()
@@ -209,10 +188,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
     // ── Main Loop ──
     loop {
-        let prompt = format!(
-            "{} ",
-            format!("crow:{}", state.turns).with(Color::Cyan).bold()
-        );
+        let prompt = build_prompt(&state, cfg, &messages, &theme);
         let readline = rl.readline(&prompt);
         match readline {
             Ok(line) => {
@@ -246,11 +222,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
                 // ── Execute Turn ──
                 state.turns += 1;
-                println!();
-                println!(
-                    "  {}",
-                    "💭 Analyzing workspace and synthesizing IntentPlan...".with(Color::DarkGrey)
-                );
+                print_turn_header(state.turns, input, cfg, &messages, &theme);
                 let turn_start = Instant::now();
 
                 match runtime.execute_turn(cfg, input, &mut messages).await {
@@ -281,13 +253,13 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         println!();
                         println!(
                             "  {} {}",
-                            "✘ Task failed:".bold().with(Color::Red),
-                            format!("{:#}", e).with(Color::Red)
+                            "✘".bold().with(Color::AnsiValue(203)),
+                            format!("{:#}", e).with(Color::AnsiValue(203))
                         );
                         println!(
                             "  {}",
-                            "(Provide follow-up instructions to resolve, or /clear to reset)"
-                                .with(Color::DarkGrey)
+                            "Use follow-up instructions to recover, or /clear to reset context."
+                                .with(theme.dim)
                         );
                     }
                 }
@@ -321,11 +293,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
 fn print_help(theme: &ColorTheme) {
     println!();
-    println!("  {}", "Available Commands".bold().with(theme.heading));
-    println!(
-        "  {}",
-        "───────────────────────────────────────────────".with(Color::DarkGrey)
-    );
+    print_section_title("Commands", "Interactive REPL shortcuts", theme);
 
     let commands = [
         ("/help", "Show this help message"),
@@ -344,18 +312,18 @@ fn print_help(theme: &ColorTheme) {
     }
 
     println!();
-    println!("  {}", "Tips:".bold().with(theme.heading));
+    print_section_title("Tips", "Input ergonomics", theme);
     println!(
         "  {}",
-        "• Ctrl+J or Shift+Enter inserts a newline for multi-line input".with(Color::DarkGrey)
+        "• Ctrl+J or Shift+Enter inserts a newline for multi-line input".with(theme.dim)
     );
     println!(
         "  {}",
-        "• Tab-complete slash commands (type / then press Tab)".with(Color::DarkGrey)
+        "• Tab-complete slash commands (type / then press Tab)".with(theme.dim)
     );
     println!(
         "  {}",
-        "• Previous commands are accessible with ↑/↓ arrow keys".with(Color::DarkGrey)
+        "• Previous commands are accessible with ↑/↓ arrow keys".with(theme.dim)
     );
     println!();
 }
@@ -367,6 +335,7 @@ fn print_status(
     state: &SessionState,
     cfg: &CrowConfig,
     messages: &crate::context::ConversationManager,
+    theme: &ColorTheme,
 ) {
     let ctx_bytes = messages.get_total_bytes();
     let msg_count = messages.as_messages().len();
@@ -377,48 +346,17 @@ fn print_status(
     };
 
     println!();
-    println!("  {}", "Session Status".bold().with(Color::Cyan));
-    println!(
-        "  {}",
-        "───────────────────────────────────────────────".with(Color::DarkGrey)
+    print_section_title("Session", "Current REPL state", theme);
+    print_kv_line("Session", &session.id.0);
+    print_kv_line("Workspace", &cfg.workspace.display().to_string());
+    print_kv_line("Provider", &cfg.describe_provider());
+    print_kv_line("Write Mode", &write_mode_badge(cfg));
+    print_kv_line("Turns", &state.turns.to_string());
+    print_kv_line(
+        "Context",
+        &format!("{} · {} messages", format_bytes(ctx_bytes), msg_count),
     );
-    println!(
-        "  {}  {}",
-        "Session ID:".with(Color::DarkGrey),
-        session.id.0.clone().with(Color::White)
-    );
-    println!(
-        "  {}  {}",
-        "Workspace: ".with(Color::DarkGrey),
-        cfg.workspace.display().to_string().with(Color::White)
-    );
-    println!(
-        "  {}  {}",
-        "Provider:  ".with(Color::DarkGrey),
-        cfg.describe_provider().with(Color::White)
-    );
-    println!(
-        "  {}  {:?}",
-        "Write Mode:".with(Color::DarkGrey),
-        cfg.write_mode
-    );
-    println!();
-    println!(
-        "  {}  {}",
-        "Turns:     ".with(Color::DarkGrey),
-        state.turns.to_string().bold()
-    );
-    println!(
-        "  {}  {} ({} messages)",
-        "Context:   ".with(Color::DarkGrey),
-        format_bytes(ctx_bytes).bold(),
-        msg_count
-    );
-    println!(
-        "  {}  {}",
-        "Avg Turn:  ".with(Color::DarkGrey),
-        format_duration_ms(avg_turn_ms)
-    );
+    print_kv_line("Avg Turn", &format_duration_ms(avg_turn_ms));
     println!();
 }
 
@@ -427,14 +365,19 @@ fn print_status(
 fn print_turn_footer(
     elapsed: std::time::Duration,
     messages: &crate::context::ConversationManager,
-    _theme: &ColorTheme,
+    theme: &ColorTheme,
 ) {
     let ctx_bytes = messages.get_total_bytes();
+    let msg_count = messages.as_messages().len();
     println!(
-        "\n  {}  {}  {}",
-        format!("⏱ {}", format_duration(elapsed)).with(Color::DarkGrey),
-        format!("│ ctx: {}", format_bytes(ctx_bytes)).with(Color::DarkGrey),
-        "│ ✔ synced".with(Color::DarkGrey),
+        "\n  {}",
+        format!(
+            "╰─ Completed in {} · ctx {} · {} messages · synced",
+            format_duration(elapsed),
+            format_bytes(ctx_bytes),
+            msg_count
+        )
+        .with(theme.dim),
     );
 }
 
@@ -465,6 +408,125 @@ fn format_duration_ms(ms: u128) -> String {
     } else {
         format!("{:.1}s", ms as f64 / 1000.0)
     }
+}
+
+fn terminal_width() -> usize {
+    size().map(|(w, _)| usize::from(w)).unwrap_or(80)
+}
+
+fn write_mode_badge(cfg: &CrowConfig) -> String {
+    match cfg.write_mode {
+        crate::config::WriteMode::SandboxOnly => "sandbox".to_string(),
+        crate::config::WriteMode::WorkspaceWrite => "write".to_string(),
+        crate::config::WriteMode::DangerFullAccess => "danger".to_string(),
+    }
+}
+
+fn compact_model_name(cfg: &CrowConfig) -> String {
+    let model = cfg.llm.model.rsplit('/').next().unwrap_or(&cfg.llm.model);
+    truncate_middle(model, 22)
+}
+
+fn truncate_middle(input: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    if chars.len() <= max_chars {
+        return input.to_string();
+    }
+
+    let keep_left = max_chars.saturating_sub(1) / 2;
+    let keep_right = max_chars.saturating_sub(1) - keep_left;
+    let left: String = chars.iter().take(keep_left).collect();
+    let right: String = chars[chars.len().saturating_sub(keep_right)..]
+        .iter()
+        .collect();
+    format!("{left}…{right}")
+}
+
+fn compact_preview(input: &str, max_chars: usize) -> String {
+    let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_middle(&normalized, max_chars)
+}
+
+fn print_repl_banner(cfg: &CrowConfig, theme: &ColorTheme) {
+    println!();
+    print_section_title("Crow Code", "Evidence-driven terminal coding agent", theme);
+    print_kv_line("Model", &compact_model_name(cfg));
+    print_kv_line("Provider", &cfg.describe_provider());
+    print_kv_line("Workspace", &cfg.workspace.display().to_string());
+    print_kv_line("Write Mode", &write_mode_badge(cfg));
+    println!(
+        "  {}",
+        "Type /help for commands. Ctrl+J or Shift+Enter inserts a newline.".with(theme.dim)
+    );
+    println!();
+}
+
+fn build_prompt(
+    state: &SessionState,
+    cfg: &CrowConfig,
+    messages: &crate::context::ConversationManager,
+    theme: &ColorTheme,
+) -> String {
+    let turn = state.turns + 1;
+    let status = format!(
+        "{} · {} · {}",
+        compact_model_name(cfg),
+        write_mode_badge(cfg),
+        format_bytes(messages.get_total_bytes())
+    );
+
+    format!(
+        "{} {} {} ",
+        format!("crow:{turn:02}").bold().with(theme.heading),
+        status.with(Color::AnsiValue(245)),
+        "›".bold().with(theme.heading),
+    )
+}
+
+fn print_turn_header(
+    turn: usize,
+    input: &str,
+    cfg: &CrowConfig,
+    messages: &crate::context::ConversationManager,
+    theme: &ColorTheme,
+) {
+    let meta = format!(
+        "Turn {:02} · {} · {} · ctx {}",
+        turn,
+        compact_model_name(cfg),
+        write_mode_badge(cfg),
+        format_bytes(messages.get_total_bytes())
+    );
+    let preview = compact_preview(input, terminal_width().saturating_sub(12).max(24));
+
+    println!();
+    println!("  {}", format!("╭─ {meta}").bold().with(theme.heading));
+    println!(
+        "  {} {}",
+        "›".bold().with(theme.emphasis),
+        preview.with(Color::White)
+    );
+    println!("  {}", "╰─ analyzing workspace".with(theme.dim));
+}
+
+fn print_section_title(title: &str, subtitle: &str, theme: &ColorTheme) {
+    let width = terminal_width().saturating_sub(6).max(18);
+    let title_blob = format!(" {title} ");
+    let rule_len = width.saturating_sub(title_blob.chars().count());
+    println!(
+        "  {}{}",
+        title_blob.bold().with(theme.heading),
+        "─".repeat(rule_len).with(theme.dim)
+    );
+    println!("  {}", subtitle.with(theme.dim));
+}
+
+fn print_kv_line(label: &str, value: &str) {
+    println!(
+        "  {} {}",
+        format!("{label:>10}").with(Color::AnsiValue(242)),
+        value.with(Color::White)
+    );
 }
 
 fn dirs_home() -> std::path::PathBuf {
@@ -503,7 +565,7 @@ fn handle_slash_command(cmd: SlashCommand, ctx: &mut ReplContext) -> CommandOutc
             CommandOutcome::Continue
         }
         SlashCommand::Status => {
-            print_status(ctx.session, ctx.state, ctx.cfg, ctx.messages);
+            print_status(ctx.session, ctx.state, ctx.cfg, ctx.messages, ctx.theme);
             CommandOutcome::Continue
         }
         SlashCommand::Clear => {
