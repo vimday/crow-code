@@ -206,52 +206,60 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
 fn handle_tab_completion(state: &mut AppState) {
     let text = state.composer.clone();
 
-    // Basic file path completion for `!` (naive, splits by space and completes last token)
-    if text.starts_with('!') {
-        if let Some(last_word_idx) = text.rfind(' ') {
-            let path_prefix = &text[last_word_idx + 1..];
-            let mut parent_dir = std::path::Path::new(".");
-            let mut file_prefix = path_prefix;
+    // Universal file path completion for the last token in the composer.
+    let last_word_idx = text.rfind(|c: char| c.is_whitespace()).map(|idx| idx + 1).unwrap_or(0);
+    let path_prefix = &text[last_word_idx..];
 
-            if let Some(slash_idx) = path_prefix.rfind('/') {
-                parent_dir = std::path::Path::new(&path_prefix[..=slash_idx]);
-                file_prefix = &path_prefix[slash_idx + 1..];
-                if parent_dir.as_os_str().is_empty() {
-                    parent_dir = std::path::Path::new("/");
-                }
+    if !path_prefix.is_empty() {
+        let mut parent_dir = std::path::Path::new(".");
+        let mut file_prefix = path_prefix;
+
+        if let Some(slash_idx) = path_prefix.rfind('/') {
+            parent_dir = std::path::Path::new(&path_prefix[..=slash_idx]);
+            file_prefix = &path_prefix[slash_idx + 1..];
+            if parent_dir.as_os_str().is_empty() {
+                parent_dir = std::path::Path::new("/");
             }
+        }
 
-            if let Ok(entries) = std::fs::read_dir(parent_dir) {
-                let mut matches = Vec::new();
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with(file_prefix) {
-                        if entry.path().is_dir() {
-                            matches.push(format!("{}/", name));
-                        } else {
-                            matches.push(name);
-                        }
+        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+            let mut matches = Vec::new();
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(file_prefix) {
+                    if entry.path().is_dir() {
+                        matches.push(format!("{}/", name));
+                    } else {
+                        matches.push(name);
                     }
                 }
+            }
 
-                if matches.len() == 1 {
-                    let new_text = format!(
-                        "{}{}{}",
-                        &text[..last_word_idx + 1],
-                        parent_dir.to_string_lossy(),
-                        matches[0]
-                    );
-                    let new_text = new_text.replace("./", "");
-                    state.composer = new_text;
-                    state.composer_cursor = state.composer.chars().count();
-                }
+            if matches.len() == 1 {
+                let parent_str = parent_dir.to_string_lossy();
+                let parent_part = if parent_str == "." || parent_str == "./" {
+                    String::new()
+                } else {
+                    parent_str.to_string()
+                };
+
+                let new_text = format!(
+                    "{}{}{}",
+                    &text[..last_word_idx],
+                    parent_part,
+                    matches[0]
+                );
+                
+                state.composer = new_text;
+                state.composer_cursor = state.composer.chars().count();
+                return;
             }
         }
-    } else {
-        // Normal text mode tab
-        for _ in 0..4 {
-            insert_char_at_cursor(state, ' ');
-        }
+    }
+
+    // Normal text mode fallback: insert 4 spaces if no completion match
+    for _ in 0..4 {
+        insert_char_at_cursor(state, ' ');
     }
 }
 
@@ -441,6 +449,17 @@ async fn run_tui_loop(
                             KeyCode::Char(c) => {
                                 // Let normal typing carry into composer
                                 insert_char_at_cursor(state, c);
+                                if let crate::tui::state::OverlayState::CommandPalette {
+                                    query,
+                                    selected_idx,
+                                } = &mut state.overlay_state
+                                {
+                                    *query = state.composer.clone();
+                                    *selected_idx = 0; // reset selection
+                                }
+                            }
+                            KeyCode::Tab => {
+                                handle_tab_completion(state);
                                 if let crate::tui::state::OverlayState::CommandPalette {
                                     query,
                                     selected_idx,
