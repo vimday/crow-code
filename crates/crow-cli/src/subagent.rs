@@ -112,6 +112,18 @@ impl EventHandler for SubagentEventHandler<'_> {
                 .parent
                 .handle_event(AgentEvent::Error(format!("[{}] {}", self.id, msg))),
             AgentEvent::Markdown(msg) => self.parent.handle_event(AgentEvent::Markdown(msg)),
+            // Pass through new high-granularity events with subagent context
+            AgentEvent::TokenUsage { .. } => self.parent.handle_event(event),
+            AgentEvent::StateChanged { from, to } => self.parent.handle_event(AgentEvent::Log(
+                format!("  [{}] State: {} → {}", self.id, from, to),
+            )),
+            AgentEvent::Retrying { attempt, max_attempts, reason } => self.parent.handle_event(
+                AgentEvent::Retrying { attempt, max_attempts, reason: format!("[{}] {}", self.id, reason) },
+            ),
+            AgentEvent::Compacting { active } => self.parent.handle_event(AgentEvent::Compacting { active }),
+            AgentEvent::ToolProgress { tool_id, message } => self.parent.handle_event(
+                AgentEvent::ToolProgress { tool_id, message: format!("[{}] {}", self.id, message) },
+            ),
         }
     }
 }

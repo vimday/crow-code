@@ -4,7 +4,7 @@
 
 **Crow Code** is an AI coding agent built by [CorvusMatrix](https://github.com/CorvusMatrix). Instead of letting a model write directly to your repository, Crow compiles model output into structured `AgentAction` / `IntentPlan` objects, rehydrates them against the current workspace, applies them inside an isolated sandbox, and verifies the result before any workspace write.
 
-With the advent of **Phase 3**, Crow is no longer just a pipeline—it is a **world-class interactive High-Performance TUI Workstation**. You can chat, queue commands seamlessly, and instantly dispatch parallel background sub-agents while the primary core continues working.
+With the advent of **Console 6.0**, Crow is a **world-class interactive High-Performance TUI Workstation** featuring dynamic skill loading, autonomous context compaction, and non-blocking swarm concurrency.
 
 ## ✨ Why Crow Code?
 
@@ -19,13 +19,13 @@ With the advent of **Phase 3**, Crow is no longer just a pipeline—it is a **wo
 - **Isolated Sandboxing**: Changes are completely materialized inside an APFS/Hardlink isolated sandbox. Crow executes ACI-restricted validation pre-flights on your test suite. Only victorious patches are merged into the live repository.
 
 ### **3. 🧠 Rich Context & Extensibility**
-- **Native Tool Calling**: Tightly integrated into streaming pipelines.
+- **Dynamic Skill System**: Drop `SKILL.md` files into `~/.crow/skills/` or `.crow/skills/` with YAML frontmatter to inject project-specific prompts and behaviors. Skills are advertised to the LLM via lightweight XML metadata tags — no token waste.
+- **Autonomous Context Compactor**: 2-phase compaction (micro-compact tool results → full LLM summarization) automatically maintains context health during long sessions without manual intervention.
 - **Multi-Provider Routing**: Out-of-the-box compatibility with OpenAI, Anthropic, Ollama, and DeepSeek backends.
 - **MCP Stdio Transport**: Extensible Model Context Protocol (MCP) tooling natively baked into the event bus.
+- **High-Granularity Event System**: Real-time token usage tracking, agent state transitions, retry visualization, and compaction indicators streamed to the TUI.
 
 ---
-
-## ⚡ Quick Start
 
 ## 🚀 Getting Started
 
@@ -60,7 +60,7 @@ export LLM_MODEL="gpt-4o"
 # Anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
 export LLM_PROVIDER="anthropic"
-export LLM_MODEL="claude-3-5-sonnet-20240620"
+export LLM_MODEL="claude-sonnet-4-20250514"
 ```
 
 #### Option B: Global or Local Configuration
@@ -84,21 +84,45 @@ Example `~/.crow/config.json` using **Ollama** (Local AI):
 ```
 *Tip: `write_mode: "write"` allows Crow to apply verified patches to your repo. Set it to `"sandbox_only"` to preview changes without modifying your files.*
 
-### 3️⃣ Usage (The Interactive Workstation)
+### 3️⃣ Skills (Dynamic Prompt Plugins)
 
-Navigate to any Rust codebase you want to work on and start the Crow TUI:
+Create project-specific or global skills by adding `SKILL.md` files:
 
 ```bash
-cd my-rust-project
+# Global skills
+mkdir -p ~/.crow/skills/rust-expert
+cat > ~/.crow/skills/rust-expert/SKILL.md << 'EOF'
+---
+description: Expert-level Rust coding guidance
+triggers:
+  - rust
+  - cargo
+---
+# Rust Expert Skill
+Prefer idiomatic Rust patterns. Use `thiserror` for errors...
+EOF
+
+# Project-local skills
+mkdir -p .crow/skills/
+```
+
+Skills are automatically discovered and advertised to the LLM via `<skill>` XML tags. The body content is loaded on-demand, not injected into every API call.
+
+### 4️⃣ Usage (The Interactive Workstation)
+
+Navigate to any codebase you want to work on and start the Crow TUI:
+
+```bash
+cd my-project
 crow
 ```
 
 You are now in the Interactive Developer Workstation. 
 - **Type naturally** to instruct the agent to build features or fix bugs. 
-- **Asynchronous Flow**: While Crow is "thinking", you don't have to wait! You can continue typing commands, and they will be queued seamlessly.
-- **Sub-Agent Swarms**: Need a massive refactor done in the background? Type `/swarm audit all error handling`. A detached agent will take off on your Swarm Bar, leaving your main terminal free for continuing work.
+- **Asynchronous Flow**: While Crow is "thinking", you don't have to wait! Continue typing commands, and they will be queued seamlessly.
+- **Sub-Agent Swarms**: Need a massive refactor done in the background? Type `/swarm audit all error handling`. A detached agent will take off on your Swarm Bar.
 
-**Instant Resume**: Had to close the terminal? Run `crow -r` to instantly rehydrate your entire active session, context history, and verification records!
+**Instant Resume**: Had to close the terminal? Run `crow -r` to instantly rehydrate your entire active session!
 
 ---
 
@@ -108,21 +132,39 @@ You are now in the Interactive Developer Workstation.
 |---|---|
 | `crow` | Open the Interactive Ratatui Workbench. |
 | `crow -r` \| `--resume` | Boot the Workbench, resuming the most recently active session. |
+| `crow chat` | Start a simple REPL chat mode (no TUI). |
 | `crow compile <prompt>` | Output the structured `AgentAction` JSON. |
 | `crow plan <prompt>` | Fast evidence-first preview of plans and impact reports. |
 | `crow run <prompt>` | The full autonomous sandbox pipeline (Agentic Loop). |
 | `crow dry-run <prompt>` | Alias for `run`. |
+| `crow dashboard` | Open the interactive EventLedger & Dream dashboard. |
+| `crow dream` | Run background AutoDream memory consolidation. |
 | `crow session list` | View all historical JSONL sessions. |
 | `crow session resume <id>`| Resume a specific session timeline. |
+| `crow mcp` | Manage MCP tools. |
 
 ### Workbench Slash Commands
 When inside the TUI, these commands orchestrate the session:
 
 - `/help` — Display the integrated help manual.
-- `/swarm <task>` — Launch a detached, truly concurrent background agent process on a secondary task.
-- `/model <name>` — Live-swap the active LLM router strategy safely.
+- `/swarm <task>` — Launch a detached, truly concurrent background agent process.
+- `/model <name>` — Live-swap the active LLM router strategy.
 - `/clear` — Erase current semantic memory buffers.
 - `/status` — Dump advanced diagnostic engine state to history.
+- `/view <mode>` — Switch lens mode (`focus` | `evidence` | `audit`).
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | API key (or `CROW_API_KEY`) |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `LLM_BASE_URL` | Provider endpoint |
+| `LLM_MODEL` | Model name |
+| `LLM_PROVIDER` | Provider type (`openai`, `anthropic`, `ollama`, `custom`) |
+| `CROW_WRITE_MODE` | `sandbox` \| `write` \| `danger` (default: `write`) |
+| `CROW_MCTS_BRANCHES` | MCTS branch factor (default: `3`) |
+| `CROW_MAP_BUDGET` | Repo map size budget in bytes |
 
 ---
 
@@ -140,7 +182,7 @@ L0  crow-patch   crow-evidence   crow-probe
 ```
 
 | Crate | Layer | Purpose |
-|-------|-------|---------|
+|-------|-------|---------| 
 | `crow-patch` | L0 | Internal patch contract: `AgentAction`, `IntentPlan`, `WorkspacePath` |
 | `crow-evidence` | L0 | Verification evidence schemas & multidimensional types |
 | `crow-probe` | L0 | Active workspace scanning and validation candidates |
@@ -148,8 +190,8 @@ L0  crow-patch   crow-evidence   crow-probe
 | `crow-materialize`| L1 | Secure Physical Isolation protocols (CoW / symlink boundaries) |
 | `crow-verifier` | L2 | Sandboxed command execution & ACI truncation buffers |
 | `crow-intel` | L3 | LSP bridges, Tree-Sitter Repo Maps & outliners |
-| `crow-brain` | L4 | Intent compilation, LLM client streaming, & AutoDream models |
-| `crow-cli` | L5 | The Event-Bus UX, Ratatui GUI, MCTS crucible & Swarm thread managers |
+| `crow-brain` | L4 | Intent compilation, LLM streaming, Skill system, Context compactor |
+| `crow-cli` | L5 | The Event-Bus UX, Ratatui TUI, MCTS crucible & Swarm managers |
 | `crow-mcp` | L5 | MCP stdio JSON-RPC dueling clients |
 
 ---
@@ -163,12 +205,16 @@ L0  crow-patch   crow-evidence   crow-probe
 - Unified ThreadManager yielding a completely asynchronous, dynamic TUI experience.
 - Queue-based input buffering & zero-block Multi-Task Swarms.
 - Per-tool Security Wall approval loops (Whitelist overrides).
+- **Dynamic Skill System** with YAML frontmatter and XML prompt injection.
+- **2-Phase Context Compactor** (micro-compact → full LLM summarization).
+- **High-granularity Event System** with TokenUsage, Retrying, Compacting, StateChanged events.
+- **Elm/Redux TUI Components** (ChatView, CommandPalette, InfoBar with token gauge).
 
 ### 🚧 **Active Development**
-- **Time-Travel Replay**: The `crow-replay` harness for behavioral regression is in active design.
-- **Event-Ledger UX**: Enhanced visualization of timeline snapshots onto the Dashboard.
+- **Agent State Machine**: Explicit state transitions (Idle → Streaming → ExecutingTool → WaitingForInput).
+- **Incremental Markdown Streaming**: Real-time rendering of code blocks and headings as they stream in.
+- **Time-Travel Replay**: The `crow-replay` harness for behavioral regression.
 - **Deep LSP Intelligence**: Tighter native LSP proxy streams through `crow-intel`.
-- **Advanced Network Isolation**: Broadening OS-level process sandboxing constraints.
 
 For in-depth architectural mandates, check out [`docs/RFC-001-Architecture-Baseline.md`](docs/RFC-001-Architecture-Baseline.md).
 

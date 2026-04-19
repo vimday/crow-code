@@ -165,10 +165,21 @@ impl SessionRuntime {
         }
 
         // ── Phase 2 Integration: Compactor ──
-        if let Err(e) = messages.compact_history(&self.compiler).await {
-            observer.handle_event(crate::event::AgentEvent::Log(format!(
-                "Warning: Context compression failed: {}", e
-            )));
+        observer.handle_event(crate::event::AgentEvent::Compacting { active: true });
+        match messages.compact_history(&self.compiler).await {
+            Ok(true) => {
+                observer.handle_event(crate::event::AgentEvent::Compacting { active: false });
+            }
+            Ok(false) => {
+                // No compaction needed — silently clear the indicator
+                observer.handle_event(crate::event::AgentEvent::Compacting { active: false });
+            }
+            Err(e) => {
+                observer.handle_event(crate::event::AgentEvent::Compacting { active: false });
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "Warning: Context compression failed: {}", e
+                )));
+            }
         }
 
         // ── Step 2: Epistemic loop against FROZEN baseline ──

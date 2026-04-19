@@ -38,6 +38,41 @@ pub enum AgentEvent {
 
     /// A fatal error occurred during the loop.
     Error(String),
+
+    // ── High-granularity events (Yomi-inspired) ─────────────────────
+
+    /// Token usage update from provider API response.
+    TokenUsage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+        /// Model context window size (for usage bar calculation)
+        context_window: u32,
+    },
+
+    /// Agent state transition (for TUI state visualization).
+    StateChanged {
+        from: String,
+        to: String,
+    },
+
+    /// Agent is retrying after a transient error.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        reason: String,
+    },
+
+    /// Context compaction is starting or finishing.
+    Compacting {
+        active: bool,
+    },
+
+    /// Progress update for long-running tool/subagent.
+    ToolProgress {
+        tool_id: String,
+        message: String,
+    },
 }
 
 /// A receiver trait for AgentEvents, separating the engine from TUI/CLI rendering.
@@ -278,6 +313,36 @@ impl EventHandler for CliEventHandler {
                 println!();
                 renderer.print_markdown(&md);
                 println!();
+            }
+            AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens, context_window } => {
+                if self.view_mode == ViewMode::Audit {
+                    let pct = (total_tokens as u64 * 100).checked_div(context_window as u64).unwrap_or(0);
+                    self.print_trace(
+                        "Tokens",
+                        &format!("{}+{}={} ({}% of {})", prompt_tokens, completion_tokens, total_tokens, pct, context_window),
+                        Color::AnsiValue(117),
+                    );
+                }
+            }
+            AgentEvent::StateChanged { from, to } => {
+                if self.view_mode == ViewMode::Audit {
+                    self.print_trace("State", &format!("{} → {}", from, to), Color::AnsiValue(245));
+                }
+            }
+            AgentEvent::Retrying { attempt, max_attempts, reason } => {
+                self.update_spinner(format!("Retrying ({}/{})… {}", attempt, max_attempts, reason));
+            }
+            AgentEvent::Compacting { active } => {
+                if active {
+                    self.update_spinner("Compacting context history…".to_string());
+                } else {
+                    self.print_trace("Action", "Context compaction complete", Color::AnsiValue(114));
+                }
+            }
+            AgentEvent::ToolProgress { tool_id: _, message } => {
+                if self.view_mode != ViewMode::Focus {
+                    self.update_spinner(message);
+                }
             }
         }
     }

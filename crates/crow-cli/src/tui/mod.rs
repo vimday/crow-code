@@ -958,5 +958,44 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_action = None;
             state.task_start_time = None;
         }
+        // ── High-granularity events (Yomi-inspired) ─────────────────────
+        AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens, context_window } => {
+            // Store on AppState for info bar rendering
+            let pct = (total_tokens * 100).checked_div(context_window).unwrap_or(0);
+            state.model_info = format!(
+                "{} | Tokens: {}+{}={} ({}%)",
+                state.model_info.split(" | Tokens:").next().unwrap_or(&state.model_info),
+                prompt_tokens, completion_tokens, total_tokens, pct
+            );
+        }
+        AgentEvent::StateChanged { from, to } => {
+            if state.view_mode == ViewMode::Audit {
+                state.history.push(Cell {
+                    kind: CellKind::Log,
+                    payload: format!("State: {} → {}", from, to),
+                });
+            }
+        }
+        AgentEvent::Retrying { attempt, max_attempts, reason } => {
+            state.active_action = Some(format!("Retrying ({}/{})… {}", attempt, max_attempts, reason));
+            state.history.push(Cell {
+                kind: CellKind::Log,
+                payload: format!("⚠ Retrying ({}/{}): {}", attempt, max_attempts, reason),
+            });
+        }
+        AgentEvent::Compacting { active } => {
+            if active {
+                state.active_action = Some("Compacting context…".into());
+            } else {
+                state.active_action = None;
+                state.history.push(Cell {
+                    kind: CellKind::Action,
+                    payload: "Context compaction complete".into(),
+                });
+            }
+        }
+        AgentEvent::ToolProgress { tool_id: _, message } => {
+            state.active_action = Some(message);
+        }
     }
 }
