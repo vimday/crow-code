@@ -7862,6 +7862,7 @@ impl SessionRuntime {
                 messages,
                 &snapshot_id,
                 Some(&self.mcp_manager),
+                observer,
             )
             .await?;
 
@@ -7878,6 +7879,7 @@ impl SessionRuntime {
                     &plan_id,
                     &snapshot_id,
                     &self.ledger,
+                    observer,
                 )
                 .await?;
 
@@ -15199,6 +15201,7 @@ impl SerialCrucible<'_> {
                 &plan_id,
                 snapshot_id,
                 ledger,
+                observer,
             )
             .await?;
             let new_snapshot_id = crate::snapshot::resolve_snapshot_id(&self.cfg.workspace);
@@ -15433,6 +15436,7 @@ async fn warm_build_cache(
     workspace_root: &std::path::Path,
     profile: &crow_probe::types::ProjectProfile,
     candidate: &crow_probe::types::VerificationCandidate,
+    observer: &mut dyn crate::event::EventHandler,
 ) {
     use std::time::Instant;
 
@@ -15462,27 +15466,17 @@ async fn warm_build_cache(
     };
 
     let Some(cmd) = cmd else {
-        println!(
+        observer.handle_event(crate::event::AgentEvent::Log(format!(
             "    ⏭️  No warm-up cache command configured for language: {}",
             profile.primary_lang.name
-        );
+        )));
         return;
     };
 
-    let spinner = indicatif::ProgressBar::new_spinner();
-    spinner.set_style(
-        indicatif::ProgressStyle::default_spinner()
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message(format!(
+    observer.handle_event(crate::event::AgentEvent::ActionStart(format!(
         "Pre-warming build cache for {}...",
         profile.primary_lang.name
-    ));
-    if console::Term::stdout().is_term() && std::env::var("CI").is_err() {
-        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    }
+    )));
 
     let start = Instant::now();
 
@@ -15517,31 +15511,29 @@ async fn warm_build_cache(
     .await
     {
         Ok(result) => {
-            spinner.finish_and_clear();
             let elapsed = start.elapsed();
             if result.exit_code == Some(0) {
                 // Sync the warmed cache into our isolated global tracker for future runs.
                 // We MUST use `crow_target` here, NOT `host_target`, as we do not want to pollute
                 // the user's active workspace target/ with our sandbox builds!
                 crate::mcts::clone_cache_dir(&frozen_cache, &crow_target).await;
-                println!(
-                    "    ✅ Build cache warmed in {:.1}s — MCTS branches will use incremental compilation",
+                observer.handle_event(crate::event::AgentEvent::ActionComplete(format!(
+                    "Build cache warmed in {:.1}s — MCTS branches will use incremental compilation",
                     elapsed.as_secs_f64()
-                );
+                )));
             } else {
-                println!(
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
                     "    ⚠️  Warm-up cargo check failed (exit={:?}) in {:.1}s — branches will cold-build",
                     result.exit_code,
                     elapsed.as_secs_f64()
-                );
+                )));
             }
         }
         Err(e) => {
-            spinner.finish_and_clear();
-            eprintln!(
+            observer.handle_event(crate::event::AgentEvent::Log(format!(
                 "    ⚠️  Build cache warm-up failed: {:?} — continuing without cache",
                 e
-            );
+            )));
         }
     }
 }
@@ -15553,49 +15545,50 @@ pub(crate) async fn apply_winning_plan(
     plan_id: &str,
     snapshot_id: &crow_patch::SnapshotId,
     ledger: &std::sync::Mutex<crow_workspace::ledger::EventLedger>,
+    observer: &mut dyn crate::event::EventHandler,
 ) -> Result<()> {
     // ── WriteMode enforcement ────────────────────────────
     match cfg.write_mode {
         config::WriteMode::SandboxOnly => {
-            println!("\n  📦 Write mode: sandbox-only — changes remain in sandbox (not applied to workspace)");
-            println!("     Use CROW_WRITE_MODE=write to enable workspace application.");
+            observer.handle_event(crate::event::AgentEvent::Log("  📦 Write mode: sandbox-only — changes remain in sandbox (not applied to workspace)".into()));
+            observer.handle_event(crate::event::AgentEvent::Log("     Use CROW_WRITE_MODE=write to enable workspace application.".into()));
         }
         config::WriteMode::WorkspaceWrite => {
-            println!(
-                "\n  ✍️  Write mode: workspace-write — applying verified changes to workspace..."
-            );
+            observer.handle_event(crate::event::AgentEvent::Log(
+                "  ✍️  Write mode: workspace-write — applying verified changes to workspace...".into()
+            ));
             if let Err(e) =
                 crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
             {
-                eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
-                eprintln!("     Sandbox remains at: {}", sandbox_path.display());
+                observer.handle_event(crate::event::AgentEvent::Log(format!("  ❌ Failed to apply to workspace: {:?}", e)));
+                observer.handle_event(crate::event::AgentEvent::Log(format!("     Sandbox remains at: {}", sandbox_path.display())));
                 anyhow::bail!("Workspace application failed: {:?}", e);
             } else {
-                println!("  ✅ Workspace updated successfully.");
+                observer.handle_event(crate::event::AgentEvent::Log("  ✅ Workspace updated successfully.".into()));
                 if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, hydrated_plan)
                 {
-                    println!("  ⚠️  Could not automatically commit changes: {}", e);
+                    observer.handle_event(crate::event::AgentEvent::Log(format!("  ⚠️  Could not automatically commit changes: {}", e)));
                 } else {
-                    println!("  ✅ Changes committed to git timeline.");
+                    observer.handle_event(crate::event::AgentEvent::Log("  ✅ Changes committed to git timeline.".into()));
                 }
             }
         }
         config::WriteMode::DangerFullAccess => {
-            println!(
-                "\n  ⚠️  Write mode: danger-full-access — applying without additional checks..."
-            );
+            observer.handle_event(crate::event::AgentEvent::Log(
+                "  ⚠️  Write mode: danger-full-access — applying without additional checks...".into()
+            ));
             if let Err(e) =
                 crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
             {
-                eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
+                observer.handle_event(crate::event::AgentEvent::Log(format!("  ❌ Failed to apply to workspace: {:?}", e)));
                 anyhow::bail!("Workspace application failed: {:?}", e);
             } else {
-                println!("  ✅ Workspace updated.");
+                observer.handle_event(crate::event::AgentEvent::Log("  ✅ Workspace updated.".into()));
                 if let Err(e) = crate::snapshot::commit_applied_plan(&cfg.workspace, hydrated_plan)
                 {
-                    println!("  ⚠️  Could not automatically commit changes: {}", e);
+                    observer.handle_event(crate::event::AgentEvent::Log(format!("  ⚠️  Could not automatically commit changes: {}", e)));
                 } else {
-                    println!("  ✅ Changes committed to git timeline.");
+                    observer.handle_event(crate::event::AgentEvent::Log("  ✅ Changes committed to git timeline.".into()));
                 }
             }
         }
@@ -15623,22 +15616,21 @@ pub(crate) async fn run_mcts_crucible(
     messages: &mut context::ConversationManager,
     snapshot_id: &crow_patch::SnapshotId,
     mcp_manager: Option<&crate::mcp::McpManager>,
+    observer: &mut dyn crate::event::EventHandler,
 ) -> Result<Option<crate::mcts::BranchOutcome>> {
     // 1. Initial Epistemic Loop (Serial Recon)
-    println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
-    let mut obs = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
+    observer.handle_event(crate::event::AgentEvent::Log("Entering Epistemic Recon Loop (MCTS Pre-exploration)...".into()));
     let baseline_plan =
-        epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, &mut obs)
+        epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, observer)
             .await?;
 
     if baseline_plan.operations.is_empty() {
-        println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
-        let renderer = crate::render::TerminalRenderer::new();
-        renderer.print_markdown(&baseline_plan.rationale);
+        observer.handle_event(crate::event::AgentEvent::Log("Conversational Intent Detected (No codebase changes proposed)".into()));
+        observer.handle_event(crate::event::AgentEvent::Markdown(baseline_plan.rationale.clone()));
         return Ok(None);
     }
 
-    println!("    Seeding baseline plan into MCTS branch 0...");
+    observer.handle_event(crate::event::AgentEvent::Log("Seeding baseline plan into MCTS branch 0...".into()));
 
     // Dynamic MCTS Downgrade for Non-code Changes
     // If the LLM just generated a pure documentation edit or a simple config,
@@ -15657,13 +15649,13 @@ pub(crate) async fn run_mcts_crucible(
 
     if (is_pure_text_change || !baseline_plan.requires_mcts) && actual_mcts_config.branch_factor > 1
     {
-        println!("    ⏭️  Baseline plan indicates MCTS bypass (trivial or non-code task). Bypassing parallel diverse search (MCTS downgraded to 1 branch).");
+        observer.handle_event(crate::event::AgentEvent::Log("    ⏭️  Baseline plan indicates MCTS bypass (trivial or non-code task). Bypassing parallel diverse search (MCTS downgraded to 1 branch).".into()));
         actual_mcts_config.branch_factor = 1;
     }
 
     if actual_mcts_config.branch_factor > 1 {
         // Pre-warm the build cache so all MCTS branches start with compiled dependencies.
-        warm_build_cache(frozen_root, workspace_root, profile, candidate).await;
+        warm_build_cache(frozen_root, workspace_root, profile, candidate, observer).await;
     }
 
     // 2. MCTS Parallel Explore Rounds
@@ -15674,17 +15666,17 @@ pub(crate) async fn run_mcts_crucible(
         allow_hardlinks: false,
     };
 
-    println!(
-        "\n[6/6] Entering MCTS Parallel Crucible ({} branches, {} max rounds)",
+    observer.handle_event(crate::event::AgentEvent::Log(format!(
+        "Entering MCTS Parallel Crucible ({} branches, {} max rounds)",
         actual_mcts_config.branch_factor, actual_mcts_config.max_rounds
-    );
+    )));
     let mut current_baseline = baseline_plan;
 
     for mcts_round in 1..=actual_mcts_config.max_rounds {
-        println!(
+        observer.handle_event(crate::event::AgentEvent::Log(format!(
             "▶️ MCTS Round {}/{}",
             mcts_round, actual_mcts_config.max_rounds
-        );
+        )));
 
         let mut outcomes = crate::mcts::explore_round(
             &actual_mcts_config,
@@ -15700,28 +15692,24 @@ pub(crate) async fn run_mcts_crucible(
         .await;
 
         if let Some(winner) = crate::mcts::select_winner(&mut outcomes) {
-            println!(
-                "\n[🎉] MCTS Branch {} passed on round {}!",
+            observer.handle_event(crate::event::AgentEvent::Log(format!(
+                "MCTS Branch {} passed on round {}!",
                 winner.branch_id, mcts_round
-            );
+            )));
 
-            // Render the diff so the user sees what changed
-            println!("\n─── Winning Patch (Branch {}) ───", winner.branch_id);
-            diff::render_plan_diff(frozen_root, winner.sandbox.path(), &winner.plan);
-
-            println!("\n╔══════════════════════════════════════╗");
-            println!("║  MCTS Verdict: Passed ✅              ║");
-            println!("╚══════════════════════════════════════╝");
-            println!("Evidence:\n{}", winner.log);
+            // Instead of printing diffuse directly to terminal over Ratatui, log it.
+            observer.handle_event(crate::event::AgentEvent::Log(format!(
+                "Winning Patch (Branch {}) passed verifier.\nEvidence:\n{}", winner.branch_id, winner.log
+            )));
 
             return Ok(Some(winner));
         }
 
         // All branches failed. Feed diagnostics back and re-derive baseline.
-        println!(
-            "\n[❗] MCTS Round {} failed! Feeding diagnostics back to LLM...",
+        observer.handle_event(crate::event::AgentEvent::Log(format!(
+            "[❗] MCTS Round {} failed! Feeding diagnostics back to LLM...",
             mcts_round
-        );
+        )));
         let merged = crate::mcts::merge_diagnostics(&outcomes);
         messages.push_verifier_result("MCTS_AllBranchesFailed", &merged);
 
@@ -15729,33 +15717,38 @@ pub(crate) async fn run_mcts_crucible(
         // feedback. This ensures branch 0 in the next round gets an
         // informed plan instead of repeating the same stale one.
         if mcts_round < actual_mcts_config.max_rounds {
-            println!("  🧠 Re-deriving baseline plan from failure feedback...");
+            observer.handle_event(crate::event::AgentEvent::Log("  🧠 Re-deriving baseline plan from failure feedback...".into()));
             match compiler.compile_action(&messages.as_messages()).await {
                 Ok(crow_patch::AgentAction::SubmitPlan { plan }) => {
-                    println!("    ✅ New baseline plan generated for next round");
+                    observer.handle_event(crate::event::AgentEvent::Log("    ✅ New baseline plan generated for next round".into()));
                     current_baseline = plan;
                 }
                 Ok(other) => {
                     // Model wants to do more recon — note it but reuse previous baseline
                     messages.push_assistant(serde_json::to_string(&other).unwrap_or_default());
-                    println!("    ⚠️  Model requested {:?} instead of SubmitPlan — reusing previous baseline",
+                    observer.handle_event(crate::event::AgentEvent::Log(format!(
+                        "    ⚠️  Model requested {:?} instead of SubmitPlan — reusing previous baseline",
                         match &other {
                             crow_patch::AgentAction::ReadFiles { .. } => "ReadFiles",
                             crow_patch::AgentAction::Recon { .. } => "Recon",
                             _ => "unknown",
                         }
-                    );
+                    )));
                 }
                 Err(e) => {
-                    eprintln!(
+                    observer.handle_event(crate::event::AgentEvent::Log(format!(
                         "    ⚠️  Baseline re-derivation failed: {:?} — reusing previous",
                         e
-                    );
+                    )));
                 }
             }
         }
     }
 
+    observer.handle_event(crate::event::AgentEvent::Log(format!(
+        "MCTS exploration exhausted all {} rounds without finding a passing plan.",
+        actual_mcts_config.max_rounds
+    )));
     anyhow::bail!(
         "MCTS exploration exhausted all {} rounds without finding a passing plan.",
         actual_mcts_config.max_rounds
@@ -15897,6 +15890,7 @@ mod tests {
         let snap_id = crow_patch::SnapshotId("snap-123".into());
 
         let ledger = std::sync::Mutex::new(ledger);
+        let mut obs = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
         apply_winning_plan(
             &cfg,
             sandbox.path(),
@@ -15904,6 +15898,7 @@ mod tests {
             "test-plan",
             &snap_id,
             &ledger,
+            &mut obs,
         )
         .await
         .unwrap();

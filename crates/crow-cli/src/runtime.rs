@@ -198,6 +198,7 @@ impl SessionRuntime {
                 messages,
                 &snapshot_id,
                 Some(&self.mcp_manager),
+                observer,
             )
             .await?;
 
@@ -214,6 +215,7 @@ impl SessionRuntime {
                     &plan_id,
                     &snapshot_id,
                     &self.ledger,
+                    observer,
                 )
                 .await?;
 

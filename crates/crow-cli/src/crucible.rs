@@ -386,6 +386,7 @@ impl SerialCrucible<'_> {
                 &plan_id,
                 snapshot_id,
                 ledger,
+                observer,
             )
             .await?;
             let new_snapshot_id = crate::snapshot::resolve_snapshot_id(&self.cfg.workspace);
