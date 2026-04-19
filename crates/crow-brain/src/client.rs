@@ -197,10 +197,7 @@ impl ReqwestLlmClient {
                     "strict": false
                 }
             }]);
-            body["tool_choice"] = json!({
-                "type": "function",
-                "function": { "name": "agent_action" }
-            });
+            body["tool_choice"] = json!("required");
         }
 
         let mut retries = 0;
@@ -363,10 +360,7 @@ impl ReqwestLlmClient {
                     "strict": false
                 }
             }]);
-            body["tool_choice"] = json!({
-                "type": "function",
-                "function": { "name": "agent_action" }
-            });
+            body["tool_choice"] = json!("required");
         }
 
         if let Some(effort) = &self.reasoning_effort {
@@ -404,7 +398,10 @@ impl ReqwestLlmClient {
                         continue;
                     }
                     let raw_text = r.text().await.unwrap_or_default();
-                    return Err(BrainError::ApiError { status: code, body: raw_text });
+                    return Err(BrainError::ApiError {
+                        status: code,
+                        body: raw_text,
+                    });
                 }
                 Err(e) => {
                     if retries < max_retries {
@@ -434,18 +431,27 @@ impl ReqwestLlmClient {
                                 if let Some(delta) = choice.get("delta") {
                                     let mut chunk_str = "";
                                     if self.json_mode {
-                                        if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                        if let Some(tcs) =
+                                            delta.get("tool_calls").and_then(|t| t.as_array())
+                                        {
                                             if let Some(tc) = tcs.first() {
                                                 if let Some(fn_obj) = tc.get("function") {
-                                                    if let Some(args) = fn_obj.get("arguments").and_then(|a| a.as_str()) {
+                                                    if let Some(args) = fn_obj
+                                                        .get("arguments")
+                                                        .and_then(|a| a.as_str())
+                                                    {
                                                         chunk_str = args;
                                                     }
                                                 }
                                             }
-                                        } else if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                        } else if let Some(content) =
+                                            delta.get("content").and_then(|c| c.as_str())
+                                        {
                                             chunk_str = content;
                                         }
-                                    } else if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                    } else if let Some(content) =
+                                        delta.get("content").and_then(|c| c.as_str())
+                                    {
                                         chunk_str = content;
                                     }
                                     if !chunk_str.is_empty() {
