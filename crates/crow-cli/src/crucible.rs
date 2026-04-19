@@ -54,7 +54,7 @@ impl SerialCrucible<'_> {
         while verification_runs < 3 && total_attempts < max_total_attempts {
             total_attempts += 1;
             println!(
-                "\n▶️ Crucible Epoch {} (Verification Run {}/3)",
+                "\n  ▶️  Crucible Epoch {} (Attempt {}/3)",
                 total_attempts,
                 verification_runs + 1
             );
@@ -97,7 +97,7 @@ impl SerialCrucible<'_> {
         let mut verification_runs = 0;
         let max_total_attempts = 10;
         
-        println!("\n▶️ Crucible Epoch 1 (Verification Run 1/3) [Precompiled Fast-Path]");
+        println!("  ▶️  Crucible Epoch 1 (Fast-Path with precompiled plan)");
         match self.run_epoch(messages, snapshot_id, ledger, verification_runs, total_attempts, Some(plan)).await? {
             EpochOutcome::Success(new_snap) => return Ok(new_snap),
             EpochOutcome::RetryCompile => {},
@@ -108,7 +108,7 @@ impl SerialCrucible<'_> {
         while verification_runs < 3 && total_attempts < max_total_attempts {
             total_attempts += 1;
             println!(
-                "\n▶️ Crucible Epoch {} (Verification Run {}/3)",
+                "\n  ▶️  Crucible Epoch {} (Attempt {}/3)",
                 total_attempts,
                 verification_runs + 1
             );
@@ -146,7 +146,7 @@ impl SerialCrucible<'_> {
         precompiled_plan: Option<crow_patch::IntentPlan>,
     ) -> Result<EpochOutcome> {
         if messages.needs_compaction() {
-            println!("  🗜️  Auto-compacting massive context history (Auto-Compaction)...");
+            eprintln!("  🗜️  Auto-compacting context history...");
             if let Ok(summary) = self
                 .compiler
                 .compile_summary_of_history(messages.as_messages().as_slice())
@@ -173,13 +173,13 @@ impl SerialCrucible<'_> {
         };
 
         if compiled_plan.operations.is_empty() {
-            println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
+            println!("  💬 Conversational response (no code changes)");
             let renderer = crate::render::TerminalRenderer::new();
             let _ = renderer.render_markdown(&compiled_plan.rationale);
             return Ok(EpochOutcome::Success(snapshot_id.clone()));
         }
 
-        println!("\n[5/6] Re-materializing fresh sandbox (from frozen baseline)...");
+        // Re-materialize a fresh sandbox from the frozen baseline
         let attempt_mat_config = MaterializeConfig {
             source: self.frozen_root.to_path_buf(),
             artifact_dirs: self.profile.ignore_spec.artifact_dirs.clone(),
@@ -191,10 +191,7 @@ impl SerialCrucible<'_> {
                 .await
                 .context("Materialization task panicked")?
                 .context("Failed to re-materialize attempt sandbox")?;
-        println!(
-            "    🛡️  Fresh attempt sandbox at: {}",
-            attempt_sandbox.path().display()
-        );
+        // Fresh sandbox ready
 
         let attempt_sandbox_path = attempt_sandbox.path().to_path_buf();
         let plan_clone = compiled_plan.clone();
@@ -211,7 +208,7 @@ impl SerialCrucible<'_> {
         {
             Ok(Ok(p)) => p,
             Ok(Err(e)) => {
-                println!("    ❌ Hydration failed: {:?}", e);
+                eprintln!("  ❌ Hydration failed: {:?}", e);
                 messages.push_user(format!(
                     "[HYDRATION FAILED]\nYour plan failed physical hydration: {:?}\n\nPlease reflect and output a new AgentAction to fix the issue.",
                     e
@@ -223,10 +220,7 @@ impl SerialCrucible<'_> {
             }
         };
 
-        println!(
-            "    💧 Hydrated Plan:\n{}",
-            serde_json::to_string_pretty(&hydrated_plan)?
-        );
+        // Plan hydrated successfully
 
         {
             let plan_for_apply = hydrated_plan.clone();
@@ -245,14 +239,13 @@ impl SerialCrucible<'_> {
             timestamp: chrono::Utc::now(),
         });
 
-        println!("    💉 Sandbox injection successful!");
-        println!("\n--- Sandbox Diff (frozen baseline → patched) ---");
+        println!("  💉 Plan applied to sandbox");
         crate::diff::render_plan_diff(self.frozen_root, attempt_sandbox.path(), &hydrated_plan);
 
         // Preflight
         {
             use crow_verifier::preflight::{self, PreflightResult};
-            println!("\n    🔍 Running preflight compile check...");
+            // Preflight compile check
             let start_preflight = std::time::Instant::now();
             let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
                 plan_id: plan_id.clone(),
@@ -281,12 +274,11 @@ impl SerialCrucible<'_> {
 
             match preflight_result {
                 PreflightResult::Clean => {
-                    println!("    ✅ Preflight: code compiles cleanly");
+                    println!("  ✅ Preflight: compiles cleanly");
                 }
                 PreflightResult::Errors(diags) => {
                     let summary = preflight::format_diagnostics(&diags);
-                    println!("    ❌ Preflight: {} compile error(s) found", diags.len());
-                    println!("{}", summary);
+                    println!("  ❌ Preflight: {} compile error(s)", diags.len());
                     messages.push_user(format!(
                         "[PREFLIGHT COMPILE CHECK FAILED]\n{}\n\nPlease fix these compile errors and resubmit your plan.",
                         summary
@@ -294,15 +286,12 @@ impl SerialCrucible<'_> {
                     return Ok(EpochOutcome::RetryCompile);
                 }
                 PreflightResult::Skipped(reason) => {
-                    println!("    ⚠️  Preflight skipped: {}", reason);
+                    eprintln!("  ⚠️  Preflight skipped: {}", reason);
                 }
             }
         }
 
-        println!(
-            "\n[6/6] Verifying Sandbox with '{}'...",
-            self.candidate.command.display()
-        );
+        println!("  🧪 Verifying: {}", self.candidate.command.display());
         let exec_config = crow_verifier::types::ExecutionConfig {
             timeout: std::time::Duration::from_secs(60),
             max_output_bytes: 5 * 1024 * 1024,
@@ -319,16 +308,8 @@ impl SerialCrucible<'_> {
         .context("Verification execution failed")?;
 
         let outcome = &result.test_run.outcome;
-        println!("\n╔══════════════════════════════════════╗");
-        println!("║  Dry-Run Verdict: {:?}", outcome);
-        println!("╚══════════════════════════════════════╝");
-        println!("Evidence:\n{}", result.test_run.truncated_log);
-
         if outcome == &crow_evidence::TestOutcome::Passed {
-            println!(
-                "\n[🎉] Autonomous execution successful on verification run {}!",
-                verification_runs + 1
-            );
+            println!("  ✅ Verdict: PASSED (verification run {})", verification_runs + 1);
             crate::apply_winning_plan(
                 self.cfg,
                 attempt_sandbox.path(),
@@ -341,7 +322,7 @@ impl SerialCrucible<'_> {
             let new_snapshot_id = crate::snapshot::resolve_snapshot_id(&self.cfg.workspace);
             return Ok(EpochOutcome::Success(new_snapshot_id));
         } else {
-            println!("\n[❗] Verification failed! Re-entering Crucible Loop with ACI log...");
+            println!("  ❌ Verdict: {:?} — retrying...", result.test_run.outcome);
             messages.push_verifier_result(
                 &format!("{:?}", result.test_run.outcome),
                 &result.test_run.truncated_log,

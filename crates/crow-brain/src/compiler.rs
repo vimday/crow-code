@@ -103,6 +103,10 @@ pub trait LlmClient: Send + Sync {
 pub struct IntentCompiler {
     client: std::sync::Arc<dyn LlmClient>,
     max_retries: usize,
+    /// When true, native tool calling is active (tools/tool_choice sent via transport).
+    /// The verbose text-based schema guide can be shortened since the model already
+    /// has the formal tool schema.
+    native_tool_calling: bool,
 }
 
 impl IntentCompiler {
@@ -110,11 +114,17 @@ impl IntentCompiler {
         Self {
             client,
             max_retries: 3,
+            native_tool_calling: false,
         }
     }
 
     pub fn with_max_retries(mut self, retries: usize) -> Self {
         self.max_retries = retries;
+        self
+    }
+
+    pub fn with_native_tool_calling(mut self, enabled: bool) -> Self {
+        self.native_tool_calling = enabled;
         self
     }
 
@@ -189,18 +199,25 @@ impl IntentCompiler {
         temperature: Option<f64>,
         mut observer: Option<&mut dyn StreamObserver>,
     ) -> Result<crow_patch::AgentAction, CompilerError> {
-        let schema_guide = crate::schema::intent_plan_schema();
         let mut conversation: Vec<ChatMessage> = Vec::new();
 
-        // Always inject the schema guide into the system prompt.
-        // - When json_mode=true (native tool calling): the transport sends
-        //   the formal tool schema; this prompt guide is belt-and-suspenders.
-        // - When json_mode=false (plain chat): this is the model's ONLY
-        //   contract for producing valid AgentAction JSON.
-        conversation.push(ChatMessage::system(format!(
-            "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
-            schema_guide
-        )));
+        if self.native_tool_calling {
+            // When native tool calling is active, the formal schema is already
+            // sent via tools/tool_choice. We only need a minimal identity prompt.
+            conversation.push(ChatMessage::system(
+                "You are an autonomous coding agent. Respond by calling the agent_action function. \
+                 For conversational responses (no file changes), emit submit_plan with an empty operations array \
+                 and put your response in the rationale field."
+            ));
+        } else {
+            // Fallback: no native tool calling. The full schema guide is the model's
+            // ONLY contract for producing valid AgentAction JSON.
+            let schema_guide = crate::schema::intent_plan_schema();
+            conversation.push(ChatMessage::system(format!(
+                "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{}",
+                schema_guide
+            )));
+        }
 
         conversation.extend(messages.iter().cloned());
 

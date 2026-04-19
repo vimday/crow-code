@@ -20,7 +20,10 @@ pub struct SessionRuntime {
 impl SessionRuntime {
     pub async fn boot(cfg: &CrowConfig) -> Result<Self> {
         let client = cfg.build_llm_client()?;
-        let compiler = Arc::new(IntentCompiler::new(client));
+        let compiler = Arc::new(
+            IntentCompiler::new(client)
+                .with_native_tool_calling(cfg.llm.json_mode)
+        );
         let mcp_manager = Arc::new(McpManager::boot(&cfg.mcp_servers).await?);
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&cfg.workspace);
         
