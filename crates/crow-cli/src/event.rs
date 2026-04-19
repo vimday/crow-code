@@ -50,6 +50,11 @@ pub trait EventHandler: Send {
 pub struct CliEventHandler {
     spinner: Option<crate::epistemic_ui::SpinnerObserver>,
     stream_char_count: usize,
+    
+    // Live Streaming State
+    rationale_processor: RationaleStreamProcessor,
+    markdown_state: crate::render::MarkdownStreamState,
+    renderer: crate::render::TerminalRenderer,
 }
 
 impl Default for CliEventHandler {
@@ -60,12 +65,23 @@ impl Default for CliEventHandler {
 
 impl CliEventHandler {
     pub fn new() -> Self {
-        Self { spinner: None, stream_char_count: 0 }
+        Self { 
+            spinner: None, 
+            stream_char_count: 0,
+            rationale_processor: RationaleStreamProcessor::default(),
+            markdown_state: crate::render::MarkdownStreamState::default(),
+            renderer: crate::render::TerminalRenderer::new(),
+        }
     }
     
     fn stop_spinner(&mut self) {
         if let Some(sp) = self.spinner.take() {
             sp.finish();
+            
+            // If we had streamed markdown, ensure it's fully flushed when spinning stops
+            if let Some(final_md) = self.markdown_state.flush(&self.renderer) {
+                print!("{}", final_md);
+            }
         }
     }
 }
@@ -76,6 +92,9 @@ impl EventHandler for CliEventHandler {
             AgentEvent::Thinking(step, max) => {
                 self.stop_spinner();
                 self.stream_char_count = 0;
+                self.rationale_processor = RationaleStreamProcessor::default();
+                self.markdown_state = crate::render::MarkdownStreamState::default();
+                
                 self.spinner = Some(crate::epistemic_ui::SpinnerObserver::new(format!(
                     "🧠 Epistemic Step {}/{} — Synthesizing...",
                     step, max
@@ -83,10 +102,22 @@ impl EventHandler for CliEventHandler {
             }
             AgentEvent::StreamChunk(chunk) => {
                 self.stream_char_count += chunk.len();
-                if let Some(ref mut sp) = self.spinner {
-                    // Show character progress rather than truncated JSON fragments.
-                    // The stream chunks during tool calls are raw JSON that looks
-                    // like garbage when sliced into a spinner suffix.
+                
+                // Extract unescaped rationale text incrementally
+                let extracted_text = self.rationale_processor.push(&chunk);
+                
+                if !extracted_text.is_empty() {
+                    // Turn off the spinner so markdown can render cleanly
+                    if let Some(sp) = self.spinner.take() {
+                        sp.finish();
+                    }
+                    
+                    if let Some(rendered) = self.markdown_state.push(&self.renderer, &extracted_text) {
+                        use std::io::Write;
+                        print!("{}", rendered);
+                        let _ = std::io::stdout().flush();
+                    }
+                } else if let Some(ref mut sp) = self.spinner {
                     let kb = self.stream_char_count as f64 / 1024.0;
                     sp.set_status(format!("{:.1}K received", kb));
                 }
@@ -118,7 +149,7 @@ impl EventHandler for CliEventHandler {
             AgentEvent::PlanSubmitted(plan) => {
                 self.stop_spinner();
                 if plan.operations.is_empty() {
-                    println!("  💬 Agent responded (conversational, no code changes)");
+                    // Already streamed out!
                 } else {
                     println!("  📋 Plan submitted: {} operations, confidence: {:?}",
                         plan.operations.len(), plan.confidence);
@@ -136,5 +167,75 @@ impl EventHandler for CliEventHandler {
                 eprintln!("  ❌ Error: {}", err);
             }
         }
+    }
+}
+
+// ─── JSON Rationale Streaming ────────────────────────────────────────
+
+/// Incrementally extracts the "rationale" string from a streamed JSON response.
+#[derive(Default)]
+struct RationaleStreamProcessor {
+    buffer: String,
+    yielded_bytes: usize,
+    found_start: Option<usize>,
+    escaping: bool,
+    finished: bool,
+}
+
+impl RationaleStreamProcessor {
+    pub fn push(&mut self, chunk: &str) -> String {
+        self.buffer.push_str(chunk);
+        if self.finished { return String::new(); }
+        
+        if self.found_start.is_none() {
+            if let Some(key_idx) = self.buffer.find("\"rationale\"") {
+                let after_key = &self.buffer[key_idx + 11..];
+                if let Some(quote_idx) = after_key.find('"') {
+                    self.found_start = Some(key_idx + 11 + quote_idx + 1);
+                }
+            }
+        }
+        
+        let mut yielded = String::new();
+        
+        if let Some(start) = self.found_start {
+            let scan_start = start + self.yielded_bytes;
+            if scan_start > self.buffer.len() {
+                return yielded;
+            }
+            
+            let to_scan = &self.buffer[scan_start..];
+            let chars = to_scan.chars();
+            
+            for c in chars {
+                if self.escaping {
+                    self.escaping = false;
+                    match c {
+                        'n' => yielded.push('\n'),
+                        'r' => yielded.push('\r'),
+                        't' => yielded.push('\t'),
+                        '"' => yielded.push('"'),
+                        '\\' => yielded.push('\\'),
+                        _ => {
+                            yielded.push('\\');
+                            yielded.push(c);
+                        }
+                    }
+                    self.yielded_bytes += c.len_utf8();
+                } else if c == '\\' {
+                    self.escaping = true;
+                    self.yielded_bytes += c.len_utf8();
+                } else if c == '"' {
+                    self.finished = true;
+                    self.yielded_bytes += c.len_utf8();
+                    return yielded;
+                } else {
+                    yielded.push(c);
+                    self.yielded_bytes += c.len_utf8();
+                }
+            }
+        }
+        
+        yielded
     }
 }

@@ -145,33 +145,21 @@ pub async fn run_epistemic_loop(
                     continue;
                 }
 
-                // Hydrate context for standard subagent Worker
-                let identity = format!(
-                    "You are a specialized Subagent Worker. You have been delegated the following bounded task by the Architect Orchestrator:\n\n\
-                    TASK: {}\n\n\
-                    FOCUS PATHS: {:?}\n\n\
-                    RATIONALE: {}\n\n\
-                    Perform any necessary file reads or tool calls. When you have answers or a plan, emit a SubmitPlan action. \
-                    If you resolve the requested information without modifying code, emit an empty operations array and return your findings in the rationale.",
-                    task, focus_paths, rationale
-                );
-
-                // Preserve the architect's RepoMap and MCP states by carrying over System messages
-                let mut sys_msgs: Vec<_> = messages.as_messages().iter().filter(|m| m.role == crow_brain::ChatRole::System).cloned().collect();
+                observer.handle_event(AgentEvent::ActionStart("Spawning isolated Subagent Worker runtime".into()));
                 
-                // Override the generic agent identity with the worker identity we just formatted.
-                if let Some(first) = sys_msgs.first_mut() {
-                    first.content = identity;
-                }
-
-                let mut sub_messages = crate::context::ConversationManager::new(sys_msgs);
-
-                observer.handle_event(AgentEvent::ActionStart("Spawning isolated epistemic core for subagent worker".into()));
+                let subagent = crate::subagent::SubagentWorker::new(compiler.clone());
                 
-                // Recursively call the epistemic loop!
-                // To keep terminal output clean, we use a basic SilentObserver or a special subagent observer wrapper,
-                // but we can just pass down the existing observer since it buffers appropriately.
-                match Box::pin(run_epistemic_loop(compiler, &mut sub_messages, frozen_root, mcp_manager, observer)).await {
+                let sys_msgs = messages.as_messages().iter().filter(|m| m.role == crow_brain::ChatRole::System).cloned().collect();
+
+                match Box::pin(subagent.execute(
+                    &task,
+                    &focus_paths,
+                    &rationale,
+                    sys_msgs,
+                    frozen_root,
+                    mcp_manager,
+                    observer,
+                )).await {
                     Ok(sub_plan) => {
                         observer.handle_event(AgentEvent::ActionComplete("Subagent completed. Returning IntentPlan to Architect.".into()));
                         messages.push_user(format!(

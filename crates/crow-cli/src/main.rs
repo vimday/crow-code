@@ -17,6 +17,7 @@ pub mod prompt;
 pub mod event;
 pub mod snapshot;
 pub mod tui;
+pub mod subagent;
 
 use anyhow::Result;
 use config::CrowConfig;
