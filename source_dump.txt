@@ -8512,18 +8512,23 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
         state.composer.lines().count().max(1) as u16
     };
 
+    let swarm_lines = if state.active_swarms.is_empty() { 0 } else { 1 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),        // Conversation pane
+            Constraint::Length(swarm_lines), // Swarm bar
             Constraint::Length(1),      // Status bar
             Constraint::Length(composer_lines + 1), // Composer + top border
         ])
         .split(size);
 
     render_history(f, state, chunks[0]);
-    render_status_bar(f, state, chunks[1]);
-    render_composer(f, state, chunks[2]);
+    if swarm_lines > 0 {
+        render_swarm_bar(f, state, chunks[1]);
+    }
+    render_status_bar(f, state, chunks[2]);
+    render_composer(f, state, chunks[3]);
 }
 
 // ── Conversation Pane ────────────────────────────────────────────────────────
@@ -8656,6 +8661,27 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
 
     let list = List::new(items).block(Block::default().borders(Borders::NONE));
     f.render_widget(list, area);
+}
+
+// ── Swarm Bar ────────────────────────────────────────────────────────────────
+fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
+    if area.width < 4 || state.active_swarms.is_empty() { return; }
+    
+    let mut spans = vec![Span::styled("⚡ Swarm Active | ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
+    
+    let frame = SPINNER[state.spinner_idx % SPINNER.len()];
+    
+    for (i, (id, task)) in state.active_swarms.iter().enumerate() {
+        let display_task = if task.len() > 30 { format!("{}...", &task[..27]) } else { task.clone() };
+        spans.push(Span::styled(format!("{}{} [{}]", frame, id, display_task), Style::default().fg(Color::Cyan)));
+        if i < state.active_swarms.len() - 1 {
+            spans.push(Span::raw("   "));
+        }
+    }
+    
+    let p = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(Color::Indexed(236)));
+    f.render_widget(p, area);
 }
 
 // ── Status Bar ───────────────────────────────────────────────────────────────
@@ -9445,6 +9471,16 @@ async fn run_tui_loop(
                     state.cancellation = None;
                     refresh_git_state(state, &cfg.workspace);
                 }
+                TuiMessage::SwarmStarted(id, task) => {
+                    state.active_swarms.push((id, task));
+                }
+                TuiMessage::SwarmComplete(id, success) => {
+                    state.active_swarms.retain(|(active_id, _)| active_id != &id);
+                    state.history.push(Cell {
+                        kind: if success { CellKind::Result } else { CellKind::Error },
+                        payload: format!("Swarm worker [{}] finished.", id),
+                    });
+                }
                 TuiMessage::Tick => {
                     state.spinner_idx = state.spinner_idx.wrapping_add(1);
                     if let Some(start) = state.task_start_time {
@@ -9529,6 +9565,24 @@ fn execute_command_string(
                 tokio::spawn(async move {
                     tm.submit(crate::thread_manager::Op::Clear).await;
                 });
+            }
+            "swarm" => {
+                let payload = parts.collect::<Vec<_>>().join(" ");
+                if payload.is_empty() {
+                    state.history.push(Cell {
+                        kind: CellKind::Error,
+                        payload: "Usage: /swarm <task description>".into(),
+                    });
+                } else {
+                    let tm = thread_manager.clone();
+                    tokio::spawn(async move {
+                        tm.submit(crate::thread_manager::Op::SwarmRun(payload)).await;
+                    });
+                    state.history.push(Cell {
+                        kind: CellKind::Log,
+                        payload: "Launched asynchronous Sub-Agent Swarm Worker.".into(),
+                    });
+                }
             }
             "help" | "?" => {
                 state.history.push(Cell {
@@ -9749,6 +9803,8 @@ pub enum TuiMessage {
     AgentEvent(AgentEvent),
     TurnComplete(bool),
     SessionComplete,
+    SwarmStarted(String, String),
+    SwarmComplete(String, bool),
     Tick,
 }
 
@@ -9836,6 +9892,7 @@ pub struct AppState {
     pub task_start_time: Option<Instant>,
     pub spinner_idx: usize,
     pub cancellation: Option<CancellationToken>,
+    pub active_swarms: Vec<(String, String)>,
     
     // Approval Model
     pub approval_state: ApprovalState,
@@ -9870,6 +9927,7 @@ impl AppState {
             task_start_time: None,
             spinner_idx: 0,
             cancellation: None,
+            active_swarms: Vec::new(),
             approval_state: ApprovalState::None,
             allowed_safe_patterns: std::collections::HashSet::new(),
             overlay_state: OverlayState::None,
@@ -10769,6 +10827,7 @@ pub enum Op {
     Input(String),
     Interrupt,
     Clear,
+    SwarmRun(String),
 }
 
 /// The state tracking for the active thread.
@@ -10786,6 +10845,7 @@ pub struct ThreadManager {
     ui_tx: mpsc::UnboundedSender<TuiMessage>,
     thread_state: Arc<Mutex<CodexThread>>,
     session_id: Arc<Mutex<Option<String>>>,
+    swarm_state: Arc<Mutex<std::collections::HashMap<String, CodexThread>>>,
 }
 
 impl ThreadManager {
@@ -10806,6 +10866,7 @@ impl ThreadManager {
                 cancellation: None,
             })),
             session_id: Arc::new(Mutex::new(initial_session_id)),
+            swarm_state: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -10839,6 +10900,10 @@ impl ThreadManager {
             Op::Clear => {
                 let mut msgs = self.messages.lock().await;
                 msgs.set_system(vec![]);
+            }
+            Op::SwarmRun(prompt) => {
+                let token = CancellationToken::new();
+                self.spawn_swarm(prompt, token).await;
             }
         }
     }
@@ -10901,7 +10966,84 @@ impl ThreadManager {
                     }
                 }
             }
-            state.cancellation = None;
+        });
+    }
+
+    async fn spawn_swarm(&self, prompt: String, token: CancellationToken) {
+        let rt_clone = Arc::clone(&self.runtime);
+        let msgs_clone = Arc::clone(&self.messages);
+        let ui_tx = self.ui_tx.clone();
+        let swarm_state = Arc::clone(&self.swarm_state);
+        let prompt_clone = prompt.clone();
+
+        // Register swarm task
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+        // Extract out action args
+        let id = format!("swarm-{:04x}", (ts % 0xffff) as u16);
+        
+        {
+            let mut s = swarm_state.lock().await;
+            s.insert(id.clone(), CodexThread {
+                status: TurnStatus::InProgress,
+                cancellation: Some(token.clone()),
+            });
+        }
+        
+        let _ = ui_tx.send(TuiMessage::SwarmStarted(id.clone(), prompt_clone.clone()));
+
+        tokio::spawn(async move {
+            let mut observer = crate::event::TuiEventHandler::with_cancellation(
+                ui_tx.clone(),
+                token.clone(),
+            );
+            
+            let (compiler, root, mcp, sys_msgs) = {
+                let rt_guard = rt_clone.lock().await;
+                let msgs_guard = msgs_clone.lock().await;
+                (
+                    Arc::clone(&rt_guard.compiler),
+                    rt_guard.workspace.clone(),
+                    Arc::clone(&rt_guard.mcp_manager),
+                    msgs_guard.as_messages(),
+                )
+            };
+            
+            // Reconstruct compiler instance since it clones easily
+            let compiler_instance = (*compiler).clone();
+            let mut worker = crate::subagent::SubagentWorker::new(compiler_instance);
+            // Replace worker id for consistency with the UI
+            worker.id = id.clone();
+
+            let result = worker.execute(
+                &prompt_clone,
+                &[], // No specific focus paths initially
+                "Swarm background task initiated via TUI.",
+                sys_msgs,
+                &root,
+                Some(&mcp),
+                &mut observer
+            ).await;
+            
+            {
+                let mut s = swarm_state.lock().await;
+                if let Some(mut state) = s.remove(&id) {
+                    if token.is_cancelled() {
+                        state.status = TurnStatus::Aborted;
+                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                    } else {
+                        match result {
+                            Ok(_) => {
+                                state.status = TurnStatus::Completed(None);
+                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                            }
+                            Err(e) => {
+                                state.status = TurnStatus::Failed(e.to_string());
+                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                            }
+                        }
+                    }
+                }
+            }
         });
     }
 }

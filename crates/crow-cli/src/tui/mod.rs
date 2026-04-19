@@ -555,6 +555,16 @@ async fn run_tui_loop(
                     state.cancellation = None;
                     refresh_git_state(state, &cfg.workspace);
                 }
+                TuiMessage::SwarmStarted(id, task) => {
+                    state.active_swarms.push((id, task));
+                }
+                TuiMessage::SwarmComplete(id, success) => {
+                    state.active_swarms.retain(|(active_id, _)| active_id != &id);
+                    state.history.push(Cell {
+                        kind: if success { CellKind::Result } else { CellKind::Error },
+                        payload: format!("Swarm worker [{}] finished.", id),
+                    });
+                }
                 TuiMessage::Tick => {
                     state.spinner_idx = state.spinner_idx.wrapping_add(1);
                     if let Some(start) = state.task_start_time {
@@ -639,6 +649,24 @@ fn execute_command_string(
                 tokio::spawn(async move {
                     tm.submit(crate::thread_manager::Op::Clear).await;
                 });
+            }
+            "swarm" => {
+                let payload = parts.collect::<Vec<_>>().join(" ");
+                if payload.is_empty() {
+                    state.history.push(Cell {
+                        kind: CellKind::Error,
+                        payload: "Usage: /swarm <task description>".into(),
+                    });
+                } else {
+                    let tm = thread_manager.clone();
+                    tokio::spawn(async move {
+                        tm.submit(crate::thread_manager::Op::SwarmRun(payload)).await;
+                    });
+                    state.history.push(Cell {
+                        kind: CellKind::Log,
+                        payload: "Launched asynchronous Sub-Agent Swarm Worker.".into(),
+                    });
+                }
             }
             "help" | "?" => {
                 state.history.push(Cell {

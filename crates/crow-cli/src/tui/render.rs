@@ -34,18 +34,23 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
         state.composer.lines().count().max(1) as u16
     };
 
+    let swarm_lines = if state.active_swarms.is_empty() { 0 } else { 1 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),        // Conversation pane
+            Constraint::Length(swarm_lines), // Swarm bar
             Constraint::Length(1),      // Status bar
             Constraint::Length(composer_lines + 1), // Composer + top border
         ])
         .split(size);
 
     render_history(f, state, chunks[0]);
-    render_status_bar(f, state, chunks[1]);
-    render_composer(f, state, chunks[2]);
+    if swarm_lines > 0 {
+        render_swarm_bar(f, state, chunks[1]);
+    }
+    render_status_bar(f, state, chunks[2]);
+    render_composer(f, state, chunks[3]);
 }
 
 // ── Conversation Pane ────────────────────────────────────────────────────────
@@ -178,6 +183,27 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
 
     let list = List::new(items).block(Block::default().borders(Borders::NONE));
     f.render_widget(list, area);
+}
+
+// ── Swarm Bar ────────────────────────────────────────────────────────────────
+fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
+    if area.width < 4 || state.active_swarms.is_empty() { return; }
+    
+    let mut spans = vec![Span::styled("⚡ Swarm Active | ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
+    
+    let frame = SPINNER[state.spinner_idx % SPINNER.len()];
+    
+    for (i, (id, task)) in state.active_swarms.iter().enumerate() {
+        let display_task = if task.len() > 30 { format!("{}...", &task[..27]) } else { task.clone() };
+        spans.push(Span::styled(format!("{}{} [{}]", frame, id, display_task), Style::default().fg(Color::Cyan)));
+        if i < state.active_swarms.len() - 1 {
+            spans.push(Span::raw("   "));
+        }
+    }
+    
+    let p = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(Color::Indexed(236)));
+    f.render_widget(p, area);
 }
 
 // ── Status Bar ───────────────────────────────────────────────────────────────

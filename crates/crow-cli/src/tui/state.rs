@@ -8,6 +8,8 @@ pub enum TuiMessage {
     AgentEvent(AgentEvent),
     TurnComplete(bool),
     SessionComplete,
+    SwarmStarted(String, String),
+    SwarmComplete(String, bool),
     Tick,
 }
 
@@ -95,6 +97,7 @@ pub struct AppState {
     pub task_start_time: Option<Instant>,
     pub spinner_idx: usize,
     pub cancellation: Option<CancellationToken>,
+    pub active_swarms: Vec<(String, String)>,
     
     // Approval Model
     pub approval_state: ApprovalState,
@@ -129,6 +132,7 @@ impl AppState {
             task_start_time: None,
             spinner_idx: 0,
             cancellation: None,
+            active_swarms: Vec::new(),
             approval_state: ApprovalState::None,
             allowed_safe_patterns: std::collections::HashSet::new(),
             overlay_state: OverlayState::None,
