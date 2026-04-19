@@ -53,8 +53,7 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        self.inner
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.inner.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -73,10 +72,7 @@ pub enum ApprovalState {
 #[derive(Clone, PartialEq, Eq)]
 pub enum OverlayState {
     None,
-    CommandPalette {
-        query: String,
-        selected_idx: usize,
-    },
+    CommandPalette { query: String, selected_idx: usize },
 }
 
 pub struct AppState {
@@ -99,7 +95,7 @@ pub struct AppState {
     pub cancellation: Option<CancellationToken>,
     pub active_swarms: Vec<(String, String)>,
     pub task_queue: std::collections::VecDeque<String>,
-    
+
     // Approval Model
     pub approval_state: ApprovalState,
     pub allowed_safe_patterns: std::collections::HashSet<String>,

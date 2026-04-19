@@ -28,7 +28,10 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 pub fn render_app(f: &mut Frame, state: &mut AppState) {
     let size = f.size();
 
-    let composer_lines = if matches!(state.approval_state, crate::tui::state::ApprovalState::PendingCommand(_)) {
+    let composer_lines = if matches!(
+        state.approval_state,
+        crate::tui::state::ApprovalState::PendingCommand(_)
+    ) {
         3 // 3 lines of text for approval + 1 border = 4 total length below
     } else {
         state.composer.lines().count().max(1) as u16
@@ -38,9 +41,9 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),        // Conversation pane
-            Constraint::Length(swarm_lines), // Swarm bar
-            Constraint::Length(1),      // Status bar
+            Constraint::Min(0),                     // Conversation pane
+            Constraint::Length(swarm_lines),        // Swarm bar
+            Constraint::Length(1),                  // Status bar
             Constraint::Length(composer_lines + 1), // Composer + top border
         ])
         .split(size);
@@ -57,7 +60,9 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
 
 fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
     let viewport = area.height as usize;
-    if viewport == 0 { return; }
+    if viewport == 0 {
+        return;
+    }
 
     let mut reversed_items: Vec<ListItem> = Vec::new();
     let mut to_skip = state.scroll_offset;
@@ -71,7 +76,7 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
                 reversed_items.push($item);
                 to_take -= 1;
             }
-        }
+        };
     }
 
     // 1. Active spinner is at the very bottom
@@ -106,10 +111,7 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
                                 .fg(Color::White)
                                 .add_modifier(Modifier::BOLD | Modifier::DIM),
                         ),
-                        Span::styled(
-                            line.to_string(),
-                            Style::default().fg(Color::White),
-                        ),
+                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
                     ])));
                 }
                 lines.push(ListItem::new(Line::from("")));
@@ -149,7 +151,11 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
             }
             CellKind::Log => {
                 for (i, line) in cell.payload.lines().enumerate() {
-                    let prefix = if i == 0 { format!("{}• ", GUTTER) } else { format!("{}  ", GUTTER) };
+                    let prefix = if i == 0 {
+                        format!("{}• ", GUTTER)
+                    } else {
+                        format!("{}  ", GUTTER)
+                    };
                     lines.push(ListItem::new(Line::from(vec![
                         Span::styled(prefix, Style::default().fg(DIM_GRAY)),
                         Span::styled(line.to_string(), Style::default().fg(MID_GRAY)),
@@ -187,22 +193,35 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
 
 // ── Swarm Bar ────────────────────────────────────────────────────────────────
 fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
-    if area.width < 4 || state.active_swarms.is_empty() { return; }
-    
-    let mut spans = vec![Span::styled("⚡ Swarm Active | ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
-    
+    if area.width < 4 || state.active_swarms.is_empty() {
+        return;
+    }
+
+    let mut spans = vec![Span::styled(
+        "⚡ Swarm Active | ",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )];
+
     let frame = SPINNER[state.spinner_idx % SPINNER.len()];
-    
+
     for (i, (id, task)) in state.active_swarms.iter().enumerate() {
-        let display_task = if task.len() > 30 { format!("{}...", &task[..27]) } else { task.clone() };
-        spans.push(Span::styled(format!("{}{} [{}]", frame, id, display_task), Style::default().fg(Color::Cyan)));
+        let display_task = if task.len() > 30 {
+            format!("{}...", &task[..27])
+        } else {
+            task.clone()
+        };
+        spans.push(Span::styled(
+            format!("{}{} [{}]", frame, id, display_task),
+            Style::default().fg(Color::Cyan),
+        ));
         if i < state.active_swarms.len() - 1 {
             spans.push(Span::raw("   "));
         }
     }
-    
-    let p = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(Color::Indexed(236)));
+
+    let p = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Indexed(236)));
     f.render_widget(p, area);
 }
 
@@ -245,7 +264,7 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         Span::styled(left, Style::default().fg(DIM_GRAY)),
         Span::styled(git_info, Style::default().fg(risk_color)),
     ]);
-    
+
     let left_w = left_span.width().min(area.width as usize);
     let right_w = right.chars().count().min(area.width as usize);
 
@@ -259,14 +278,12 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         .split(area);
 
     let left_widget = Paragraph::new(left_span);
-    let right_widget = Paragraph::new(right)
-        .style(Style::default().fg(DIM_GRAY));
+    let right_widget = Paragraph::new(right).style(Style::default().fg(DIM_GRAY));
 
     // Fill middle with `─`
     let mid_w = status_chunks[1].width as usize;
     let mid_fill = "─".repeat(mid_w);
-    let mid_widget = Paragraph::new(mid_fill)
-        .style(Style::default().fg(Color::Indexed(236)));
+    let mid_widget = Paragraph::new(mid_fill).style(Style::default().fg(Color::Indexed(236)));
 
     f.render_widget(left_widget, status_chunks[0]);
     f.render_widget(mid_widget, status_chunks[1]);
@@ -282,24 +299,29 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
     // If there is a pending command approval, render the security prompt instead
     if let crate::tui::state::ApprovalState::PendingCommand(ref cmd) = state.approval_state {
         let warning_style = Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD);
-        composer_lines.push(Line::from(vec![
-            Span::styled("⚠️  Security Approval Required", warning_style),
-        ]));
+        composer_lines.push(Line::from(vec![Span::styled(
+            "⚠️  Security Approval Required",
+            warning_style,
+        )]));
         composer_lines.push(Line::from(vec![
             Span::styled("Command: ", Style::default().fg(DIM_GRAY)),
             Span::raw(cmd.clone()),
         ]));
         composer_lines.push(Line::from(vec![
-            Span::styled("Execute this command? [y/N/a (always)]: ", Style::default().fg(Color::Indexed(221)).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Execute this command? [y/N/a (always)]: ",
+                Style::default()
+                    .fg(Color::Indexed(221))
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("█", Style::default().fg(ACCENT_CYAN)),
         ]));
 
-        let composer_widget = Paragraph::new(composer_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .border_style(Style::default().fg(ACCENT_RED)), // Red border for danger
-            );
+        let composer_widget = Paragraph::new(composer_lines).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(ACCENT_RED)), // Red border for danger
+        );
 
         f.render_widget(composer_widget, area);
         return;
@@ -307,7 +329,7 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     let text = state.composer.clone();
     let cursor_idx = state.composer_cursor.min(text.chars().count());
-    
+
     let (before_cursor, after_cursor) = if text.is_empty() {
         ("".to_string(), "".to_string())
     } else {
@@ -319,77 +341,90 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     let before_lines: Vec<&str> = before_cursor.split_inclusive('\n').collect();
     let after_lines: Vec<&str> = after_cursor.split_inclusive('\n').collect();
-    
+
     let is_running = state.is_task_running();
     let prompt_color = if is_running { DIM_GRAY } else { Color::Green };
     let block_cursor = if is_running { " " } else { "█" };
 
     if text.is_empty() {
         composer_lines.push(Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(prompt_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "❯ ",
+                Style::default()
+                    .fg(prompt_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(block_cursor, Style::default().fg(ACCENT_CYAN)),
         ]));
     } else {
         // Reconstruct the lines with the cursor inserted
         let mut reconstructed_lines = Vec::new();
-        
+
         let before_last = before_lines.last().copied().unwrap_or("");
         let after_first = after_lines.first().copied().unwrap_or("");
-        
-        for line in before_lines.iter().take(before_lines.len().saturating_sub(1)) {
+
+        for line in before_lines
+            .iter()
+            .take(before_lines.len().saturating_sub(1))
+        {
             reconstructed_lines.push(vec![Span::raw(*line)]);
         }
-        
+
         let mut mid_line = vec![Span::raw(before_last)];
         let cursor_char = if after_first.is_empty() || after_first.starts_with('\n') {
             block_cursor.to_string()
         } else {
             after_first.chars().next().unwrap().to_string()
         };
-        
+
         let after_rest = if !after_first.is_empty() && !after_first.starts_with('\n') {
             let ch_len = after_first.chars().next().unwrap().len_utf8();
             &after_first[ch_len..]
         } else {
             after_first
         };
-        
+
         let cursor_style = Style::default().fg(Color::Black).bg(ACCENT_CYAN);
         mid_line.push(Span::styled(cursor_char.clone(), cursor_style));
         mid_line.push(Span::raw(after_rest));
-        
+
         if cursor_char == block_cursor && after_first.starts_with('\n') {
             mid_line.push(Span::raw("\n"));
         }
-        
+
         reconstructed_lines.push(mid_line);
-        
+
         for line in after_lines.iter().skip(1) {
             reconstructed_lines.push(vec![Span::raw(*line)]);
         }
 
         for (i, line_spans) in reconstructed_lines.into_iter().enumerate() {
             let prefix = if i == 0 { "❯ " } else { "  " };
-            let mut final_spans = vec![
-                Span::styled(prefix, Style::default().fg(prompt_color).add_modifier(Modifier::BOLD))
-            ];
+            let mut final_spans = vec![Span::styled(
+                prefix,
+                Style::default()
+                    .fg(prompt_color)
+                    .add_modifier(Modifier::BOLD),
+            )];
             final_spans.extend(line_spans);
             composer_lines.push(Line::from(final_spans));
         }
     }
 
-    let composer_widget = Paragraph::new(composer_lines)
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::Indexed(236))),
-        );
+    let composer_widget = Paragraph::new(composer_lines).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::Indexed(236))),
+    );
 
     f.render_widget(composer_widget, area);
     // Handle Overlays on top of the App
     match &state.overlay_state {
         OverlayState::None => {}
-        OverlayState::CommandPalette { query, selected_idx } => {
+        OverlayState::CommandPalette {
+            query,
+            selected_idx,
+        } => {
             render_command_palette(f, f.size(), query, *selected_idx);
         }
     }
@@ -397,21 +432,21 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
 pub fn render_command_palette(f: &mut Frame, area: Rect, query: &str, selected_idx: usize) {
     use ratatui::widgets::Clear;
-    
+
     let palette_w = 60;
     let palette_h = 10;
-    
+
     let x = area.x + (area.width.saturating_sub(palette_w)) / 2;
     let y = area.y + (area.height.saturating_sub(palette_h)) / 4; // Top 25% of screen
-    
+
     let popup_area = Rect::new(x, y, palette_w, palette_h);
-    
+
     // Clear underneath
     f.render_widget(Clear, popup_area);
-    
+
     // Dynamic commands array
     let commands = crate::tui::state::get_palette_commands(query);
-    
+
     let mut items = Vec::new();
     for (i, (cmd, desc)) in commands.iter().enumerate() {
         let style = if i == selected_idx {
@@ -421,14 +456,13 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, query: &str, selected_i
         };
         items.push(ListItem::new(format!("{:<15} {}", cmd, desc)).style(style));
     }
-    
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Command Palette ({}) ", query))
-                .border_style(Style::default().fg(ACCENT_CYAN))
-        );
-        
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Command Palette ({}) ", query))
+            .border_style(Style::default().fg(ACCENT_CYAN)),
+    );
+
     f.render_widget(list, popup_area);
 }

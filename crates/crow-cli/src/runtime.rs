@@ -7,13 +7,13 @@ use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::SnapshotId;
 use crow_workspace::ledger::EventLedger;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct SessionRuntime {
     pub compiler: Arc<IntentCompiler>,
     pub mcp_manager: Arc<McpManager>,
-    pub ledger: EventLedger,
-    pub cached_repo_map: Option<(SnapshotId, Arc<RepoMap>)>,
+    pub ledger: Mutex<EventLedger>,
+    pub cached_repo_map: Mutex<Option<(SnapshotId, Arc<RepoMap>)>>,
     pub workspace: PathBuf,
 }
 
@@ -45,8 +45,8 @@ impl SessionRuntime {
         Ok(Self {
             compiler,
             mcp_manager,
-            ledger,
-            cached_repo_map: None,
+            ledger: Mutex::new(ledger),
+            cached_repo_map: Mutex::new(None),
             workspace: cfg.workspace.clone(),
         })
     }
@@ -56,18 +56,19 @@ impl SessionRuntime {
     /// the frozen snapshot. This ensures planning context and verification baseline
     /// are always the same snapshot — no time-of-check/time-of-use divergence.
     pub async fn execute_turn(
-        &mut self,
+        &self,
         cfg: &CrowConfig,
         prompt: &str,
         messages: &mut crate::context::ConversationManager,
         view_mode: crate::event::ViewMode,
     ) -> Result<SnapshotId> {
         let mut observer = crate::event::CliEventHandler::new(view_mode);
-        self.execute_turn_with_observer(cfg, prompt, messages, &mut observer).await
+        self.execute_turn_with_observer(cfg, prompt, messages, &mut observer)
+            .await
     }
 
     pub async fn execute_turn_with_observer(
-        &mut self,
+        &self,
         cfg: &CrowConfig,
         prompt: &str,
         messages: &mut crate::context::ConversationManager,
@@ -105,7 +106,7 @@ impl SessionRuntime {
 
         // Leverage cached repo_map if snapshot hasn't changed.
         let mut repo_map_cloned = None;
-        if let Some((cached_snap, map)) = &self.cached_repo_map {
+        if let Some((cached_snap, map)) = self.cached_repo_map.lock().unwrap().as_ref() {
             if cached_snap == &snapshot_id {
                 repo_map_cloned = Some(Arc::clone(map));
             }
@@ -121,13 +122,15 @@ impl SessionRuntime {
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
-                self.cached_repo_map = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+                *self.cached_repo_map.lock().unwrap() = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 arc_map
             }
         };
 
         let _ = self
             .ledger
+            .lock()
+            .unwrap()
             .append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
                 id: snapshot_id.clone(),
                 git_hash: snapshot_id.0.clone(),
@@ -210,7 +213,7 @@ impl SessionRuntime {
                     &w.plan,
                     &plan_id,
                     &snapshot_id,
-                    &mut self.ledger,
+                    &self.ledger,
                 )
                 .await?;
 
@@ -234,7 +237,7 @@ impl SessionRuntime {
 
         // Pass the already compiled plan as a jump-start for verification
         let target_snap = crucible
-            .execute_with_precompiled(messages, &snapshot_id, &mut self.ledger, plan, observer)
+            .execute_with_precompiled(messages, &snapshot_id, &self.ledger, plan, observer)
             .await?;
 
         // P0-3: Emit the agent's rationale as a final summary cell
@@ -248,9 +251,9 @@ impl SessionRuntime {
 
     // ─── Unified Entry Points ────────────────────────────────────────────────
 
-    fn get_or_build_repo_map(&mut self, cfg: &CrowConfig) -> Result<Arc<RepoMap>> {
+    fn get_or_build_repo_map(&self, cfg: &CrowConfig) -> Result<Arc<RepoMap>> {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
-        if let Some((cached_snap, map)) = &self.cached_repo_map {
+        if let Some((cached_snap, map)) = self.cached_repo_map.lock().unwrap().as_ref() {
             if cached_snap == &snapshot_id {
                 return Ok(Arc::clone(map));
             }
@@ -260,11 +263,11 @@ impl SessionRuntime {
             .map_err(|e| anyhow::anyhow!(e))
             .context("Failed to build repo map")?;
         let arc_map = Arc::new(map);
-        self.cached_repo_map = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+        *self.cached_repo_map.lock().unwrap() = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
         Ok(arc_map)
     }
 
-    pub async fn compile_only(&mut self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
+    pub async fn compile_only(&self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
         println!("🦅 crow-code Compile-Only mode initializing...\n");
 
         println!("[1/3] Gathering Repomap Context via tree-sitter...");
@@ -303,7 +306,7 @@ impl SessionRuntime {
         }
     }
 
-    pub async fn generate_plan(&mut self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
+    pub async fn generate_plan(&self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
         use crate::evidence_report::*;
         use crow_workspace::PlanHydrator;
 
@@ -478,7 +481,7 @@ impl SessionRuntime {
         Ok(())
     }
 
-    pub async fn resume(&mut self, cfg: &CrowConfig, session_id: &str) -> Result<()> {
+    pub async fn resume(&self, cfg: &CrowConfig, session_id: &str) -> Result<()> {
         println!(
             "🦅 crow session resume — continuing session {}",
             &session_id[..8.min(session_id.len())]

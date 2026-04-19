@@ -69,23 +69,29 @@ pub struct TuiEventHandler {
 }
 
 impl TuiEventHandler {
-    pub fn new(
-        tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
-    ) -> Self {
-        Self { tx, cancellation: None }
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>) -> Self {
+        Self {
+            tx,
+            cancellation: None,
+        }
     }
 
     pub fn with_cancellation(
         tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
         token: crate::tui::state::CancellationToken,
     ) -> Self {
-        Self { tx, cancellation: Some(token) }
+        Self {
+            tx,
+            cancellation: Some(token),
+        }
     }
 }
 
 impl EventHandler for TuiEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
-        let _ = self.tx.send(crate::tui::state::TuiMessage::AgentEvent(event));
+        let _ = self
+            .tx
+            .send(crate::tui::state::TuiMessage::AgentEvent(event));
     }
 
     fn is_cancelled(&self) -> bool {
@@ -139,7 +145,7 @@ impl CliEventHandler {
                 "Result" => "✓",
                 _ => "•",
             };
-            
+
             println!(
                 "  {} {} {:8} {}",
                 "│ ".with(Color::DarkGrey),
@@ -235,7 +241,13 @@ impl EventHandler for CliEventHandler {
             }
             AgentEvent::Log(msg) => {
                 if msg.contains("⚠") {
-                    self.sync_print(|| println!("  {} {}", "│ ".with(Color::DarkGrey), msg.with(Color::Yellow)));
+                    self.sync_print(|| {
+                        println!(
+                            "  {} {}",
+                            "│ ".with(Color::DarkGrey),
+                            msg.with(Color::Yellow)
+                        )
+                    });
                 } else {
                     if !msg.starts_with("       Rationale:") || self.view_mode == ViewMode::Audit {
                         if msg.starts_with("✓ ") || msg.starts_with("↳") {

@@ -152,7 +152,7 @@ async fn handle_session_command(args: &[String]) -> Result<()> {
 
 async fn resume_session_run(session_id: &str) -> Result<()> {
     let cfg = CrowConfig::load()?;
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime.resume(&cfg, session_id).await
 }
 
@@ -161,7 +161,7 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
 async fn run_compile_only(args: &[String]) -> Result<()> {
     let prompt = args.join(" ");
     let cfg = CrowConfig::load()?;
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime.compile_only(&cfg, &prompt).await
 }
 
@@ -172,7 +172,7 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
 async fn run_plan(args: &[String]) -> Result<()> {
     let prompt = args.join(" ");
     let cfg = CrowConfig::load()?;
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime.generate_plan(&cfg, &prompt).await
 }
 
@@ -180,7 +180,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
     let mut messages = context::ConversationManager::new(vec![]);
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime
         .execute_turn(
             &cfg,
@@ -324,7 +324,7 @@ pub(crate) async fn apply_winning_plan(
     hydrated_plan: &crow_patch::IntentPlan,
     plan_id: &str,
     snapshot_id: &crow_patch::SnapshotId,
-    ledger: &mut crow_workspace::ledger::EventLedger,
+    ledger: &std::sync::Mutex<crow_workspace::ledger::EventLedger>,
 ) -> Result<()> {
     // ── WriteMode enforcement ────────────────────────────
     match cfg.write_mode {
@@ -374,7 +374,7 @@ pub(crate) async fn apply_winning_plan(
     }
 
     if cfg.write_mode != config::WriteMode::SandboxOnly {
-        let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
+        let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanApplied {
             plan_id: plan_id.to_string(),
             snapshot_id: snapshot_id.clone(),
             timestamp: chrono::Utc::now(),
@@ -646,7 +646,7 @@ mod tests {
     async fn test_apply_winning_plan_sandbox_only_does_not_append_ledger() {
         let workspace = TempDir::new().unwrap();
         let ledger_dir = workspace.path().join("ledger.jsonl");
-        let mut ledger = crow_workspace::ledger::EventLedger::open(&ledger_dir).unwrap();
+        let ledger = crow_workspace::ledger::EventLedger::open(&ledger_dir).unwrap();
 
         let cfg = config::CrowConfig {
             workspace: workspace.path().to_path_buf(),
@@ -668,13 +668,14 @@ mod tests {
 
         let snap_id = crow_patch::SnapshotId("snap-123".into());
 
+        let ledger = std::sync::Mutex::new(ledger);
         apply_winning_plan(
             &cfg,
             sandbox.path(),
             &plan,
             "test-plan",
             &snap_id,
-            &mut ledger,
+            &ledger,
         )
         .await
         .unwrap();

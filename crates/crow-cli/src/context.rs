@@ -11,6 +11,7 @@ struct Memory {
 /// Manages the LLM context envelope semantic strategies.
 /// Ensures that the cognitive loop does not blow out the token window
 /// with massive file reads or lengthy verification logs over multiple retries.
+#[derive(Clone)]
 pub struct ConversationManager {
     system_messages: Vec<ChatMessage>,
     conversation: VecDeque<Memory>,

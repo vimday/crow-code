@@ -181,7 +181,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
     let mut messages = crate::context::ConversationManager::new(vec![]);
     let mut state = SessionState::new();
-    let mut runtime = crate::runtime::SessionRuntime::boot(cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(cfg).await?;
 
     // ── Main Loop ──
     loop {
@@ -269,7 +269,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         );
                     }
                 }
-                
+
                 // Console 3.0: Bottom Connective Frame
                 let elapsed_ms = turn_start.elapsed().as_millis();
                 let ctx_bytes = format_bytes(messages.get_total_bytes());

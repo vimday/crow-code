@@ -48,7 +48,7 @@ impl SerialCrucible<'_> {
         &self,
         messages: &mut ConversationManager,
         snapshot_id: &SnapshotId,
-        ledger: &mut EventLedger,
+        ledger: &std::sync::Mutex<EventLedger>,
         observer: &mut dyn EventHandler,
     ) -> Result<SnapshotId> {
         let mut total_attempts = 0;
@@ -101,7 +101,7 @@ impl SerialCrucible<'_> {
         &self,
         messages: &mut ConversationManager,
         snapshot_id: &SnapshotId,
-        ledger: &mut EventLedger,
+        ledger: &std::sync::Mutex<EventLedger>,
         plan: crow_patch::IntentPlan,
         observer: &mut dyn EventHandler,
     ) -> Result<SnapshotId> {
@@ -174,7 +174,7 @@ impl SerialCrucible<'_> {
         &self,
         messages: &mut ConversationManager,
         snapshot_id: &SnapshotId,
-        ledger: &mut EventLedger,
+        ledger: &std::sync::Mutex<EventLedger>,
         verification_runs: u32,
         _total_attempts: u32,
         precompiled_plan: Option<crow_patch::IntentPlan>,
@@ -269,7 +269,7 @@ impl SerialCrucible<'_> {
             .context("Failed to apply plan to sandbox")?;
         }
 
-        let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
+        let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
             plan_id: plan_id.clone(),
             snapshot_id: snapshot_id.clone(),
             timestamp: chrono::Utc::now(),
@@ -302,7 +302,7 @@ impl SerialCrucible<'_> {
             use crow_verifier::preflight::{self, PreflightResult};
             // Preflight compile check
             let start_preflight = std::time::Instant::now();
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
+            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
                 plan_id: plan_id.clone(),
                 sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
                 timestamp: chrono::Utc::now(),
@@ -322,7 +322,7 @@ impl SerialCrucible<'_> {
                 preflight_result,
                 PreflightResult::Clean | PreflightResult::Skipped(_)
             );
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightTested {
+            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PreflightTested {
                 plan_id: plan_id.clone(),
                 passed: passed_preflight,
                 duration_ms: start_preflight.elapsed().as_millis() as u64,
@@ -348,10 +348,8 @@ impl SerialCrucible<'_> {
                     return Ok(EpochOutcome::RetryCompile);
                 }
                 PreflightResult::Skipped(reason) => {
-                    observer.handle_event(AgentEvent::Log(format!(
-                        "Preflight skipped: {}",
-                        reason
-                    )));
+                    observer
+                        .handle_event(AgentEvent::Log(format!("Preflight skipped: {}", reason)));
                 }
             }
         }
@@ -401,7 +399,7 @@ impl SerialCrucible<'_> {
                 &format!("{:?}", result.test_run.outcome),
                 &result.test_run.truncated_log,
             );
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
+            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
                 plan_id,
                 reason: format!("Verification failed: {:?}", result.test_run.outcome),
                 timestamp: chrono::Utc::now(),

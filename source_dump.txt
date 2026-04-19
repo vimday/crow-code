@@ -2587,7 +2587,9 @@ impl AgentAction {
                 ReconAction::Search { pattern, .. } if pattern.trim().is_empty() => {
                     return Err("search pattern must not be empty".into());
                 }
-                ReconAction::DirTree { max_depth: Some(d), .. } if *d > 10 => {
+                ReconAction::DirTree {
+                    max_depth: Some(d), ..
+                } if *d > 10 => {
                     return Err(format!("dir_tree max_depth {} exceeds limit of 10", d));
                 }
                 _ => {}
@@ -7669,13 +7671,13 @@ use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::SnapshotId;
 use crow_workspace::ledger::EventLedger;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct SessionRuntime {
     pub compiler: Arc<IntentCompiler>,
     pub mcp_manager: Arc<McpManager>,
-    pub ledger: EventLedger,
-    pub cached_repo_map: Option<(SnapshotId, Arc<RepoMap>)>,
+    pub ledger: Mutex<EventLedger>,
+    pub cached_repo_map: Mutex<Option<(SnapshotId, Arc<RepoMap>)>>,
     pub workspace: PathBuf,
 }
 
@@ -7707,8 +7709,8 @@ impl SessionRuntime {
         Ok(Self {
             compiler,
             mcp_manager,
-            ledger,
-            cached_repo_map: None,
+            ledger: Mutex::new(ledger),
+            cached_repo_map: Mutex::new(None),
             workspace: cfg.workspace.clone(),
         })
     }
@@ -7718,18 +7720,19 @@ impl SessionRuntime {
     /// the frozen snapshot. This ensures planning context and verification baseline
     /// are always the same snapshot — no time-of-check/time-of-use divergence.
     pub async fn execute_turn(
-        &mut self,
+        &self,
         cfg: &CrowConfig,
         prompt: &str,
         messages: &mut crate::context::ConversationManager,
         view_mode: crate::event::ViewMode,
     ) -> Result<SnapshotId> {
         let mut observer = crate::event::CliEventHandler::new(view_mode);
-        self.execute_turn_with_observer(cfg, prompt, messages, &mut observer).await
+        self.execute_turn_with_observer(cfg, prompt, messages, &mut observer)
+            .await
     }
 
     pub async fn execute_turn_with_observer(
-        &mut self,
+        &self,
         cfg: &CrowConfig,
         prompt: &str,
         messages: &mut crate::context::ConversationManager,
@@ -7767,7 +7770,7 @@ impl SessionRuntime {
 
         // Leverage cached repo_map if snapshot hasn't changed.
         let mut repo_map_cloned = None;
-        if let Some((cached_snap, map)) = &self.cached_repo_map {
+        if let Some((cached_snap, map)) = self.cached_repo_map.lock().unwrap().as_ref() {
             if cached_snap == &snapshot_id {
                 repo_map_cloned = Some(Arc::clone(map));
             }
@@ -7783,13 +7786,15 @@ impl SessionRuntime {
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
-                self.cached_repo_map = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+                *self.cached_repo_map.lock().unwrap() = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 arc_map
             }
         };
 
         let _ = self
             .ledger
+            .lock()
+            .unwrap()
             .append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
                 id: snapshot_id.clone(),
                 git_hash: snapshot_id.0.clone(),
@@ -7872,7 +7877,7 @@ impl SessionRuntime {
                     &w.plan,
                     &plan_id,
                     &snapshot_id,
-                    &mut self.ledger,
+                    &self.ledger,
                 )
                 .await?;
 
@@ -7896,7 +7901,7 @@ impl SessionRuntime {
 
         // Pass the already compiled plan as a jump-start for verification
         let target_snap = crucible
-            .execute_with_precompiled(messages, &snapshot_id, &mut self.ledger, plan, observer)
+            .execute_with_precompiled(messages, &snapshot_id, &self.ledger, plan, observer)
             .await?;
 
         // P0-3: Emit the agent's rationale as a final summary cell
@@ -7910,9 +7915,9 @@ impl SessionRuntime {
 
     // ─── Unified Entry Points ────────────────────────────────────────────────
 
-    fn get_or_build_repo_map(&mut self, cfg: &CrowConfig) -> Result<Arc<RepoMap>> {
+    fn get_or_build_repo_map(&self, cfg: &CrowConfig) -> Result<Arc<RepoMap>> {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
-        if let Some((cached_snap, map)) = &self.cached_repo_map {
+        if let Some((cached_snap, map)) = self.cached_repo_map.lock().unwrap().as_ref() {
             if cached_snap == &snapshot_id {
                 return Ok(Arc::clone(map));
             }
@@ -7922,11 +7927,11 @@ impl SessionRuntime {
             .map_err(|e| anyhow::anyhow!(e))
             .context("Failed to build repo map")?;
         let arc_map = Arc::new(map);
-        self.cached_repo_map = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+        *self.cached_repo_map.lock().unwrap() = Some((snapshot_id.clone(), Arc::clone(&arc_map)));
         Ok(arc_map)
     }
 
-    pub async fn compile_only(&mut self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
+    pub async fn compile_only(&self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
         println!("🦅 crow-code Compile-Only mode initializing...\n");
 
         println!("[1/3] Gathering Repomap Context via tree-sitter...");
@@ -7965,7 +7970,7 @@ impl SessionRuntime {
         }
     }
 
-    pub async fn generate_plan(&mut self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
+    pub async fn generate_plan(&self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
         use crate::evidence_report::*;
         use crow_workspace::PlanHydrator;
 
@@ -8140,7 +8145,7 @@ impl SessionRuntime {
         Ok(())
     }
 
-    pub async fn resume(&mut self, cfg: &CrowConfig, session_id: &str) -> Result<()> {
+    pub async fn resume(&self, cfg: &CrowConfig, session_id: &str) -> Result<()> {
         println!(
             "🦅 crow session resume — continuing session {}",
             &session_id[..8.min(session_id.len())]
@@ -8506,7 +8511,10 @@ const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 pub fn render_app(f: &mut Frame, state: &mut AppState) {
     let size = f.size();
 
-    let composer_lines = if matches!(state.approval_state, crate::tui::state::ApprovalState::PendingCommand(_)) {
+    let composer_lines = if matches!(
+        state.approval_state,
+        crate::tui::state::ApprovalState::PendingCommand(_)
+    ) {
         3 // 3 lines of text for approval + 1 border = 4 total length below
     } else {
         state.composer.lines().count().max(1) as u16
@@ -8516,9 +8524,9 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),        // Conversation pane
-            Constraint::Length(swarm_lines), // Swarm bar
-            Constraint::Length(1),      // Status bar
+            Constraint::Min(0),                     // Conversation pane
+            Constraint::Length(swarm_lines),        // Swarm bar
+            Constraint::Length(1),                  // Status bar
             Constraint::Length(composer_lines + 1), // Composer + top border
         ])
         .split(size);
@@ -8535,7 +8543,9 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
 
 fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
     let viewport = area.height as usize;
-    if viewport == 0 { return; }
+    if viewport == 0 {
+        return;
+    }
 
     let mut reversed_items: Vec<ListItem> = Vec::new();
     let mut to_skip = state.scroll_offset;
@@ -8549,7 +8559,7 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
                 reversed_items.push($item);
                 to_take -= 1;
             }
-        }
+        };
     }
 
     // 1. Active spinner is at the very bottom
@@ -8584,10 +8594,7 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
                                 .fg(Color::White)
                                 .add_modifier(Modifier::BOLD | Modifier::DIM),
                         ),
-                        Span::styled(
-                            line.to_string(),
-                            Style::default().fg(Color::White),
-                        ),
+                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
                     ])));
                 }
                 lines.push(ListItem::new(Line::from("")));
@@ -8627,7 +8634,11 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
             }
             CellKind::Log => {
                 for (i, line) in cell.payload.lines().enumerate() {
-                    let prefix = if i == 0 { format!("{}• ", GUTTER) } else { format!("{}  ", GUTTER) };
+                    let prefix = if i == 0 {
+                        format!("{}• ", GUTTER)
+                    } else {
+                        format!("{}  ", GUTTER)
+                    };
                     lines.push(ListItem::new(Line::from(vec![
                         Span::styled(prefix, Style::default().fg(DIM_GRAY)),
                         Span::styled(line.to_string(), Style::default().fg(MID_GRAY)),
@@ -8665,22 +8676,35 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
 
 // ── Swarm Bar ────────────────────────────────────────────────────────────────
 fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
-    if area.width < 4 || state.active_swarms.is_empty() { return; }
-    
-    let mut spans = vec![Span::styled("⚡ Swarm Active | ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
-    
+    if area.width < 4 || state.active_swarms.is_empty() {
+        return;
+    }
+
+    let mut spans = vec![Span::styled(
+        "⚡ Swarm Active | ",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )];
+
     let frame = SPINNER[state.spinner_idx % SPINNER.len()];
-    
+
     for (i, (id, task)) in state.active_swarms.iter().enumerate() {
-        let display_task = if task.len() > 30 { format!("{}...", &task[..27]) } else { task.clone() };
-        spans.push(Span::styled(format!("{}{} [{}]", frame, id, display_task), Style::default().fg(Color::Cyan)));
+        let display_task = if task.len() > 30 {
+            format!("{}...", &task[..27])
+        } else {
+            task.clone()
+        };
+        spans.push(Span::styled(
+            format!("{}{} [{}]", frame, id, display_task),
+            Style::default().fg(Color::Cyan),
+        ));
         if i < state.active_swarms.len() - 1 {
             spans.push(Span::raw("   "));
         }
     }
-    
-    let p = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(Color::Indexed(236)));
+
+    let p = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Indexed(236)));
     f.render_widget(p, area);
 }
 
@@ -8723,7 +8747,7 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         Span::styled(left, Style::default().fg(DIM_GRAY)),
         Span::styled(git_info, Style::default().fg(risk_color)),
     ]);
-    
+
     let left_w = left_span.width().min(area.width as usize);
     let right_w = right.chars().count().min(area.width as usize);
 
@@ -8737,14 +8761,12 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         .split(area);
 
     let left_widget = Paragraph::new(left_span);
-    let right_widget = Paragraph::new(right)
-        .style(Style::default().fg(DIM_GRAY));
+    let right_widget = Paragraph::new(right).style(Style::default().fg(DIM_GRAY));
 
     // Fill middle with `─`
     let mid_w = status_chunks[1].width as usize;
     let mid_fill = "─".repeat(mid_w);
-    let mid_widget = Paragraph::new(mid_fill)
-        .style(Style::default().fg(Color::Indexed(236)));
+    let mid_widget = Paragraph::new(mid_fill).style(Style::default().fg(Color::Indexed(236)));
 
     f.render_widget(left_widget, status_chunks[0]);
     f.render_widget(mid_widget, status_chunks[1]);
@@ -8760,24 +8782,29 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
     // If there is a pending command approval, render the security prompt instead
     if let crate::tui::state::ApprovalState::PendingCommand(ref cmd) = state.approval_state {
         let warning_style = Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD);
-        composer_lines.push(Line::from(vec![
-            Span::styled("⚠️  Security Approval Required", warning_style),
-        ]));
+        composer_lines.push(Line::from(vec![Span::styled(
+            "⚠️  Security Approval Required",
+            warning_style,
+        )]));
         composer_lines.push(Line::from(vec![
             Span::styled("Command: ", Style::default().fg(DIM_GRAY)),
             Span::raw(cmd.clone()),
         ]));
         composer_lines.push(Line::from(vec![
-            Span::styled("Execute this command? [y/N/a (always)]: ", Style::default().fg(Color::Indexed(221)).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Execute this command? [y/N/a (always)]: ",
+                Style::default()
+                    .fg(Color::Indexed(221))
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("█", Style::default().fg(ACCENT_CYAN)),
         ]));
 
-        let composer_widget = Paragraph::new(composer_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .border_style(Style::default().fg(ACCENT_RED)), // Red border for danger
-            );
+        let composer_widget = Paragraph::new(composer_lines).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(ACCENT_RED)), // Red border for danger
+        );
 
         f.render_widget(composer_widget, area);
         return;
@@ -8785,7 +8812,7 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     let text = state.composer.clone();
     let cursor_idx = state.composer_cursor.min(text.chars().count());
-    
+
     let (before_cursor, after_cursor) = if text.is_empty() {
         ("".to_string(), "".to_string())
     } else {
@@ -8797,77 +8824,90 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     let before_lines: Vec<&str> = before_cursor.split_inclusive('\n').collect();
     let after_lines: Vec<&str> = after_cursor.split_inclusive('\n').collect();
-    
+
     let is_running = state.is_task_running();
     let prompt_color = if is_running { DIM_GRAY } else { Color::Green };
     let block_cursor = if is_running { " " } else { "█" };
 
     if text.is_empty() {
         composer_lines.push(Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(prompt_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "❯ ",
+                Style::default()
+                    .fg(prompt_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(block_cursor, Style::default().fg(ACCENT_CYAN)),
         ]));
     } else {
         // Reconstruct the lines with the cursor inserted
         let mut reconstructed_lines = Vec::new();
-        
+
         let before_last = before_lines.last().copied().unwrap_or("");
         let after_first = after_lines.first().copied().unwrap_or("");
-        
-        for line in before_lines.iter().take(before_lines.len().saturating_sub(1)) {
+
+        for line in before_lines
+            .iter()
+            .take(before_lines.len().saturating_sub(1))
+        {
             reconstructed_lines.push(vec![Span::raw(*line)]);
         }
-        
+
         let mut mid_line = vec![Span::raw(before_last)];
         let cursor_char = if after_first.is_empty() || after_first.starts_with('\n') {
             block_cursor.to_string()
         } else {
             after_first.chars().next().unwrap().to_string()
         };
-        
+
         let after_rest = if !after_first.is_empty() && !after_first.starts_with('\n') {
             let ch_len = after_first.chars().next().unwrap().len_utf8();
             &after_first[ch_len..]
         } else {
             after_first
         };
-        
+
         let cursor_style = Style::default().fg(Color::Black).bg(ACCENT_CYAN);
         mid_line.push(Span::styled(cursor_char.clone(), cursor_style));
         mid_line.push(Span::raw(after_rest));
-        
+
         if cursor_char == block_cursor && after_first.starts_with('\n') {
             mid_line.push(Span::raw("\n"));
         }
-        
+
         reconstructed_lines.push(mid_line);
-        
+
         for line in after_lines.iter().skip(1) {
             reconstructed_lines.push(vec![Span::raw(*line)]);
         }
 
         for (i, line_spans) in reconstructed_lines.into_iter().enumerate() {
             let prefix = if i == 0 { "❯ " } else { "  " };
-            let mut final_spans = vec![
-                Span::styled(prefix, Style::default().fg(prompt_color).add_modifier(Modifier::BOLD))
-            ];
+            let mut final_spans = vec![Span::styled(
+                prefix,
+                Style::default()
+                    .fg(prompt_color)
+                    .add_modifier(Modifier::BOLD),
+            )];
             final_spans.extend(line_spans);
             composer_lines.push(Line::from(final_spans));
         }
     }
 
-    let composer_widget = Paragraph::new(composer_lines)
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::Indexed(236))),
-        );
+    let composer_widget = Paragraph::new(composer_lines).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::Indexed(236))),
+    );
 
     f.render_widget(composer_widget, area);
     // Handle Overlays on top of the App
     match &state.overlay_state {
         OverlayState::None => {}
-        OverlayState::CommandPalette { query, selected_idx } => {
+        OverlayState::CommandPalette {
+            query,
+            selected_idx,
+        } => {
             render_command_palette(f, f.size(), query, *selected_idx);
         }
     }
@@ -8875,21 +8915,21 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
 pub fn render_command_palette(f: &mut Frame, area: Rect, query: &str, selected_idx: usize) {
     use ratatui::widgets::Clear;
-    
+
     let palette_w = 60;
     let palette_h = 10;
-    
+
     let x = area.x + (area.width.saturating_sub(palette_w)) / 2;
     let y = area.y + (area.height.saturating_sub(palette_h)) / 4; // Top 25% of screen
-    
+
     let popup_area = Rect::new(x, y, palette_w, palette_h);
-    
+
     // Clear underneath
     f.render_widget(Clear, popup_area);
-    
+
     // Dynamic commands array
     let commands = crate::tui::state::get_palette_commands(query);
-    
+
     let mut items = Vec::new();
     for (i, (cmd, desc)) in commands.iter().enumerate() {
         let style = if i == selected_idx {
@@ -8899,24 +8939,23 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, query: &str, selected_i
         };
         items.push(ListItem::new(format!("{:<15} {}", cmd, desc)).style(style));
     }
-    
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Command Palette ({}) ", query))
-                .border_style(Style::default().fg(ACCENT_CYAN))
-        );
-        
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Command Palette ({}) ", query))
+            .border_style(Style::default().fg(ACCENT_CYAN)),
+    );
+
     f.render_widget(list, popup_area);
 }
 
 ======================================
 File: crates/crow-cli/src/tui/mod.rs
 ======================================
-pub mod state;
-pub mod render;
 pub mod dashboard;
+pub mod render;
+pub mod state;
 
 pub use dashboard::run_dashboard;
 
@@ -8924,17 +8963,20 @@ use crate::config::CrowConfig;
 use crate::event::{AgentEvent, ViewMode};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, EnableBracketedPaste, DisableBracketedPaste},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use render::render_app;
+use state::{AppState, Cell, CellKind, TuiMessage};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
-use state::{AppState, Cell, CellKind, TuiMessage};
-use render::render_app;
 
 use crate::context::ConversationManager;
 use crate::runtime::SessionRuntime;
@@ -8995,7 +9037,12 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
                 loaded_session_id = Some(session.id.0.clone());
                 state.history.push(Cell {
                     kind: CellKind::Log,
-                    payload: format!("Resumed session {} ({} messages) from Task: {}", session.id.0, loaded_messages.len(), session.task),
+                    payload: format!(
+                        "Resumed session {} ({} messages) from Task: {}",
+                        session.id.0,
+                        loaded_messages.len(),
+                        session.task
+                    ),
                 });
                 for msg in &loaded_messages {
                     let kind = match msg.role {
@@ -9029,7 +9076,7 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     let messages = ConversationManager::new(loaded_messages);
     let runtime = SessionRuntime::boot(cfg_val).await?;
 
-    let shared_runtime = Arc::new(Mutex::new(runtime));
+    let shared_runtime = Arc::new(runtime);
     let shared_messages = Arc::new(Mutex::new(messages));
 
     let thread_manager = Arc::new(crate::thread_manager::ThreadManager::new(
@@ -9058,10 +9105,15 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
         &tx,
         cfg_val.clone(),
         &thread_manager,
-    ).await;
+    )
+    .await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
 
     if let Err(err) = res {
@@ -9095,9 +9147,10 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
                 let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Log(report)));
             }
             Err(e) => {
-                let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Error(
-                    format!("Failed: {}", e),
-                )));
+                let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Error(format!(
+                    "Failed: {}",
+                    e
+                ))));
             }
         }
         let _ = tx.send(TuiMessage::SessionComplete);
@@ -9106,7 +9159,7 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
 
 fn handle_tab_completion(state: &mut AppState) {
     let text = state.composer.clone();
-    
+
     // Basic file path completion for `!` (naive, splits by space and completes last token)
     if text.starts_with('!') {
         if let Some(last_word_idx) = text.rfind(' ') {
@@ -9136,15 +9189,19 @@ fn handle_tab_completion(state: &mut AppState) {
                 }
 
                 if matches.len() == 1 {
-                    let new_text = format!("{}{}{}", &text[..last_word_idx + 1], parent_dir.to_string_lossy(), matches[0]);
+                    let new_text = format!(
+                        "{}{}{}",
+                        &text[..last_word_idx + 1],
+                        parent_dir.to_string_lossy(),
+                        matches[0]
+                    );
                     let new_text = new_text.replace("./", "");
                     state.composer = new_text;
                     state.composer_cursor = state.composer.chars().count();
                 }
             }
         }
-    } 
-    else {
+    } else {
         // Normal text mode tab
         for _ in 0..4 {
             insert_char_at_cursor(state, ' ');
@@ -9243,7 +9300,9 @@ async fn run_tui_loop(
                     state.last_ctrl_c = None;
 
                     // ── Shell Command Approval Interception ───────────────────
-                    if let crate::tui::state::ApprovalState::PendingCommand(cmd) = state.approval_state.clone() {
+                    if let crate::tui::state::ApprovalState::PendingCommand(cmd) =
+                        state.approval_state.clone()
+                    {
                         match key.code {
                             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                 // Approved
@@ -9258,7 +9317,8 @@ async fn run_tui_loop(
                             KeyCode::Char('a') | KeyCode::Char('A') => {
                                 // Approved Always
                                 state.approval_state = crate::tui::state::ApprovalState::None;
-                                let prefix = cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
+                                let prefix =
+                                    cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
                                 state.allowed_safe_patterns.insert(prefix.clone());
                                 state.history.push(Cell {
                                     kind: CellKind::Log,
@@ -9284,13 +9344,18 @@ async fn run_tui_loop(
                     }
 
                     // ── Overlay Modal Interception ──────────────────────────────
-                    if let crate::tui::state::OverlayState::CommandPalette { query: _, selected_idx } = &mut state.overlay_state {
+                    if let crate::tui::state::OverlayState::CommandPalette {
+                        query: _,
+                        selected_idx,
+                    } = &mut state.overlay_state
+                    {
                         match key.code {
                             KeyCode::Esc => {
                                 state.overlay_state = crate::tui::state::OverlayState::None;
                             }
                             KeyCode::Down => {
-                                let commands = crate::tui::state::get_palette_commands(&state.composer);
+                                let commands =
+                                    crate::tui::state::get_palette_commands(&state.composer);
                                 let max_idx = commands.len().saturating_sub(1);
                                 *selected_idx = (*selected_idx + 1).min(max_idx);
                             }
@@ -9298,7 +9363,8 @@ async fn run_tui_loop(
                                 *selected_idx = selected_idx.saturating_sub(1);
                             }
                             KeyCode::Enter => {
-                                let commands = crate::tui::state::get_palette_commands(&state.composer);
+                                let commands =
+                                    crate::tui::state::get_palette_commands(&state.composer);
                                 let cmd = if let Some((c, _)) = commands.get(*selected_idx) {
                                     *c
                                 } else {
@@ -9329,7 +9395,11 @@ async fn run_tui_loop(
                             KeyCode::Char(c) => {
                                 // Let normal typing carry into composer
                                 insert_char_at_cursor(state, c);
-                                if let crate::tui::state::OverlayState::CommandPalette { query, selected_idx } = &mut state.overlay_state {
+                                if let crate::tui::state::OverlayState::CommandPalette {
+                                    query,
+                                    selected_idx,
+                                } = &mut state.overlay_state
+                                {
                                     *query = state.composer.clone();
                                     *selected_idx = 0; // reset selection
                                 }
@@ -9341,24 +9411,18 @@ async fn run_tui_loop(
 
                     match key.code {
                         // ── Ctrl+J: newline in composer ──────────────────────
-                        KeyCode::Char('j')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             insert_char_at_cursor(state, '\n');
                         }
 
                         // ── Ctrl+L: clear screen ─────────────────────────────
-                        KeyCode::Char('l')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             state.history.clear();
                             state.scroll_offset = 0;
                         }
 
                         // ── Ctrl+U: clear composer line ──────────────────────
-                        KeyCode::Char('u')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             state.composer.clear();
                             state.composer_cursor = 0;
                         }
@@ -9408,10 +9472,11 @@ async fn run_tui_loop(
                         KeyCode::Char(c) => {
                             insert_char_at_cursor(state, c);
                             if state.composer.starts_with('/') {
-                                state.overlay_state = crate::tui::state::OverlayState::CommandPalette {
-                                    query: state.composer.clone(),
-                                    selected_idx: 0,
-                                };
+                                state.overlay_state =
+                                    crate::tui::state::OverlayState::CommandPalette {
+                                        query: state.composer.clone(),
+                                        selected_idx: 0,
+                                    };
                             }
                         }
                         KeyCode::Backspace if state.composer_cursor > 0 => {
@@ -9455,15 +9520,18 @@ async fn run_tui_loop(
                 TuiMessage::TurnComplete(success) => {
                     state.active_action = None;
                     state.task_start_time = None;
-                    let was_cancelled = state.cancellation.as_ref().is_some_and(|t| t.is_cancelled());
+                    let was_cancelled = state
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|t| t.is_cancelled());
                     state.cancellation = None;
-                    
+
                     if success && !was_cancelled {
                         state.history.push(Cell {
                             kind: CellKind::Result,
                             payload: "Done".into(),
                         });
-                        
+
                         if let Some(next_task) = state.task_queue.pop_front() {
                             execute_command_string(state, next_task, tx, &cfg, thread_manager);
                         }
@@ -9472,10 +9540,13 @@ async fn run_tui_loop(
                         state.task_queue.clear();
                         state.history.push(Cell {
                             kind: CellKind::Error,
-                            payload: format!("Pipeline halted. Dropped {} queued queries.", drop_count),
+                            payload: format!(
+                                "Pipeline halted. Dropped {} queued queries.",
+                                drop_count
+                            ),
                         });
                     }
-                    
+
                     // Refresh git state post-turn in case files were modified
                     refresh_git_state(state, &cfg.workspace);
                 }
@@ -9489,9 +9560,15 @@ async fn run_tui_loop(
                     state.active_swarms.push((id, task));
                 }
                 TuiMessage::SwarmComplete(id, success) => {
-                    state.active_swarms.retain(|(active_id, _)| active_id != &id);
+                    state
+                        .active_swarms
+                        .retain(|(active_id, _)| active_id != &id);
                     state.history.push(Cell {
-                        kind: if success { CellKind::Result } else { CellKind::Error },
+                        kind: if success {
+                            CellKind::Result
+                        } else {
+                            CellKind::Error
+                        },
                         payload: format!("Swarm worker [{}] finished.", id),
                     });
                 }
@@ -9507,10 +9584,12 @@ async fn run_tui_loop(
                             state.task_start_time = Some(Instant::now());
                         }
                     }
-                    
+
                     // Best-effort draft persistence
-                    if state.spinner_idx.is_multiple_of(8) { // ~ once per second (120ms * 8)tick)
-                        let draft_path = std::path::Path::new(&cfg.workspace).join(".crow/logs/draft.txt");
+                    if state.spinner_idx.is_multiple_of(8) {
+                        // ~ once per second (120ms * 8)tick)
+                        let draft_path =
+                            std::path::Path::new(&cfg.workspace).join(".crow/logs/draft.txt");
                         if !state.composer.is_empty() {
                             let _ = std::fs::write(&draft_path, &state.composer);
                         } else {
@@ -9590,7 +9669,8 @@ fn execute_command_string(
                 } else {
                     let tm = thread_manager.clone();
                     tokio::spawn(async move {
-                        tm.submit(crate::thread_manager::Op::SwarmRun(payload)).await;
+                        tm.submit(crate::thread_manager::Op::SwarmRun(payload))
+                            .await;
                     });
                     state.history.push(Cell {
                         kind: CellKind::Log,
@@ -9634,10 +9714,7 @@ fn execute_command_string(
                     kind: CellKind::Log,
                     payload: format!(
                         "Model: {}\nWorkspace: {}\nWrite Mode: {}\nView: {:?}",
-                        state.model_info,
-                        state.workspace_name,
-                        state.write_mode,
-                        state.view_mode,
+                        state.model_info, state.workspace_name, state.write_mode, state.view_mode,
                     ),
                 });
             }
@@ -9666,7 +9743,10 @@ fn execute_command_string(
             other => {
                 state.history.push(Cell {
                     kind: CellKind::Error,
-                    payload: format!("Unknown command: /{}. Type /help for available commands.", other),
+                    payload: format!(
+                        "Unknown command: /{}. Type /help for available commands.",
+                        other
+                    ),
                 });
             }
         }
@@ -9694,18 +9774,33 @@ fn execute_command_string(
     // ── Shell commands (!cmd) ────────────────────────────────────────
     if trimmed.starts_with('!') {
         let bash_cmd = trimmed.trim_start_matches('!').trim().to_string();
-        
+
         let safe_prefixes = [
-            "ls", "pwd", "echo", "cat", "git status", "git branch", 
-            "git diff", "git log", "git show", "whoami", "date", 
-            "tree", "hostname", "cargo check", "cargo build", "cargo test"
+            "ls",
+            "pwd",
+            "echo",
+            "cat",
+            "git status",
+            "git branch",
+            "git diff",
+            "git log",
+            "git show",
+            "whoami",
+            "date",
+            "tree",
+            "hostname",
+            "cargo check",
+            "cargo build",
+            "cargo test",
         ];
-        
-        let is_safe = safe_prefixes.iter().any(|safe| {
-            bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe))
-        }) || state.allowed_safe_patterns.iter().any(|safe| {
-            bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe))
-        });
+
+        let is_safe = safe_prefixes
+            .iter()
+            .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe)))
+            || state
+                .allowed_safe_patterns
+                .iter()
+                .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe)));
 
         if is_safe {
             state.history.push(Cell {
@@ -9716,7 +9811,7 @@ fn execute_command_string(
         } else {
             state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd);
         }
-        
+
         state.composer.clear();
         state.composer_cursor = 0;
         return;
@@ -9878,8 +9973,7 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        self.inner
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.inner.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -9898,10 +9992,7 @@ pub enum ApprovalState {
 #[derive(Clone, PartialEq, Eq)]
 pub enum OverlayState {
     None,
-    CommandPalette {
-        query: String,
-        selected_idx: usize,
-    },
+    CommandPalette { query: String, selected_idx: usize },
 }
 
 pub struct AppState {
@@ -9924,7 +10015,7 @@ pub struct AppState {
     pub cancellation: Option<CancellationToken>,
     pub active_swarms: Vec<(String, String)>,
     pub task_queue: std::collections::VecDeque<String>,
-    
+
     // Approval Model
     pub approval_state: ApprovalState,
     pub allowed_safe_patterns: std::collections::HashSet<String>,
@@ -10825,9 +10916,7 @@ impl EventHandler for SubagentEventHandler<'_> {
             AgentEvent::Error(msg) => self
                 .parent
                 .handle_event(AgentEvent::Error(format!("[{}] {}", self.id, msg))),
-            AgentEvent::Markdown(msg) => self
-                .parent
-                .handle_event(AgentEvent::Markdown(msg)),
+            AgentEvent::Markdown(msg) => self.parent.handle_event(AgentEvent::Markdown(msg)),
         }
     }
 }
@@ -10838,11 +10927,11 @@ File: crates/crow-cli/src/thread_manager.rs
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
 use crate::runtime::SessionRuntime;
-use crate::tui::state::{TuiMessage, CancellationToken};
+use crate::session::{Session, SessionStore};
+use crate::tui::state::{CancellationToken, TuiMessage};
+use crow_patch::SnapshotId;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use crow_patch::SnapshotId;
-use crate::session::{Session, SessionStore};
 
 /// Represents the deterministic state of an agent Turn lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10871,7 +10960,7 @@ pub struct CodexThread {
 /// ThreadManager sits between the TUI loop and the SessionRuntime, decoupling
 /// synchronous UI events from the autonomous MCTS solver pipeline.
 pub struct ThreadManager {
-    runtime: Arc<Mutex<SessionRuntime>>,
+    runtime: Arc<SessionRuntime>,
     messages: Arc<Mutex<ConversationManager>>,
     config: CrowConfig,
     ui_tx: mpsc::UnboundedSender<TuiMessage>,
@@ -10882,7 +10971,7 @@ pub struct ThreadManager {
 
 impl ThreadManager {
     pub fn new(
-        runtime: Arc<Mutex<SessionRuntime>>,
+        runtime: Arc<SessionRuntime>,
         messages: Arc<Mutex<ConversationManager>>,
         config: CrowConfig,
         ui_tx: mpsc::UnboundedSender<TuiMessage>,
@@ -10911,11 +11000,11 @@ impl ThreadManager {
                     // Refuse input if turn is actively processing
                     return;
                 }
-                
+
                 let token = CancellationToken::new();
                 state.status = TurnStatus::InProgress;
                 state.cancellation = Some(token.clone());
-                
+
                 // Spawn autonomous turn
                 self.spawn_turn(prompt, token);
             }
@@ -10950,18 +11039,19 @@ impl ThreadManager {
         let prompt_clone = prompt.clone();
 
         tokio::spawn(async move {
-            let mut observer = crate::event::TuiEventHandler::with_cancellation(
-                ui_tx.clone(),
-                token.clone(),
-            );
-            
-            let mut rt_guard = rt_clone.lock().await;
-            let mut msgs_guard = msgs_clone.lock().await;
+            let mut observer =
+                crate::event::TuiEventHandler::with_cancellation(ui_tx.clone(), token.clone());
 
-            let result = rt_guard
-                .execute_turn_with_observer(&cfg_clone, &prompt, &mut msgs_guard, &mut observer)
+            // Clone messages to prevent locking ConversationManager for the duration of the run
+            let mut local_msgs = msgs_clone.lock().await.clone();
+
+            let result = rt_clone
+                .execute_turn_with_observer(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
                 .await;
             
+            // Sync mutated messages back
+            *msgs_clone.lock().await = local_msgs.clone();
+
             let mut state = thread_state.lock().await;
             if token.is_cancelled() {
                 state.status = TurnStatus::Aborted;
@@ -10971,22 +11061,30 @@ impl ThreadManager {
                     Ok(snapshot_id) => {
                         state.status = TurnStatus::Completed(Some(snapshot_id.clone()));
                         let _ = ui_tx.send(TuiMessage::TurnComplete(true));
-                        
+
                         // Async persistence after turn completion
                         if let Ok(store) = SessionStore::open() {
                             let mut sid_guard = thread_state_sid.lock().await;
                             let mut current_session = if let Some(ref sid) = *sid_guard {
-                                store.load(&crate::session::SessionId(sid.clone())).unwrap_or_else(|_| {
-                                    Session::new(std::path::Path::new(&cfg_clone.workspace), "Interaction")
-                                })
+                                store
+                                    .load(&crate::session::SessionId(sid.clone()))
+                                    .unwrap_or_else(|_| {
+                                        Session::new(
+                                            std::path::Path::new(&cfg_clone.workspace),
+                                            "Interaction",
+                                        )
+                                    })
                             } else {
                                 // Default task name
-                                Session::new(std::path::Path::new(&cfg_clone.workspace), &prompt_clone)
+                                Session::new(
+                                    std::path::Path::new(&cfg_clone.workspace),
+                                    &prompt_clone,
+                                )
                             };
-                            
-                            current_session.save_messages(&msgs_guard.as_messages());
+
+                            current_session.save_messages(&local_msgs.as_messages());
                             current_session.push_snapshot(snapshot_id);
-                            
+
                             if store.save(&current_session).is_ok() {
                                 *sid_guard = Some(current_session.id.0.clone());
                             }
@@ -11009,53 +11107,58 @@ impl ThreadManager {
         let prompt_clone = prompt.clone();
 
         // Register swarm task
-        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
         // Extract out action args
         let id = format!("swarm-{:04x}", (ts % 0xffff) as u16);
-        
+
         {
             let mut s = swarm_state.lock().await;
-            s.insert(id.clone(), CodexThread {
-                status: TurnStatus::InProgress,
-                cancellation: Some(token.clone()),
-            });
+            s.insert(
+                id.clone(),
+                CodexThread {
+                    status: TurnStatus::InProgress,
+                    cancellation: Some(token.clone()),
+                },
+            );
         }
-        
+
         let _ = ui_tx.send(TuiMessage::SwarmStarted(id.clone(), prompt_clone.clone()));
 
         tokio::spawn(async move {
-            let mut observer = crate::event::TuiEventHandler::with_cancellation(
-                ui_tx.clone(),
-                token.clone(),
-            );
-            
+            let mut observer =
+                crate::event::TuiEventHandler::with_cancellation(ui_tx.clone(), token.clone());
+
             let (compiler, root, mcp, sys_msgs) = {
-                let rt_guard = rt_clone.lock().await;
                 let msgs_guard = msgs_clone.lock().await;
                 (
-                    Arc::clone(&rt_guard.compiler),
-                    rt_guard.workspace.clone(),
-                    Arc::clone(&rt_guard.mcp_manager),
+                    Arc::clone(&rt_clone.compiler),
+                    rt_clone.workspace.clone(),
+                    Arc::clone(&rt_clone.mcp_manager),
                     msgs_guard.as_messages(),
                 )
             };
-            
+
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
             let mut worker = crate::subagent::SubagentWorker::new(compiler_instance);
             // Replace worker id for consistency with the UI
             worker.id = id.clone();
 
-            let result = worker.execute(
-                &prompt_clone,
-                &[], // No specific focus paths initially
-                "Swarm background task initiated via TUI.",
-                sys_msgs,
-                &root,
-                Some(&mcp),
-                &mut observer
-            ).await;
-            
+            let result = worker
+                .execute(
+                    &prompt_clone,
+                    &[], // No specific focus paths initially
+                    "Swarm background task initiated via TUI.",
+                    sys_msgs,
+                    &root,
+                    Some(&mcp),
+                    &mut observer,
+                )
+                .await;
+
             {
                 let mut s = swarm_state.lock().await;
                 if let Some(mut state) = s.remove(&id) {
@@ -12199,23 +12302,29 @@ pub struct TuiEventHandler {
 }
 
 impl TuiEventHandler {
-    pub fn new(
-        tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
-    ) -> Self {
-        Self { tx, cancellation: None }
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>) -> Self {
+        Self {
+            tx,
+            cancellation: None,
+        }
     }
 
     pub fn with_cancellation(
         tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
         token: crate::tui::state::CancellationToken,
     ) -> Self {
-        Self { tx, cancellation: Some(token) }
+        Self {
+            tx,
+            cancellation: Some(token),
+        }
     }
 }
 
 impl EventHandler for TuiEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
-        let _ = self.tx.send(crate::tui::state::TuiMessage::AgentEvent(event));
+        let _ = self
+            .tx
+            .send(crate::tui::state::TuiMessage::AgentEvent(event));
     }
 
     fn is_cancelled(&self) -> bool {
@@ -12269,7 +12378,7 @@ impl CliEventHandler {
                 "Result" => "✓",
                 _ => "•",
             };
-            
+
             println!(
                 "  {} {} {:8} {}",
                 "│ ".with(Color::DarkGrey),
@@ -12365,7 +12474,13 @@ impl EventHandler for CliEventHandler {
             }
             AgentEvent::Log(msg) => {
                 if msg.contains("⚠") {
-                    self.sync_print(|| println!("  {} {}", "│ ".with(Color::DarkGrey), msg.with(Color::Yellow)));
+                    self.sync_print(|| {
+                        println!(
+                            "  {} {}",
+                            "│ ".with(Color::DarkGrey),
+                            msg.with(Color::Yellow)
+                        )
+                    });
                 } else {
                     if !msg.starts_with("       Rationale:") || self.view_mode == ViewMode::Audit {
                         if msg.starts_with("✓ ") || msg.starts_with("↳") {
@@ -12472,9 +12587,7 @@ pub async fn run_epistemic_loop(
         // If the user pressed ESC/Ctrl+C, abort the loop gracefully
         // by returning an empty plan (no-op) so the turn exits cleanly.
         if observer.is_cancelled() {
-            observer.handle_event(AgentEvent::Log(
-                "Turn cancelled by user.".into(),
-            ));
+            observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
             return Ok(IntentPlan {
                 base_snapshot_id: crow_patch::SnapshotId("cancelled".into()),
                 rationale: String::new(),
@@ -14748,7 +14861,7 @@ impl SerialCrucible<'_> {
         &self,
         messages: &mut ConversationManager,
         snapshot_id: &SnapshotId,
-        ledger: &mut EventLedger,
+        ledger: &std::sync::Mutex<EventLedger>,
         observer: &mut dyn EventHandler,
     ) -> Result<SnapshotId> {
         let mut total_attempts = 0;
@@ -14801,7 +14914,7 @@ impl SerialCrucible<'_> {
         &self,
         messages: &mut ConversationManager,
         snapshot_id: &SnapshotId,
-        ledger: &mut EventLedger,
+        ledger: &std::sync::Mutex<EventLedger>,
         plan: crow_patch::IntentPlan,
         observer: &mut dyn EventHandler,
     ) -> Result<SnapshotId> {
@@ -14874,7 +14987,7 @@ impl SerialCrucible<'_> {
         &self,
         messages: &mut ConversationManager,
         snapshot_id: &SnapshotId,
-        ledger: &mut EventLedger,
+        ledger: &std::sync::Mutex<EventLedger>,
         verification_runs: u32,
         _total_attempts: u32,
         precompiled_plan: Option<crow_patch::IntentPlan>,
@@ -14969,7 +15082,7 @@ impl SerialCrucible<'_> {
             .context("Failed to apply plan to sandbox")?;
         }
 
-        let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
+        let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
             plan_id: plan_id.clone(),
             snapshot_id: snapshot_id.clone(),
             timestamp: chrono::Utc::now(),
@@ -15002,7 +15115,7 @@ impl SerialCrucible<'_> {
             use crow_verifier::preflight::{self, PreflightResult};
             // Preflight compile check
             let start_preflight = std::time::Instant::now();
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
+            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
                 plan_id: plan_id.clone(),
                 sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
                 timestamp: chrono::Utc::now(),
@@ -15022,7 +15135,7 @@ impl SerialCrucible<'_> {
                 preflight_result,
                 PreflightResult::Clean | PreflightResult::Skipped(_)
             );
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PreflightTested {
+            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PreflightTested {
                 plan_id: plan_id.clone(),
                 passed: passed_preflight,
                 duration_ms: start_preflight.elapsed().as_millis() as u64,
@@ -15048,10 +15161,8 @@ impl SerialCrucible<'_> {
                     return Ok(EpochOutcome::RetryCompile);
                 }
                 PreflightResult::Skipped(reason) => {
-                    observer.handle_event(AgentEvent::Log(format!(
-                        "Preflight skipped: {}",
-                        reason
-                    )));
+                    observer
+                        .handle_event(AgentEvent::Log(format!("Preflight skipped: {}", reason)));
                 }
             }
         }
@@ -15101,7 +15212,7 @@ impl SerialCrucible<'_> {
                 &format!("{:?}", result.test_run.outcome),
                 &result.test_run.truncated_log,
             );
-            let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
+            let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
                 plan_id,
                 reason: format!("Verification failed: {:?}", result.test_run.outcome),
                 timestamp: chrono::Utc::now(),
@@ -15269,7 +15380,7 @@ async fn handle_session_command(args: &[String]) -> Result<()> {
 
 async fn resume_session_run(session_id: &str) -> Result<()> {
     let cfg = CrowConfig::load()?;
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime.resume(&cfg, session_id).await
 }
 
@@ -15278,7 +15389,7 @@ async fn resume_session_run(session_id: &str) -> Result<()> {
 async fn run_compile_only(args: &[String]) -> Result<()> {
     let prompt = args.join(" ");
     let cfg = CrowConfig::load()?;
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime.compile_only(&cfg, &prompt).await
 }
 
@@ -15289,7 +15400,7 @@ async fn run_compile_only(args: &[String]) -> Result<()> {
 async fn run_plan(args: &[String]) -> Result<()> {
     let prompt = args.join(" ");
     let cfg = CrowConfig::load()?;
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime.generate_plan(&cfg, &prompt).await
 }
 
@@ -15297,7 +15408,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
     let mut messages = context::ConversationManager::new(vec![]);
-    let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime
         .execute_turn(
             &cfg,
@@ -15441,7 +15552,7 @@ pub(crate) async fn apply_winning_plan(
     hydrated_plan: &crow_patch::IntentPlan,
     plan_id: &str,
     snapshot_id: &crow_patch::SnapshotId,
-    ledger: &mut crow_workspace::ledger::EventLedger,
+    ledger: &std::sync::Mutex<crow_workspace::ledger::EventLedger>,
 ) -> Result<()> {
     // ── WriteMode enforcement ────────────────────────────
     match cfg.write_mode {
@@ -15491,7 +15602,7 @@ pub(crate) async fn apply_winning_plan(
     }
 
     if cfg.write_mode != config::WriteMode::SandboxOnly {
-        let _ = ledger.append(crow_workspace::ledger::LedgerEvent::PlanApplied {
+        let _ = ledger.lock().unwrap().append(crow_workspace::ledger::LedgerEvent::PlanApplied {
             plan_id: plan_id.to_string(),
             snapshot_id: snapshot_id.clone(),
             timestamp: chrono::Utc::now(),
@@ -15763,7 +15874,7 @@ mod tests {
     async fn test_apply_winning_plan_sandbox_only_does_not_append_ledger() {
         let workspace = TempDir::new().unwrap();
         let ledger_dir = workspace.path().join("ledger.jsonl");
-        let mut ledger = crow_workspace::ledger::EventLedger::open(&ledger_dir).unwrap();
+        let ledger = crow_workspace::ledger::EventLedger::open(&ledger_dir).unwrap();
 
         let cfg = config::CrowConfig {
             workspace: workspace.path().to_path_buf(),
@@ -15785,13 +15896,14 @@ mod tests {
 
         let snap_id = crow_patch::SnapshotId("snap-123".into());
 
+        let ledger = std::sync::Mutex::new(ledger);
         apply_winning_plan(
             &cfg,
             sandbox.path(),
             &plan,
             "test-plan",
             &snap_id,
-            &mut ledger,
+            &ledger,
         )
         .await
         .unwrap();
@@ -16298,6 +16410,7 @@ struct Memory {
 /// Manages the LLM context envelope semantic strategies.
 /// Ensures that the cognitive loop does not blow out the token window
 /// with massive file reads or lengthy verification logs over multiple retries.
+#[derive(Clone)]
 pub struct ConversationManager {
     system_messages: Vec<ChatMessage>,
     conversation: VecDeque<Memory>,
@@ -16811,7 +16924,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
     let mut messages = crate::context::ConversationManager::new(vec![]);
     let mut state = SessionState::new();
-    let mut runtime = crate::runtime::SessionRuntime::boot(cfg).await?;
+    let runtime = crate::runtime::SessionRuntime::boot(cfg).await?;
 
     // ── Main Loop ──
     loop {
@@ -16899,7 +17012,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         );
                     }
                 }
-                
+
                 // Console 3.0: Bottom Connective Frame
                 let elapsed_ms = turn_start.elapsed().as_millis();
                 let ctx_bytes = format_bytes(messages.get_total_bytes());

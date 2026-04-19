@@ -1,11 +1,11 @@
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
 use crate::runtime::SessionRuntime;
-use crate::tui::state::{TuiMessage, CancellationToken};
+use crate::session::{Session, SessionStore};
+use crate::tui::state::{CancellationToken, TuiMessage};
+use crow_patch::SnapshotId;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use crow_patch::SnapshotId;
-use crate::session::{Session, SessionStore};
 
 /// Represents the deterministic state of an agent Turn lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +34,7 @@ pub struct CodexThread {
 /// ThreadManager sits between the TUI loop and the SessionRuntime, decoupling
 /// synchronous UI events from the autonomous MCTS solver pipeline.
 pub struct ThreadManager {
-    runtime: Arc<Mutex<SessionRuntime>>,
+    runtime: Arc<SessionRuntime>,
     messages: Arc<Mutex<ConversationManager>>,
     config: CrowConfig,
     ui_tx: mpsc::UnboundedSender<TuiMessage>,
@@ -45,7 +45,7 @@ pub struct ThreadManager {
 
 impl ThreadManager {
     pub fn new(
-        runtime: Arc<Mutex<SessionRuntime>>,
+        runtime: Arc<SessionRuntime>,
         messages: Arc<Mutex<ConversationManager>>,
         config: CrowConfig,
         ui_tx: mpsc::UnboundedSender<TuiMessage>,
@@ -74,11 +74,11 @@ impl ThreadManager {
                     // Refuse input if turn is actively processing
                     return;
                 }
-                
+
                 let token = CancellationToken::new();
                 state.status = TurnStatus::InProgress;
                 state.cancellation = Some(token.clone());
-                
+
                 // Spawn autonomous turn
                 self.spawn_turn(prompt, token);
             }
@@ -113,18 +113,19 @@ impl ThreadManager {
         let prompt_clone = prompt.clone();
 
         tokio::spawn(async move {
-            let mut observer = crate::event::TuiEventHandler::with_cancellation(
-                ui_tx.clone(),
-                token.clone(),
-            );
-            
-            let mut rt_guard = rt_clone.lock().await;
-            let mut msgs_guard = msgs_clone.lock().await;
+            let mut observer =
+                crate::event::TuiEventHandler::with_cancellation(ui_tx.clone(), token.clone());
 
-            let result = rt_guard
-                .execute_turn_with_observer(&cfg_clone, &prompt, &mut msgs_guard, &mut observer)
+            // Clone messages to prevent locking ConversationManager for the duration of the run
+            let mut local_msgs = msgs_clone.lock().await.clone();
+
+            let result = rt_clone
+                .execute_turn_with_observer(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
                 .await;
             
+            // Sync mutated messages back
+            *msgs_clone.lock().await = local_msgs.clone();
+
             let mut state = thread_state.lock().await;
             if token.is_cancelled() {
                 state.status = TurnStatus::Aborted;
@@ -134,22 +135,30 @@ impl ThreadManager {
                     Ok(snapshot_id) => {
                         state.status = TurnStatus::Completed(Some(snapshot_id.clone()));
                         let _ = ui_tx.send(TuiMessage::TurnComplete(true));
-                        
+
                         // Async persistence after turn completion
                         if let Ok(store) = SessionStore::open() {
                             let mut sid_guard = thread_state_sid.lock().await;
                             let mut current_session = if let Some(ref sid) = *sid_guard {
-                                store.load(&crate::session::SessionId(sid.clone())).unwrap_or_else(|_| {
-                                    Session::new(std::path::Path::new(&cfg_clone.workspace), "Interaction")
-                                })
+                                store
+                                    .load(&crate::session::SessionId(sid.clone()))
+                                    .unwrap_or_else(|_| {
+                                        Session::new(
+                                            std::path::Path::new(&cfg_clone.workspace),
+                                            "Interaction",
+                                        )
+                                    })
                             } else {
                                 // Default task name
-                                Session::new(std::path::Path::new(&cfg_clone.workspace), &prompt_clone)
+                                Session::new(
+                                    std::path::Path::new(&cfg_clone.workspace),
+                                    &prompt_clone,
+                                )
                             };
-                            
-                            current_session.save_messages(&msgs_guard.as_messages());
+
+                            current_session.save_messages(&local_msgs.as_messages());
                             current_session.push_snapshot(snapshot_id);
-                            
+
                             if store.save(&current_session).is_ok() {
                                 *sid_guard = Some(current_session.id.0.clone());
                             }
@@ -172,53 +181,58 @@ impl ThreadManager {
         let prompt_clone = prompt.clone();
 
         // Register swarm task
-        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
         // Extract out action args
         let id = format!("swarm-{:04x}", (ts % 0xffff) as u16);
-        
+
         {
             let mut s = swarm_state.lock().await;
-            s.insert(id.clone(), CodexThread {
-                status: TurnStatus::InProgress,
-                cancellation: Some(token.clone()),
-            });
+            s.insert(
+                id.clone(),
+                CodexThread {
+                    status: TurnStatus::InProgress,
+                    cancellation: Some(token.clone()),
+                },
+            );
         }
-        
+
         let _ = ui_tx.send(TuiMessage::SwarmStarted(id.clone(), prompt_clone.clone()));
 
         tokio::spawn(async move {
-            let mut observer = crate::event::TuiEventHandler::with_cancellation(
-                ui_tx.clone(),
-                token.clone(),
-            );
-            
+            let mut observer =
+                crate::event::TuiEventHandler::with_cancellation(ui_tx.clone(), token.clone());
+
             let (compiler, root, mcp, sys_msgs) = {
-                let rt_guard = rt_clone.lock().await;
                 let msgs_guard = msgs_clone.lock().await;
                 (
-                    Arc::clone(&rt_guard.compiler),
-                    rt_guard.workspace.clone(),
-                    Arc::clone(&rt_guard.mcp_manager),
+                    Arc::clone(&rt_clone.compiler),
+                    rt_clone.workspace.clone(),
+                    Arc::clone(&rt_clone.mcp_manager),
                     msgs_guard.as_messages(),
                 )
             };
-            
+
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
             let mut worker = crate::subagent::SubagentWorker::new(compiler_instance);
             // Replace worker id for consistency with the UI
             worker.id = id.clone();
 
-            let result = worker.execute(
-                &prompt_clone,
-                &[], // No specific focus paths initially
-                "Swarm background task initiated via TUI.",
-                sys_msgs,
-                &root,
-                Some(&mcp),
-                &mut observer
-            ).await;
-            
+            let result = worker
+                .execute(
+                    &prompt_clone,
+                    &[], // No specific focus paths initially
+                    "Swarm background task initiated via TUI.",
+                    sys_msgs,
+                    &root,
+                    Some(&mcp),
+                    &mut observer,
+                )
+                .await;
+
             {
                 let mut s = swarm_state.lock().await;
                 if let Some(mut state) = s.remove(&id) {

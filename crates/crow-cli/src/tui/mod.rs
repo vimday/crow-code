@@ -1,6 +1,6 @@
-pub mod state;
-pub mod render;
 pub mod dashboard;
+pub mod render;
+pub mod state;
 
 pub use dashboard::run_dashboard;
 
@@ -8,17 +8,20 @@ use crate::config::CrowConfig;
 use crate::event::{AgentEvent, ViewMode};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, EnableBracketedPaste, DisableBracketedPaste},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use render::render_app;
+use state::{AppState, Cell, CellKind, TuiMessage};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
-use state::{AppState, Cell, CellKind, TuiMessage};
-use render::render_app;
 
 use crate::context::ConversationManager;
 use crate::runtime::SessionRuntime;
@@ -79,7 +82,12 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
                 loaded_session_id = Some(session.id.0.clone());
                 state.history.push(Cell {
                     kind: CellKind::Log,
-                    payload: format!("Resumed session {} ({} messages) from Task: {}", session.id.0, loaded_messages.len(), session.task),
+                    payload: format!(
+                        "Resumed session {} ({} messages) from Task: {}",
+                        session.id.0,
+                        loaded_messages.len(),
+                        session.task
+                    ),
                 });
                 for msg in &loaded_messages {
                     let kind = match msg.role {
@@ -113,7 +121,7 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     let messages = ConversationManager::new(loaded_messages);
     let runtime = SessionRuntime::boot(cfg_val).await?;
 
-    let shared_runtime = Arc::new(Mutex::new(runtime));
+    let shared_runtime = Arc::new(runtime);
     let shared_messages = Arc::new(Mutex::new(messages));
 
     let thread_manager = Arc::new(crate::thread_manager::ThreadManager::new(
@@ -142,10 +150,15 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
         &tx,
         cfg_val.clone(),
         &thread_manager,
-    ).await;
+    )
+    .await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     terminal.show_cursor()?;
 
     if let Err(err) = res {
@@ -179,9 +192,10 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
                 let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Log(report)));
             }
             Err(e) => {
-                let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Error(
-                    format!("Failed: {}", e),
-                )));
+                let _ = tx.send(TuiMessage::AgentEvent(AgentEvent::Error(format!(
+                    "Failed: {}",
+                    e
+                ))));
             }
         }
         let _ = tx.send(TuiMessage::SessionComplete);
@@ -190,7 +204,7 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
 
 fn handle_tab_completion(state: &mut AppState) {
     let text = state.composer.clone();
-    
+
     // Basic file path completion for `!` (naive, splits by space and completes last token)
     if text.starts_with('!') {
         if let Some(last_word_idx) = text.rfind(' ') {
@@ -220,15 +234,19 @@ fn handle_tab_completion(state: &mut AppState) {
                 }
 
                 if matches.len() == 1 {
-                    let new_text = format!("{}{}{}", &text[..last_word_idx + 1], parent_dir.to_string_lossy(), matches[0]);
+                    let new_text = format!(
+                        "{}{}{}",
+                        &text[..last_word_idx + 1],
+                        parent_dir.to_string_lossy(),
+                        matches[0]
+                    );
                     let new_text = new_text.replace("./", "");
                     state.composer = new_text;
                     state.composer_cursor = state.composer.chars().count();
                 }
             }
         }
-    } 
-    else {
+    } else {
         // Normal text mode tab
         for _ in 0..4 {
             insert_char_at_cursor(state, ' ');
@@ -327,7 +345,9 @@ async fn run_tui_loop(
                     state.last_ctrl_c = None;
 
                     // ── Shell Command Approval Interception ───────────────────
-                    if let crate::tui::state::ApprovalState::PendingCommand(cmd) = state.approval_state.clone() {
+                    if let crate::tui::state::ApprovalState::PendingCommand(cmd) =
+                        state.approval_state.clone()
+                    {
                         match key.code {
                             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                 // Approved
@@ -342,7 +362,8 @@ async fn run_tui_loop(
                             KeyCode::Char('a') | KeyCode::Char('A') => {
                                 // Approved Always
                                 state.approval_state = crate::tui::state::ApprovalState::None;
-                                let prefix = cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
+                                let prefix =
+                                    cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
                                 state.allowed_safe_patterns.insert(prefix.clone());
                                 state.history.push(Cell {
                                     kind: CellKind::Log,
@@ -368,13 +389,18 @@ async fn run_tui_loop(
                     }
 
                     // ── Overlay Modal Interception ──────────────────────────────
-                    if let crate::tui::state::OverlayState::CommandPalette { query: _, selected_idx } = &mut state.overlay_state {
+                    if let crate::tui::state::OverlayState::CommandPalette {
+                        query: _,
+                        selected_idx,
+                    } = &mut state.overlay_state
+                    {
                         match key.code {
                             KeyCode::Esc => {
                                 state.overlay_state = crate::tui::state::OverlayState::None;
                             }
                             KeyCode::Down => {
-                                let commands = crate::tui::state::get_palette_commands(&state.composer);
+                                let commands =
+                                    crate::tui::state::get_palette_commands(&state.composer);
                                 let max_idx = commands.len().saturating_sub(1);
                                 *selected_idx = (*selected_idx + 1).min(max_idx);
                             }
@@ -382,7 +408,8 @@ async fn run_tui_loop(
                                 *selected_idx = selected_idx.saturating_sub(1);
                             }
                             KeyCode::Enter => {
-                                let commands = crate::tui::state::get_palette_commands(&state.composer);
+                                let commands =
+                                    crate::tui::state::get_palette_commands(&state.composer);
                                 let cmd = if let Some((c, _)) = commands.get(*selected_idx) {
                                     *c
                                 } else {
@@ -413,7 +440,11 @@ async fn run_tui_loop(
                             KeyCode::Char(c) => {
                                 // Let normal typing carry into composer
                                 insert_char_at_cursor(state, c);
-                                if let crate::tui::state::OverlayState::CommandPalette { query, selected_idx } = &mut state.overlay_state {
+                                if let crate::tui::state::OverlayState::CommandPalette {
+                                    query,
+                                    selected_idx,
+                                } = &mut state.overlay_state
+                                {
                                     *query = state.composer.clone();
                                     *selected_idx = 0; // reset selection
                                 }
@@ -425,24 +456,18 @@ async fn run_tui_loop(
 
                     match key.code {
                         // ── Ctrl+J: newline in composer ──────────────────────
-                        KeyCode::Char('j')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             insert_char_at_cursor(state, '\n');
                         }
 
                         // ── Ctrl+L: clear screen ─────────────────────────────
-                        KeyCode::Char('l')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             state.history.clear();
                             state.scroll_offset = 0;
                         }
 
                         // ── Ctrl+U: clear composer line ──────────────────────
-                        KeyCode::Char('u')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             state.composer.clear();
                             state.composer_cursor = 0;
                         }
@@ -492,10 +517,11 @@ async fn run_tui_loop(
                         KeyCode::Char(c) => {
                             insert_char_at_cursor(state, c);
                             if state.composer.starts_with('/') {
-                                state.overlay_state = crate::tui::state::OverlayState::CommandPalette {
-                                    query: state.composer.clone(),
-                                    selected_idx: 0,
-                                };
+                                state.overlay_state =
+                                    crate::tui::state::OverlayState::CommandPalette {
+                                        query: state.composer.clone(),
+                                        selected_idx: 0,
+                                    };
                             }
                         }
                         KeyCode::Backspace if state.composer_cursor > 0 => {
@@ -539,15 +565,18 @@ async fn run_tui_loop(
                 TuiMessage::TurnComplete(success) => {
                     state.active_action = None;
                     state.task_start_time = None;
-                    let was_cancelled = state.cancellation.as_ref().is_some_and(|t| t.is_cancelled());
+                    let was_cancelled = state
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(|t| t.is_cancelled());
                     state.cancellation = None;
-                    
+
                     if success && !was_cancelled {
                         state.history.push(Cell {
                             kind: CellKind::Result,
                             payload: "Done".into(),
                         });
-                        
+
                         if let Some(next_task) = state.task_queue.pop_front() {
                             execute_command_string(state, next_task, tx, &cfg, thread_manager);
                         }
@@ -556,10 +585,13 @@ async fn run_tui_loop(
                         state.task_queue.clear();
                         state.history.push(Cell {
                             kind: CellKind::Error,
-                            payload: format!("Pipeline halted. Dropped {} queued queries.", drop_count),
+                            payload: format!(
+                                "Pipeline halted. Dropped {} queued queries.",
+                                drop_count
+                            ),
                         });
                     }
-                    
+
                     // Refresh git state post-turn in case files were modified
                     refresh_git_state(state, &cfg.workspace);
                 }
@@ -573,9 +605,15 @@ async fn run_tui_loop(
                     state.active_swarms.push((id, task));
                 }
                 TuiMessage::SwarmComplete(id, success) => {
-                    state.active_swarms.retain(|(active_id, _)| active_id != &id);
+                    state
+                        .active_swarms
+                        .retain(|(active_id, _)| active_id != &id);
                     state.history.push(Cell {
-                        kind: if success { CellKind::Result } else { CellKind::Error },
+                        kind: if success {
+                            CellKind::Result
+                        } else {
+                            CellKind::Error
+                        },
                         payload: format!("Swarm worker [{}] finished.", id),
                     });
                 }
@@ -591,10 +629,12 @@ async fn run_tui_loop(
                             state.task_start_time = Some(Instant::now());
                         }
                     }
-                    
+
                     // Best-effort draft persistence
-                    if state.spinner_idx.is_multiple_of(8) { // ~ once per second (120ms * 8)tick)
-                        let draft_path = std::path::Path::new(&cfg.workspace).join(".crow/logs/draft.txt");
+                    if state.spinner_idx.is_multiple_of(8) {
+                        // ~ once per second (120ms * 8)tick)
+                        let draft_path =
+                            std::path::Path::new(&cfg.workspace).join(".crow/logs/draft.txt");
                         if !state.composer.is_empty() {
                             let _ = std::fs::write(&draft_path, &state.composer);
                         } else {
@@ -674,7 +714,8 @@ fn execute_command_string(
                 } else {
                     let tm = thread_manager.clone();
                     tokio::spawn(async move {
-                        tm.submit(crate::thread_manager::Op::SwarmRun(payload)).await;
+                        tm.submit(crate::thread_manager::Op::SwarmRun(payload))
+                            .await;
                     });
                     state.history.push(Cell {
                         kind: CellKind::Log,
@@ -718,10 +759,7 @@ fn execute_command_string(
                     kind: CellKind::Log,
                     payload: format!(
                         "Model: {}\nWorkspace: {}\nWrite Mode: {}\nView: {:?}",
-                        state.model_info,
-                        state.workspace_name,
-                        state.write_mode,
-                        state.view_mode,
+                        state.model_info, state.workspace_name, state.write_mode, state.view_mode,
                     ),
                 });
             }
@@ -750,7 +788,10 @@ fn execute_command_string(
             other => {
                 state.history.push(Cell {
                     kind: CellKind::Error,
-                    payload: format!("Unknown command: /{}. Type /help for available commands.", other),
+                    payload: format!(
+                        "Unknown command: /{}. Type /help for available commands.",
+                        other
+                    ),
                 });
             }
         }
@@ -778,18 +819,33 @@ fn execute_command_string(
     // ── Shell commands (!cmd) ────────────────────────────────────────
     if trimmed.starts_with('!') {
         let bash_cmd = trimmed.trim_start_matches('!').trim().to_string();
-        
+
         let safe_prefixes = [
-            "ls", "pwd", "echo", "cat", "git status", "git branch", 
-            "git diff", "git log", "git show", "whoami", "date", 
-            "tree", "hostname", "cargo check", "cargo build", "cargo test"
+            "ls",
+            "pwd",
+            "echo",
+            "cat",
+            "git status",
+            "git branch",
+            "git diff",
+            "git log",
+            "git show",
+            "whoami",
+            "date",
+            "tree",
+            "hostname",
+            "cargo check",
+            "cargo build",
+            "cargo test",
         ];
-        
-        let is_safe = safe_prefixes.iter().any(|safe| {
-            bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe))
-        }) || state.allowed_safe_patterns.iter().any(|safe| {
-            bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe))
-        });
+
+        let is_safe = safe_prefixes
+            .iter()
+            .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe)))
+            || state
+                .allowed_safe_patterns
+                .iter()
+                .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{} ", safe)));
 
         if is_safe {
             state.history.push(Cell {
@@ -800,7 +856,7 @@ fn execute_command_string(
         } else {
             state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd);
         }
-        
+
         state.composer.clear();
         state.composer_cursor = 0;
         return;
