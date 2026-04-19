@@ -27,49 +27,78 @@ With the advent of **Phase 3**, Crow is no longer just a pipeline—it is a **wo
 
 ## ⚡ Quick Start
 
-### Prerequisites
+## 🚀 Getting Started
 
-- **Rust / Cargo** (Latest Stable)
-- An LLM provider API Key, configured via environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) or in `.crow/config.json`.
-- Standard POSIX utilities: `rg`, `tree`, `file`, `wc`.
+### 1️⃣ Installation
 
-### 1) Check your Workspace
-Ensure your target repository builds locally:
+Currently, Crow is built from source. You need **Rust and Cargo** installed on your system.
+
 ```bash
-cargo build --workspace
-cargo test --workspace
+# 1. Clone the repository
+git clone https://github.com/CorvusMatrix/crow-code.git
+cd crow-code
+
+# 2. Build and install the binary globally
+cargo install --path crates/crow-cli
+
+# 3. Verify installation
+crow --help
+```
+*Note: Ensure `~/.cargo/bin` is in your system `$PATH`.*
+
+### 2️⃣ Configuration
+
+Your workspace needs access to an LLM provider. Crow supports multiple backends. You can configure this via **Environment Variables** for quick tests, or via a **JSON Config File** for permanent settings.
+
+#### Option A: Quick Environment Variables
+```bash
+# OpenAI
+export OPENAI_API_KEY="sk-..."
+export LLM_PROVIDER="openai"
+export LLM_MODEL="gpt-4o"
+
+# Anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
+export LLM_PROVIDER="anthropic"
+export LLM_MODEL="claude-3-5-sonnet-20240620"
 ```
 
-### 2) Configuration
-Fastest way to boot is via environment variables:
-```bash
-export OPENAI_API_KEY=sk-...
-export LLM_PROVIDER=openai
-export LLM_MODEL=gpt-4o
-```
-Or declare rules in `.crow/config.json`:
+#### Option B: Global or Local Configuration
+Crow looks for configuration in two places:
+1. **Global**: `~/.crow/config.json` (Applies everywhere)
+2. **Local**: `.crow/config.json` (Override settings per-project)
+
+Example `~/.crow/config.json` using **Ollama** (Local AI):
 ```json
 {
   "llm": {
     "provider": "ollama",
-    "model": "llama3",
+    "model": "llama3.1:8b",
     "base_url": "http://localhost:11434/v1"
   },
   "workspace": {
-    "write_mode": "write",
+    "write_mode": "write", 
     "map_budget": 65536
   }
 }
 ```
+*Tip: `write_mode: "write"` allows Crow to apply verified patches to your repo. Set it to `"sandbox_only"` to preview changes without modifying your files.*
 
-### 3) Step into the Workbench
+### 3️⃣ Usage (The Interactive Workstation)
+
+Navigate to any Rust codebase you want to work on and start the Crow TUI:
+
 ```bash
-# Drop into the native Ratatui workbench (default)
-cargo run -p crow-cli
-
-# Start interactive chat in the workbench, instantly resuming previous context
-cargo run -p crow-cli -- -r
+cd my-rust-project
+crow
 ```
+
+You are now in the Interactive Developer Workstation. 
+- **Type naturally** to instruct the agent to build features or fix bugs. 
+- **Asynchronous Flow**: While Crow is "thinking", you don't have to wait! You can continue typing commands, and they will be queued seamlessly.
+- **Sub-Agent Swarms**: Need a massive refactor done in the background? Type `/swarm audit all error handling`. A detached agent will take off on your Swarm Bar, leaving your main terminal free for continuing work.
+
+**Instant Resume**: Had to close the terminal? Run `crow -r` to instantly rehydrate your entire active session, context history, and verification records!
 
 ---
 
