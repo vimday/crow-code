@@ -6,24 +6,24 @@ pub mod crucible;
 mod diff;
 mod epistemic;
 pub mod epistemic_ui;
+pub mod event;
 mod evidence_report;
 mod legacy_god;
 mod mcp;
 pub mod mcts;
-pub mod render;
-mod session;
-pub mod runtime;
 pub mod prompt;
-pub mod event;
+pub mod render;
+pub mod runtime;
+mod session;
 pub mod snapshot;
-pub mod tui;
 pub mod subagent;
+pub mod tui;
 
 use anyhow::Result;
 use config::CrowConfig;
 
-use crow_probe::scan_workspace;
 use crow_materialize::MaterializeConfig;
+use crow_probe::scan_workspace;
 use std::env;
 
 #[tokio::main]
@@ -171,18 +171,16 @@ async fn run_plan(args: &[String]) -> Result<()> {
     runtime.generate_plan(&cfg, &prompt).await
 }
 
-
 async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
     let mut messages = context::ConversationManager::new(vec![]);
     let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
-    runtime.execute_turn(&cfg, &prompt, &mut messages)
+    runtime
+        .execute_turn(&cfg, &prompt, &mut messages)
         .await
         .map(|_| ())
 }
-
-
 
 // `apply_sandbox_to_workspace` moved to `crow_workspace::applier`.
 
@@ -241,7 +239,7 @@ async fn warm_build_cache(
             .unwrap(),
     );
     spinner.set_message(format!(
-        "[4.5/6] Pre-warming build cache for {}...",
+        "Pre-warming build cache for {}...",
         profile.primary_lang.name
     ));
     if console::Term::stdout().is_term() && std::env::var("CI").is_err() {
@@ -328,7 +326,9 @@ pub(crate) async fn apply_winning_plan(
             println!(
                 "\n  ✍️  Write mode: workspace-write — applying verified changes to workspace..."
             );
-            if let Err(e) = crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan) {
+            if let Err(e) =
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
+            {
                 eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
                 eprintln!("     Sandbox remains at: {}", sandbox_path.display());
                 anyhow::bail!("Workspace application failed: {:?}", e);
@@ -346,7 +346,9 @@ pub(crate) async fn apply_winning_plan(
             println!(
                 "\n  ⚠️  Write mode: danger-full-access — applying without additional checks..."
             );
-            if let Err(e) = crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan) {
+            if let Err(e) =
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
+            {
                 eprintln!("  ❌ Failed to apply to workspace: {:?}", e);
                 anyhow::bail!("Workspace application failed: {:?}", e);
             } else {
@@ -390,7 +392,6 @@ pub(crate) async fn run_mcts_crucible(
     let baseline_plan =
         epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, &mut obs)
             .await?;
-
 
     if baseline_plan.operations.is_empty() {
         println!("\n[🎉] Conversational Intent Detected (No codebase changes proposed)");
@@ -589,7 +590,9 @@ async fn handle_mcp_command(args: &[String]) -> Result<()> {
 
 // ─── Ledger ─────────────────────────────────────────────────────────
 
-pub(crate) fn open_ledger(workspace: &std::path::Path) -> Result<crow_workspace::ledger::EventLedger> {
+pub(crate) fn open_ledger(
+    workspace: &std::path::Path,
+) -> Result<crow_workspace::ledger::EventLedger> {
     use anyhow::Context;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -622,8 +625,6 @@ async fn run_autodream() -> Result<()> {
 
     Ok(())
 }
-
-
 
 #[cfg(test)]
 mod tests {

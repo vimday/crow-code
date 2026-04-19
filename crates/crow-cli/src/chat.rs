@@ -144,7 +144,8 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
     let theme = *renderer.color_theme();
 
     // ── Welcome Banner ──
-    print_repl_banner(cfg, &theme);
+    let mut session = Session::new(&cfg.workspace, "Interactive REPL Session");
+    print_repl_banner(cfg, &theme, &session);
 
     // ── Editor Setup ──
     let editor_config = Config::builder()
@@ -167,20 +168,8 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
             "  {}",
             "⚠ SessionStore unavailable — history won't persist.".with(Color::Yellow)
         );
+        println!();
     }
-
-    let mut session = Session::new(&cfg.workspace, "Interactive REPL Session");
-    println!(
-        "  {} {}",
-        "Session:".with(Color::DarkGrey),
-        session.id.0.clone().with(Color::White)
-    );
-    println!(
-        "  {} {}",
-        "Workspace:".with(Color::DarkGrey),
-        cfg.workspace.display().to_string().with(Color::White)
-    );
-    println!();
 
     let mut messages = crate::context::ConversationManager::new(vec![]);
     let mut state = SessionState::new();
@@ -447,13 +436,14 @@ fn compact_preview(input: &str, max_chars: usize) -> String {
     truncate_middle(&normalized, max_chars)
 }
 
-fn print_repl_banner(cfg: &CrowConfig, theme: &ColorTheme) {
+fn print_repl_banner(cfg: &CrowConfig, theme: &ColorTheme, session: &Session) {
     println!();
     print_section_title("Crow Code", "Evidence-driven terminal coding agent", theme);
     print_kv_line("Model", &compact_model_name(cfg));
     print_kv_line("Provider", &cfg.describe_provider());
     print_kv_line("Workspace", &cfg.workspace.display().to_string());
     print_kv_line("Write Mode", &write_mode_badge(cfg));
+    print_kv_line("Session", &session.id.0);
     println!(
         "  {}",
         "Type /help for commands. Ctrl+J or Shift+Enter inserts a newline.".with(theme.dim)

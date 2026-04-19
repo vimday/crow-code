@@ -6,6 +6,7 @@
 use crow_evidence::types::{EvidenceMatrix, RiskKind};
 use crow_patch::{Confidence, EditOp, IntentPlan, SnapshotId};
 use std::fmt;
+use crossterm::style::{Color, Stylize};
 
 // ─── Report Structures ─────────────────────────────────────────────
 
@@ -160,36 +161,62 @@ impl Verdict {
 
 impl fmt::Display for EvidenceReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "\n🦅 crow — Evidence Report")?;
+        writeln!(f, "\n  {}", "🦅 crow — Evidence Report".bold().with(Color::Cyan))?;
         writeln!(
             f,
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "  {}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".with(Color::AnsiValue(240))
         )?;
 
         // Recon
-        writeln!(f, "\n[1/5] Workspace Recon")?;
+        writeln!(f, "\n  {}", "Workspace Recon".bold().with(Color::Cyan))?;
         writeln!(
             f,
-            "  Language: {} ({})",
-            self.recon.language, self.recon.tier
+            "    {} {} ({})",
+            "Language:".with(Color::AnsiValue(242)),
+            self.recon.language.clone().with(Color::White),
+            self.recon.tier.clone().with(Color::AnsiValue(245))
         )?;
-        writeln!(f, "  Snapshot: {} (anchored)", self.recon.snapshot_id.0)?;
-        writeln!(f, "  Files scanned: {}", self.recon.files_scanned)?;
+        writeln!(
+            f,
+            "    {} {} {}",
+            "Snapshot:".with(Color::AnsiValue(242)),
+            self.recon.snapshot_id.0.clone().with(Color::White),
+            "(anchored)".with(Color::AnsiValue(245))
+        )?;
+        writeln!(
+            f,
+            "    {} {}",
+            "Files scanned:".with(Color::AnsiValue(242)),
+            self.recon.files_scanned.to_string().with(Color::White)
+        )?;
         if !self.recon.manifests.is_empty() {
-            writeln!(f, "  Manifests: {}", self.recon.manifests.join(", "))?;
+            writeln!(
+                f,
+                "    {} {}",
+                "Manifests:".with(Color::AnsiValue(242)),
+                self.recon.manifests.join(", ").with(Color::White)
+            )?;
         }
 
         // Compilation
-        writeln!(f, "\n[2/5] Intent Compilation")?;
+        writeln!(f, "\n  {}", "Intent Compilation".bold().with(Color::Cyan))?;
         writeln!(
             f,
-            "  Rationale: \"{}\"",
-            truncate_str(&self.compilation.rationale, 60)
+            "    {} \"{}\"",
+            "Rationale:".with(Color::AnsiValue(242)),
+            truncate_str(&self.compilation.rationale, 60).with(Color::White)
         )?;
-        writeln!(f, "  Confidence: {:?}", self.compilation.confidence)?;
         writeln!(
             f,
-            "  Operations: {} Modify, {} Create, {} Delete, {} Rename",
+            "    {} {:?}",
+            "Confidence:".with(Color::AnsiValue(242)),
+            self.compilation.confidence
+        )?;
+        writeln!(
+            f,
+            "    {} {} Modify, {} Create, {} Delete, {} Rename",
+            "Operations:".with(Color::AnsiValue(242)),
             self.compilation.modify_count,
             self.compilation.create_count,
             self.compilation.delete_count,
@@ -197,53 +224,63 @@ impl fmt::Display for EvidenceReport {
         )?;
 
         // Hydration
-        writeln!(f, "\n[3/5] Plan Hydration")?;
+        writeln!(f, "\n  {}", "Plan Hydration".bold().with(Color::Cyan))?;
         if self.hydration.snapshot_verified {
-            writeln!(f, "  ✅ base_snapshot_id verified against workspace")?;
+            writeln!(f, "    ✅ base_snapshot_id verified against workspace")?;
         } else {
-            writeln!(f, "  ❌ base_snapshot_id MISMATCH — plan may be stale")?;
+            writeln!(f, "    ❌ {}", "base_snapshot_id MISMATCH — plan may be stale".with(Color::AnsiValue(203)))?;
         }
         writeln!(
             f,
-            "  ✅ {}/{} precondition hashes match",
+            "    ✅ {}/{} precondition hashes match",
             self.hydration.hashes_matched, self.hydration.hashes_total
         )?;
         for warning in &self.hydration.drift_warnings {
-            writeln!(f, "  ⚠️  {}", warning)?;
+            writeln!(f, "    ⚠️  {}", warning.clone().with(Color::Yellow))?;
         }
 
         // Preflight
         writeln!(
             f,
-            "\n[4/5] Preflight Verification ({})",
-            self.preflight.language
+            "\n  {} {}",
+            "Preflight Verification".bold().with(Color::Cyan),
+            format!("({})", self.preflight.language).with(Color::AnsiValue(245))
         )?;
         match &self.preflight.outcome {
             PreflightOutcome::Clean { duration_secs } => {
                 writeln!(
                     f,
-                    "  ✅ Passed in {:.1}s (0 errors, 0 warnings)",
+                    "    ✅ Passed in {:.1}s (0 errors, 0 warnings)",
                     duration_secs
                 )?;
             }
             PreflightOutcome::Errors { count, summary } => {
-                writeln!(f, "  ❌ {} error(s) detected", count)?;
+                writeln!(f, "    ❌ {}", format!("{} error(s) detected", count).with(Color::AnsiValue(203)))?;
                 for line in summary.lines().take(5) {
-                    writeln!(f, "     {}", line)?;
+                    writeln!(f, "       {}", line.with(Color::AnsiValue(203)))?;
                 }
             }
             PreflightOutcome::Skipped { reason } => {
-                writeln!(f, "  ⏭️  Skipped: {}", reason)?;
+                writeln!(f, "    ⏭️  Skipped: {}", reason.clone().with(Color::AnsiValue(245)))?;
             }
         }
 
         // Verdict
-        writeln!(f, "\n[5/5] Evidence Summary")?;
-        writeln!(f, "  ┌─────────────────────────────────────────────┐")?;
+        writeln!(f, "\n  {}", "Evidence Summary".bold().with(Color::Cyan))?;
+        let frame_color = Color::AnsiValue(240);
+        writeln!(f, "  {}", "╭─────────────────────────────────────────────╮".with(frame_color))?;
+        
+        let verdict_color = match &self.verdict {
+            Verdict::AutoApply { .. } => Color::AnsiValue(114), // Greenish
+            Verdict::ReviewRequired { .. } => Color::AnsiValue(221), // Yellowish
+            Verdict::Escalate { .. } => Color::AnsiValue(203), // Reddish
+        };
+
         writeln!(
             f,
-            "  │  Verdict: {} {}",
-            self.verdict.label(),
+            "  {}  Verdict: {} {}",
+            "│".with(frame_color),
+            self.verdict.label().bold().with(verdict_color),
             self.verdict.emoji(),
         )?;
 
@@ -266,25 +303,27 @@ impl fmt::Display for EvidenceReport {
 
         writeln!(
             f,
-            "  │  Compile: {}  Lint: {}  Risk: {}",
+            "  {}  Compile: {}  Lint: {}  Risk: {}",
+            "│".with(frame_color),
             if compile_ok { "✅" } else { "❌" },
             if lint_ok { "✅" } else { "⚠️" },
             risk_label,
         )?;
 
         if let Verdict::ReviewRequired { reason, .. } = &self.verdict {
-            writeln!(f, "  │  Reason: {}", reason)?;
+            writeln!(f, "  {}  Reason: {}", "│".with(frame_color), reason.clone().with(Color::Yellow))?;
         }
         if let Verdict::Escalate { risk_flags, .. } = &self.verdict {
             for flag in risk_flags {
-                writeln!(f, "  │  🚨 {}", flag)?;
+                writeln!(f, "  {}  🚨 {}", "│".with(frame_color), flag.clone().with(Color::AnsiValue(203)))?;
             }
         }
 
-        writeln!(f, "  └─────────────────────────────────────────────┘")?;
+        writeln!(f, "  {}", "╰─────────────────────────────────────────────╯".with(frame_color))?;
         writeln!(
             f,
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "  {}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".with(Color::AnsiValue(240))
         )?;
 
         Ok(())
