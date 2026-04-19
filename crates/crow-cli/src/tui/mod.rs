@@ -620,12 +620,12 @@ async fn run_tui_loop(
                 TuiMessage::Tick => {
                     state.spinner_idx = state.spinner_idx.wrapping_add(1);
                     if let Some(start) = state.task_start_time {
-                        if start.elapsed() > Duration::from_secs(45) {
+                        if start.elapsed() > Duration::from_secs(180) {
                             state.history.push(Cell {
                                 kind: CellKind::Error,
-                                payload: "Task seems unresponsive for 45s. Is the Sandbox or Network hanging? Press ESC to force-interrupt.".into(),
+                                payload: "Network response or task execution is taking over 3 minutes. Is it hanging? Press ESC to force-interrupt.".into(),
                             });
-                            // Reset timer to warn again in 45s if still stuck
+                            // Reset timer to warn again in 3 minutes if still stuck
                             state.task_start_time = Some(Instant::now());
                         }
                     }
