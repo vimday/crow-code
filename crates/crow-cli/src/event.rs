@@ -138,6 +138,12 @@ impl CliEventHandler {
     }
 }
 
+impl Drop for CliEventHandler {
+    fn drop(&mut self) {
+        self.stop_spinner();
+    }
+}
+
 impl EventHandler for CliEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
         match event {
