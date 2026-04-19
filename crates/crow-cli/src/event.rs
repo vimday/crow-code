@@ -1,6 +1,5 @@
 use crossterm::style::{Color, Stylize};
-use crow_patch::{EditOp, IntentPlan};
-use std::collections::BTreeSet;
+use crow_patch::IntentPlan;
 
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -120,25 +119,22 @@ impl CliEventHandler {
         }
     }
 
-    fn print_activity(&self, icon: &str, label: &str, body: &str, accent: Color) {
+    fn print_trace(&self, icon: &str, body: &str, accent: Color) {
         self.sync_print(|| {
             println!(
-                "  {} {} {}",
-                icon.bold().with(accent),
-                label.bold().with(accent),
-                body.with(Color::White)
+                "  {} {}",
+                icon.with(accent),
+                body.with(Color::AnsiValue(245))
             );
         });
     }
 
-    fn print_detail(&self, label: &str, body: &str) {
-        self.sync_print(|| {
-            println!(
-                "    {} {}",
-                label.with(Color::AnsiValue(242)),
-                body.with(Color::AnsiValue(245))
-            );
-        });
+    fn update_spinner(&mut self, text: String) {
+        if let Some(sp) = &mut self.spinner {
+            sp.set_pattern(text);
+        } else {
+            self.spinner = Some(crate::epistemic_ui::SpinnerObserver::new(text));
+        }
     }
 }
 
@@ -181,51 +177,40 @@ impl EventHandler for CliEventHandler {
                 }
             }
             AgentEvent::ActionStart(desc) => {
-                self.stop_spinner();
-                self.print_activity("◦", "Action", &desc, Color::AnsiValue(81));
+                self.update_spinner(format!("Running action: {}", desc));
             }
             AgentEvent::ActionComplete(desc) => {
-                self.print_activity("✓", "Done", &desc, Color::AnsiValue(114));
+                self.print_trace("✓", &desc, Color::AnsiValue(114));
             }
             AgentEvent::ReadFiles(paths) => {
-                self.stop_spinner();
                 let display = if paths.len() <= 3 {
                     paths.join(", ")
                 } else {
                     format!("{}, ... ({} files)", paths[..2].join(", "), paths.len())
                 };
-                self.print_activity("◦", "Read", &display, Color::AnsiValue(110));
+                self.print_trace("✓", &format!("Read {}", display), Color::AnsiValue(245));
             }
             AgentEvent::ReconStart(desc) => {
-                self.stop_spinner();
-                self.print_activity("◦", "Recon", &desc, Color::AnsiValue(75));
+                self.update_spinner(format!("Recon: {}", desc));
             }
             AgentEvent::DelegateStart(task) => {
-                self.stop_spinner();
-                self.print_activity("◦", "Delegate", &task, Color::AnsiValue(176));
+                self.update_spinner(format!("Delegating: {}", task));
             }
             AgentEvent::PlanSubmitted(plan) => {
-                self.stop_spinner();
                 if !plan.operations.is_empty() {
                     let summary = format!(
-                        "{} operations · confidence {:?}",
-                        plan.operations.len(),
-                        plan.confidence
+                        "Plan ready · {} operations",
+                        plan.operations.len()
                     );
-                    self.print_activity("◆", "Plan Ready", &summary, Color::AnsiValue(221));
-                    let targets = summarize_plan_targets(&plan);
-                    if !targets.is_empty() {
-                        self.print_detail("Files", &targets);
-                    }
+                    self.print_trace("✓", &summary, Color::AnsiValue(114));
                 }
             }
             AgentEvent::CruciblePreflight(msg) => {
-                self.stop_spinner();
-                self.print_activity("◦", "Verify", &msg, Color::AnsiValue(180));
+                self.update_spinner(format!("Verifying: {}", msg));
             }
             AgentEvent::Log(msg) => {
                 if let Some(rationale) = msg.strip_prefix("       Rationale: ") {
-                    self.print_detail("Why", rationale);
+                    self.print_trace("↳", rationale, Color::AnsiValue(242));
                 } else if msg.contains("⚠") {
                     self.sync_print(|| println!("  {}", msg.with(Color::Yellow)));
                 } else {
@@ -246,31 +231,6 @@ impl EventHandler for CliEventHandler {
     }
 }
 
-fn summarize_plan_targets(plan: &IntentPlan) -> String {
-    let mut targets = BTreeSet::new();
-
-    for op in &plan.operations {
-        match op {
-            EditOp::Modify { path, .. }
-            | EditOp::Create { path, .. }
-            | EditOp::Delete { path, .. } => {
-                targets.insert(path.as_str().to_string());
-            }
-            EditOp::Rename { from, to, .. } => {
-                targets.insert(format!("{} → {}", from.as_str(), to.as_str()));
-            }
-        }
-    }
-
-    let mut targets = targets.into_iter().collect::<Vec<_>>();
-    if targets.len() > 4 {
-        let extra = targets.len() - 3;
-        targets.truncate(3);
-        targets.push(format!("+{} more", extra));
-    }
-
-    targets.join(" · ")
-}
 
 // ─── JSON Rationale Streaming ────────────────────────────────────────
 

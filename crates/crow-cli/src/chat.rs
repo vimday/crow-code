@@ -2,10 +2,7 @@ use crate::config::CrowConfig;
 use crate::render::{ColorTheme, TerminalRenderer};
 use crate::session::{Session, SessionStore};
 use anyhow::Result;
-use crossterm::{
-    style::{Color, Stylize},
-    terminal::size,
-};
+use crossterm::style::{Color, Stylize};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -281,7 +278,8 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
 
 fn print_help(theme: &ColorTheme) {
     println!();
-    print_section_title("Commands", "Interactive REPL shortcuts", theme);
+    println!("  {}", "◩  Commands".bold().with(theme.heading));
+    println!("  {}", "─".repeat(34).with(theme.dim));
 
     let commands = [
         ("/help", "Show this help message"),
@@ -295,12 +293,13 @@ fn print_help(theme: &ColorTheme) {
         println!(
             "  {}  {}",
             format!("{:<10}", cmd).bold().with(Color::Green),
-            desc.with(Color::White)
+            desc.with(Color::AnsiValue(245))
         );
     }
 
     println!();
-    print_section_title("Tips", "Input ergonomics", theme);
+    println!("  {}", "◩  Tips".bold().with(theme.heading));
+    println!("  {}", "─".repeat(34).with(theme.dim));
     println!(
         "  {}",
         "• Ctrl+J or Shift+Enter inserts a newline for multi-line input".with(theme.dim)
@@ -334,17 +333,21 @@ fn print_status(
     };
 
     println!();
-    print_section_title("Session", "Current REPL state", theme);
+    println!("  {}", "◩  System Status".bold().with(theme.heading));
+    println!("  {}", "─".repeat(34).with(theme.dim));
     print_kv_line("Session", &session.id.0);
     print_kv_line("Workspace", &cfg.workspace.display().to_string());
     print_kv_line("Provider", &cfg.describe_provider());
+    print_kv_line("Model", &compact_model_name(cfg));
     print_kv_line("Write Mode", &write_mode_badge(cfg));
     print_kv_line("Turns", &state.turns.to_string());
     print_kv_line(
         "Context",
         &format!("{} · {} messages", format_bytes(ctx_bytes), msg_count),
     );
-    print_kv_line("Avg Turn", &format_duration_ms(avg_turn_ms));
+    if state.turns > 0 {
+        print_kv_line("Avg Turn", &format_duration_ms(avg_turn_ms));
+    }
     println!();
 }
 
@@ -384,11 +387,6 @@ fn format_duration_ms(ms: u128) -> String {
         format!("{:.1}s", ms as f64 / 1000.0)
     }
 }
-
-fn terminal_width() -> usize {
-    size().map(|(w, _)| usize::from(w)).unwrap_or(80)
-}
-
 fn write_mode_badge(cfg: &CrowConfig) -> String {
     match cfg.write_mode {
         crate::config::WriteMode::SandboxOnly => "sandbox".to_string(),
@@ -440,17 +438,7 @@ fn build_prompt(
 
 // Print turn header removed in pursuit of minimalism.
 
-fn print_section_title(title: &str, subtitle: &str, theme: &ColorTheme) {
-    let width = terminal_width().saturating_sub(6).max(18);
-    let title_blob = format!(" {title} ");
-    let rule_len = width.saturating_sub(title_blob.chars().count());
-    println!(
-        "  {}{}",
-        title_blob.bold().with(theme.heading),
-        "─".repeat(rule_len).with(theme.dim)
-    );
-    println!("  {}", subtitle.with(theme.dim));
-}
+
 
 fn print_kv_line(label: &str, value: &str) {
     println!(

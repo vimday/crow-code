@@ -85,6 +85,13 @@ impl SpinnerObserver {
         self.spinner
             .set_message(format!("{} — {}", self.message_pattern, status));
     }
+
+    /// Dynamically change the base text pattern while running.
+    pub fn set_pattern(&mut self, pattern: String) {
+        self.message_pattern = pattern.clone();
+        self.spinner.set_message(pattern);
+        self.stream_buffer.clear();
+    }
 }
 
 impl EpistemicObserver for SpinnerObserver {
