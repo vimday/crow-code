@@ -2,7 +2,10 @@ use crate::config::CrowConfig;
 use crate::render::{ColorTheme, TerminalRenderer};
 use crate::session::{Session, SessionStore};
 use anyhow::Result;
-use crossterm::style::{Color, Stylize};
+use crossterm::{
+    style::{Color, Stylize},
+    terminal::size,
+};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -356,13 +359,36 @@ fn print_turn_footer(
     messages: &crate::context::ConversationManager,
     theme: &ColorTheme,
 ) {
+    let width = size().map(|(w, _)| w as usize).unwrap_or(80);
+    
     let ctx_bytes = format_bytes(messages.get_total_bytes());
     let write_mode = write_mode_badge(cfg);
     let model = compact_model_name(cfg);
+    
+    let left_full = format!("◩  {} mode", write_mode);
+    let right_full = format!("[{}] crow-code · ctx {}", model, ctx_bytes);
+    
+    let left_compact = "◩".to_string();
+    let right_compact = format!("[{}] ctx {}", model, ctx_bytes);
+
+    let (left, right) = if left_full.len() + right_full.len() + 2 <= width {
+        (left_full, right_full)
+    } else if left_compact.len() + right_full.len() + 2 <= width {
+        (left_compact, right_full)
+    } else if left_compact.len() + right_compact.len() + 2 <= width {
+        (left_compact, right_compact)
+    } else {
+        ("".to_string(), right_compact)
+    };
+
+    let padding = width.saturating_sub(left.chars().count() + right.chars().count() + 2);
+    let space = " ".repeat(padding);
+
     println!(
-        "\n{}",
-        format!("[{}] crow-code · {} · ctx {}", model, write_mode, ctx_bytes)
-            .with(theme.dim)
+        "\n  {}{}{}",
+        left.with(theme.dim),
+        space,
+        right.with(theme.dim)
     );
 }
 

@@ -236,7 +236,8 @@ impl AnthropicClient {
             if last_role == Some(role) {
                 if let Some(last) = conversation.last_mut() {
                     if let Some(content) = last["content"].as_str() {
-                        last["content"] = serde_json::json!(format!("{}\n\n{}", content, msg.content));
+                        last["content"] =
+                            serde_json::json!(format!("{}\n\n{}", content, msg.content));
                     }
                 }
             } else {
@@ -270,11 +271,20 @@ impl AnthropicClient {
             body["temperature"] = serde_json::json!(temp);
         }
 
-        let resp = self.client.post(&url).json(&body).send().await.map_err(BrainError::Transport)?;
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(BrainError::Transport)?;
         let status = resp.status();
         if !status.is_success() {
             let raw_text = resp.text().await.unwrap_or_default();
-            return Err(BrainError::ApiError { status: status.as_u16(), body: raw_text });
+            return Err(BrainError::ApiError {
+                status: status.as_u16(),
+                body: raw_text,
+            });
         }
 
         let mut stream = resp.bytes_stream().eventsource();
@@ -324,7 +334,6 @@ impl LlmClient for AnthropicClient {
         self._generate(messages, None).await
     }
 
-
     async fn generate_with_temperature(
         &self,
         messages: &[ChatMessage],
@@ -346,7 +355,6 @@ impl LlmClient for AnthropicClient {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

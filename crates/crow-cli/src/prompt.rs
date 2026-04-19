@@ -74,15 +74,15 @@ impl PromptBuilder {
             sys_prompt.push_str(&self.project_context);
             sys_prompt.push_str("\n\n");
         }
-        
+
         sys_prompt.push_str(&self.repo_map);
         sys_prompt.push_str("\n\n");
-        
+
         if !self.skills.is_empty() {
             sys_prompt.push_str(&self.skills);
             sys_prompt.push_str("\n\n");
         }
-        
+
         sys_prompt.push_str(&self.contract);
 
         vec![

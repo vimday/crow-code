@@ -455,16 +455,24 @@ pub fn apply_sandbox_to_workspace(
                 let mut highest_new = None;
                 while !current.exists() {
                     highest_new = Some(current.to_path_buf());
-                    if let Some(parent) = current.parent() { current = parent; } else { break; }
+                    if let Some(parent) = current.parent() {
+                        current = parent;
+                    } else {
+                        break;
+                    }
                 }
                 if let Some(h) = highest_new {
-                    if !created_dirs.contains(&h) { created_dirs.push(h); }
+                    if !created_dirs.contains(&h) {
+                        created_dirs.push(h);
+                    }
                 }
             }
         };
 
         track_new_dir(&dst);
-        if let Some(ref f) = from_dst { track_new_dir(f); }
+        if let Some(ref f) = from_dst {
+            track_new_dir(f);
+        }
     }
 
     // Phase 2: Attempt destructive apply via proper unified applier logic
@@ -492,11 +500,19 @@ pub fn apply_sandbox_to_workspace(
         eprintln!("\n🚨 Apply failed mid-flight. Executing zero-pollution rollback...");
         for record in rollback_log {
             if let Some(content) = record.original_content {
-                if let Some(parent) = record.dst_path.parent() { let _ = std::fs::create_dir_all(parent); }
+                if let Some(parent) = record.dst_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
                 let _ = std::fs::write(&record.dst_path, content);
-            } else if record.dst_path.exists() { let _ = std::fs::remove_file(&record.dst_path); }
+            } else if record.dst_path.exists() {
+                let _ = std::fs::remove_file(&record.dst_path);
+            }
         }
-        for dir in created_dirs { if dir.exists() { let _ = std::fs::remove_dir_all(&dir); } }
+        for dir in created_dirs {
+            if dir.exists() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
         anyhow::bail!("Transaction failed and rolled back. Cause: {}", apply_error);
     }
     Ok(())

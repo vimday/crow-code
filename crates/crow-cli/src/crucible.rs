@@ -96,14 +96,26 @@ impl SerialCrucible<'_> {
         let mut total_attempts = 1; // Since we already did 1 epistemic loop for the precompiled plan
         let mut verification_runs = 0;
         let max_total_attempts = 10;
-        
+
         println!("  ▶️  Crucible Epoch 1 (Fast-Path with precompiled plan)");
-        match self.run_epoch(messages, snapshot_id, ledger, verification_runs, total_attempts, Some(plan)).await? {
+        match self
+            .run_epoch(
+                messages,
+                snapshot_id,
+                ledger,
+                verification_runs,
+                total_attempts,
+                Some(plan),
+            )
+            .await?
+        {
             EpochOutcome::Success(new_snap) => return Ok(new_snap),
-            EpochOutcome::RetryCompile => {},
-            EpochOutcome::RetryVerification => { verification_runs += 1; },
+            EpochOutcome::RetryCompile => {}
+            EpochOutcome::RetryVerification => {
+                verification_runs += 1;
+            }
         }
-        
+
         // If it failed, fallback to normal execute retry loop
         while verification_runs < 3 && total_attempts < max_total_attempts {
             total_attempts += 1;
@@ -309,7 +321,10 @@ impl SerialCrucible<'_> {
 
         let outcome = &result.test_run.outcome;
         if outcome == &crow_evidence::TestOutcome::Passed {
-            println!("  ✅ Verdict: PASSED (verification run {})", verification_runs + 1);
+            println!(
+                "  ✅ Verdict: PASSED (verification run {})",
+                verification_runs + 1
+            );
             crate::apply_winning_plan(
                 self.cfg,
                 attempt_sandbox.path(),

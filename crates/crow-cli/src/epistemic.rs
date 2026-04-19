@@ -39,7 +39,7 @@ const MAX_EPISTEMIC_STEPS: usize = 30;
 /// `IntentPlan` when the LLM submits one.
 ///
 /// Used by both the serial crucible and MCTS pre-exploration.
-use crate::event::{EventHandler, AgentEvent};
+use crate::event::{AgentEvent, EventHandler};
 
 pub async fn run_epistemic_loop(
     compiler: &IntentCompiler,
@@ -62,17 +62,23 @@ pub async fn run_epistemic_loop(
             );
         }
 
-        observer.handle_event(AgentEvent::Thinking(epistemic_step as u32, MAX_EPISTEMIC_STEPS as u32));
+        observer.handle_event(AgentEvent::Thinking(
+            epistemic_step as u32,
+            MAX_EPISTEMIC_STEPS as u32,
+        ));
 
         struct StreamAdapter<'a>(&'a mut dyn EventHandler);
         impl crow_brain::compiler::StreamObserver for StreamAdapter<'_> {
             fn on_chunk(&mut self, chunk: &str) {
-                self.0.handle_event(AgentEvent::StreamChunk(chunk.to_string()));
+                self.0
+                    .handle_event(AgentEvent::StreamChunk(chunk.to_string()));
             }
         }
 
         let mut adapter = StreamAdapter(observer);
-        let action_result = compiler.compile_action_streaming(&messages.as_messages(), &mut adapter).await;
+        let action_result = compiler
+            .compile_action_streaming(&messages.as_messages(), &mut adapter)
+            .await;
 
         let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {:?}", e))?;
 
@@ -130,26 +136,41 @@ pub async fn run_epistemic_loop(
             AgentAction::SubmitPlan { .. } => {
                 unreachable!("SubmitPlan is intercepted before push_assistant")
             }
-            AgentAction::DelegateTask { task, focus_paths, rationale } => {
+            AgentAction::DelegateTask {
+                task,
+                focus_paths,
+                rationale,
+            } => {
                 observer.handle_event(AgentEvent::DelegateStart(task.clone()));
                 observer.handle_event(AgentEvent::Log(format!("       Rationale: {}", rationale)));
 
                 // Check for recursion depth via parsing previous delegation messages
-                let delegation_count = messages.as_messages().iter()
+                let delegation_count = messages
+                    .as_messages()
+                    .iter()
                     .filter(|m| m.content.contains("[SYSTEM: SUBAGENT DELEGATION COMPLETE]"))
                     .count();
-                
+
                 if delegation_count >= 3 {
-                    observer.handle_event(AgentEvent::Log("    ⚠️ Subagent recursion limit reached. Halting delegation.".into()));
+                    observer.handle_event(AgentEvent::Log(
+                        "    ⚠️ Subagent recursion limit reached. Halting delegation.".into(),
+                    ));
                     messages.push_user("[SYSTEM] Subagent recursion limit exceeded (max 3). You must resolve the task yourself without delegating further.".to_string());
                     continue;
                 }
 
-                observer.handle_event(AgentEvent::ActionStart("Spawning isolated Subagent Worker runtime".into()));
-                
+                observer.handle_event(AgentEvent::ActionStart(
+                    "Spawning isolated Subagent Worker runtime".into(),
+                ));
+
                 let subagent = crate::subagent::SubagentWorker::new(compiler.clone());
-                
-                let sys_msgs = messages.as_messages().iter().filter(|m| m.role == crow_brain::ChatRole::System).cloned().collect();
+
+                let sys_msgs = messages
+                    .as_messages()
+                    .iter()
+                    .filter(|m| m.role == crow_brain::ChatRole::System)
+                    .cloned()
+                    .collect();
 
                 match Box::pin(subagent.execute(
                     &task,
@@ -159,9 +180,13 @@ pub async fn run_epistemic_loop(
                     frozen_root,
                     mcp_manager,
                     observer,
-                )).await {
+                ))
+                .await
+                {
                     Ok(sub_plan) => {
-                        observer.handle_event(AgentEvent::ActionComplete("Subagent completed. Returning IntentPlan to Architect.".into()));
+                        observer.handle_event(AgentEvent::ActionComplete(
+                            "Subagent completed. Returning IntentPlan to Architect.".into(),
+                        ));
                         messages.push_user(format!(
                             "[SYSTEM: SUBAGENT DELEGATION COMPLETE]\n\
                             The subagent successfully returned an IntentPlan.\n\
@@ -172,7 +197,10 @@ pub async fn run_epistemic_loop(
                         ));
                     }
                     Err(e) => {
-                        observer.handle_event(AgentEvent::Error(format!("Subagent crashed/failed: {}", e)));
+                        observer.handle_event(AgentEvent::Error(format!(
+                            "Subagent crashed/failed: {}",
+                            e
+                        )));
                         messages.push_user(format!(
                             "[SYSTEM: SUBAGENT FAILURE]\n\
                             The subagent failed to complete the delegation task.\n\

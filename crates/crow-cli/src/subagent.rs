@@ -11,7 +11,10 @@ pub struct SubagentWorker {
 
 impl SubagentWorker {
     pub fn new(compiler: IntentCompiler) -> Self {
-        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
         let id = format!("sub-{:08x}", ts as u32);
         Self { id, compiler }
     }
@@ -41,9 +44,9 @@ impl SubagentWorker {
         if let Some(first) = msgs.first_mut() {
             first.content = identity;
         }
-        
+
         let mut sub_messages = ConversationManager::new(msgs);
-        
+
         let mut observer = SubagentEventHandler {
             id: self.id.clone(),
             parent: parent_observer,
@@ -55,7 +58,8 @@ impl SubagentWorker {
             frozen_root,
             mcp_manager,
             &mut observer,
-        ).await
+        )
+        .await
     }
 }
 
@@ -69,18 +73,44 @@ impl EventHandler for SubagentEventHandler<'_> {
         match event {
             AgentEvent::StreamChunk(c) => self.parent.handle_event(AgentEvent::StreamChunk(c)),
             AgentEvent::Thinking(a, b) => self.parent.handle_event(AgentEvent::Thinking(a, b)),
-            AgentEvent::ActionStart(msg) => self.parent.handle_event(AgentEvent::ActionStart(format!("[{}] {}", self.id, msg))),
-            AgentEvent::ActionComplete(msg) => self.parent.handle_event(AgentEvent::ActionComplete(format!("[{}] {}", self.id, msg))),
+            AgentEvent::ActionStart(msg) => self
+                .parent
+                .handle_event(AgentEvent::ActionStart(format!("[{}] {}", self.id, msg))),
+            AgentEvent::ActionComplete(msg) => self
+                .parent
+                .handle_event(AgentEvent::ActionComplete(format!("[{}] {}", self.id, msg))),
             AgentEvent::ReadFiles(paths) => {
-                let display = if paths.len() <= 3 { paths.join(", ") } else { format!("{}, ...", paths[0]) };
-                self.parent.handle_event(AgentEvent::Log(format!("  [{}] 📖 Reading: {}", self.id, display)));
+                let display = if paths.len() <= 3 {
+                    paths.join(", ")
+                } else {
+                    format!("{}, ...", paths[0])
+                };
+                self.parent.handle_event(AgentEvent::Log(format!(
+                    "  [{}] 📖 Reading: {}",
+                    self.id, display
+                )));
             }
-            AgentEvent::ReconStart(msg) => self.parent.handle_event(AgentEvent::Log(format!("  [{}] 🔍 Recon: {}", self.id, msg))),
-            AgentEvent::DelegateStart(msg) => self.parent.handle_event(AgentEvent::Log(format!("  [{}] 🤖 Delegating: {}", self.id, msg))),
-            AgentEvent::PlanSubmitted(_) => self.parent.handle_event(AgentEvent::Log(format!("  [{}] 📋 Plan Submitted", self.id))),
-            AgentEvent::CruciblePreflight(msg) => self.parent.handle_event(AgentEvent::Log(format!("  [{}] 🛡️ Preflight: {}", self.id, msg))),
-            AgentEvent::Log(msg) => self.parent.handle_event(AgentEvent::Log(format!("  [{}] {}", self.id, msg))),
-            AgentEvent::Error(msg) => self.parent.handle_event(AgentEvent::Error(format!("[{}] {}", self.id, msg))),
+            AgentEvent::ReconStart(msg) => self.parent.handle_event(AgentEvent::Log(format!(
+                "  [{}] 🔍 Recon: {}",
+                self.id, msg
+            ))),
+            AgentEvent::DelegateStart(msg) => self.parent.handle_event(AgentEvent::Log(format!(
+                "  [{}] 🤖 Delegating: {}",
+                self.id, msg
+            ))),
+            AgentEvent::PlanSubmitted(_) => self.parent.handle_event(AgentEvent::Log(format!(
+                "  [{}] 📋 Plan Submitted",
+                self.id
+            ))),
+            AgentEvent::CruciblePreflight(msg) => self.parent.handle_event(AgentEvent::Log(
+                format!("  [{}] 🛡️ Preflight: {}", self.id, msg),
+            )),
+            AgentEvent::Log(msg) => self
+                .parent
+                .handle_event(AgentEvent::Log(format!("  [{}] {}", self.id, msg))),
+            AgentEvent::Error(msg) => self
+                .parent
+                .handle_event(AgentEvent::Error(format!("[{}] {}", self.id, msg))),
         }
     }
 }

@@ -88,7 +88,7 @@ pub trait LlmClient: Send + Sync {
         } else {
             self.generate(messages).await?
         };
-        
+
         let mut obs_container = observer;
         if let Some(ref mut obs) = obs_container {
             obs.on_chunk(&text);
@@ -180,7 +180,8 @@ impl IntentCompiler {
         messages: &[ChatMessage],
         temperature: f64,
     ) -> Result<crow_patch::AgentAction, CompilerError> {
-        self._compile_action(messages, Some(temperature), None).await
+        self._compile_action(messages, Some(temperature), None)
+            .await
     }
 
     /// Compiles an IntentPlan from the conversation history, streaming partial output to the observer.
@@ -224,13 +225,15 @@ impl IntentCompiler {
         let mut errors = Vec::new();
 
         for _attempt in 0..=self.max_retries {
-            let obs_opt = observer.as_mut().map(|obs| &mut **obs as &mut dyn StreamObserver);
-            
-            let response = self.client.generate_streaming(
-                &conversation,
-                temperature,
-                obs_opt,
-            ).await.map_err(CompilerError::PromptFailed)?;
+            let obs_opt = observer
+                .as_mut()
+                .map(|obs| &mut **obs as &mut dyn StreamObserver);
+
+            let response = self
+                .client
+                .generate_streaming(&conversation, temperature, obs_opt)
+                .await
+                .map_err(CompilerError::PromptFailed)?;
 
             let cleaned_json = extract_json_block(&response);
 
