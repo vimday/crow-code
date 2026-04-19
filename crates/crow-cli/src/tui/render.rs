@@ -8,10 +8,6 @@ use super::state::{AppState, CellKind, OverlayState};
 
 /// Left gutter width matching Codex's LIVE_PREFIX_COLS.
 const GUTTER: &str = "  ";
-/// User message prefix (Codex style: `› `).
-const USER_PREFIX: &str = "› ";
-/// Agent message prefix (Codex style: `• `).
-const AGENT_PREFIX: &str = "• ";
 
 // ── Color palette ────────────────────────────────────────────────────────────
 // Inspired by Codex's muted, professional palette.
@@ -58,6 +54,130 @@ pub fn render_app(f: &mut Frame, state: &mut AppState) {
 
 // ── Conversation Pane ────────────────────────────────────────────────────────
 
+pub trait HistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+}
+
+struct UserCell<'a>(&'a str);
+impl<'a> HistoryCell for UserCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from("")];
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { "› " } else { "  " };
+            lines.push(Line::from(vec![
+                prefix.white().bold().dim(),
+                line.to_string().white(),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines
+    }
+}
+
+struct AgentMessageCell<'a>(&'a str);
+impl<'a> HistoryCell for AgentMessageCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(4).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { "• " } else { "  " };
+            lines.push(Line::from(vec![
+                prefix.fg(DIM_GRAY).dim(),
+                line.to_string().fg(Color::White),
+            ]));
+        }
+        lines
+    }
+}
+
+struct EvidenceCell<'a>(&'a str);
+impl<'a> HistoryCell for EvidenceCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { format!("{GUTTER}◎ ") } else { format!("{GUTTER}  ") };
+            lines.push(Line::from(vec![
+                prefix.fg(MID_GRAY),
+                line.to_string().fg(MID_GRAY).dim(),
+            ]));
+        }
+        lines
+    }
+}
+
+struct ActionCell<'a>(&'a str);
+impl<'a> HistoryCell for ActionCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { format!("{GUTTER}▰ ") } else { format!("{GUTTER}  ") };
+            lines.push(Line::from(vec![
+                prefix.fg(ACCENT_GREEN),
+                line.to_string().fg(ACCENT_GREEN),
+            ]));
+        }
+        lines
+    }
+}
+
+struct ResultCell<'a>(&'a str);
+impl<'a> HistoryCell for ResultCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { format!("{GUTTER}✓ ") } else { format!("{GUTTER}  ") };
+            lines.push(Line::from(vec![
+                prefix.fg(VERDICT_BLUE),
+                line.to_string().fg(VERDICT_BLUE),
+            ]));
+        }
+        lines
+    }
+}
+
+struct LogCell<'a>(&'a str);
+impl<'a> HistoryCell for LogCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { format!("{GUTTER}• ") } else { format!("{GUTTER}  ") };
+            lines.push(Line::from(vec![
+                prefix.fg(DIM_GRAY),
+                line.to_string().fg(MID_GRAY),
+            ]));
+        }
+        lines
+    }
+}
+
+struct ErrorCell<'a>(&'a str);
+impl<'a> HistoryCell for ErrorCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { format!("{GUTTER}✘ ") } else { format!("{GUTTER}  ") };
+            lines.push(Line::from(vec![
+                prefix.fg(ACCENT_RED).bold(),
+                line.to_string().fg(ACCENT_RED),
+            ]));
+        }
+        lines
+    }
+}
+
 fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
     let viewport = area.height as usize;
     if viewport == 0 {
@@ -82,83 +202,42 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
     // 1. Active spinner is at the very bottom
     if let Some(action) = &state.active_action {
         let frame = SPINNER[state.spinner_idx % SPINNER.len()];
-        let item = ListItem::new(Line::from(vec![
-            format!("{GUTTER}{frame} ").fg(ACCENT_CYAN),
-            action.clone().fg(ACCENT_CYAN),
-        ]));
-        push_item!(item);
+        let mut lines = Vec::new();
+        let wrap_width = area.width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(action, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 { format!("{GUTTER}{frame} ") } else { format!("{GUTTER}  ") };
+            lines.push(Line::from(vec![
+                prefix.fg(ACCENT_CYAN),
+                line.to_string().fg(ACCENT_CYAN),
+            ]));
+        }
+        for item in lines.into_iter().rev() {
+            push_item!(ListItem::new(item));
+        }
     }
 
-    // 2. Iterate history backwards
+    // 2. Iterate history backwards using HistoryCell implementations
     for cell in state.history.iter().rev() {
         if to_take == 0 {
             break;
         }
 
-        let mut lines = Vec::new();
-        match cell.kind {
-            CellKind::User => {
-                lines.push(ListItem::new(Line::from("")));
-                for (i, line) in cell.payload.lines().enumerate() {
-                    let prefix = if i == 0 { USER_PREFIX } else { "  " };
-                    lines.push(ListItem::new(Line::from(vec![
-                        prefix.white().bold().dim(),
-                        line.to_string().white(),
-                    ])));
-                }
-                lines.push(ListItem::new(Line::from("")));
-            }
-            CellKind::AgentMessage => {
-                for (i, line) in cell.payload.lines().enumerate() {
-                    let prefix = if i == 0 { AGENT_PREFIX } else { "  " };
-                    lines.push(ListItem::new(Line::from(vec![
-                        prefix.fg(DIM_GRAY).dim(),
-                        line.into(),
-                    ])));
-                }
-            }
-            CellKind::Evidence => {
-                lines.push(ListItem::new(Line::from(vec![
-                    format!("{GUTTER}◎ ").fg(MID_GRAY),
-                    cell.payload.clone().fg(MID_GRAY).dim(),
-                ])));
-            }
-            CellKind::Action => {
-                lines.push(ListItem::new(Line::from(vec![
-                    format!("{GUTTER}▰ ").fg(ACCENT_GREEN),
-                    cell.payload.clone().fg(ACCENT_GREEN),
-                ])));
-            }
-            CellKind::Result => {
-                lines.push(ListItem::new(Line::from(vec![
-                    format!("{GUTTER}✓ ").fg(VERDICT_BLUE),
-                    cell.payload.clone().fg(VERDICT_BLUE),
-                ])));
-            }
-            CellKind::Log => {
-                for (i, line) in cell.payload.lines().enumerate() {
-                    let prefix = if i == 0 {
-                        format!("{GUTTER}• ")
-                    } else {
-                        format!("{GUTTER}  ")
-                    };
-                    lines.push(ListItem::new(Line::from(vec![
-                        prefix.fg(DIM_GRAY),
-                        line.to_string().fg(MID_GRAY),
-                    ])));
-                }
-            }
-            CellKind::Error => {
-                lines.push(ListItem::new(Line::from(vec![
-                    format!("{GUTTER}✘ ").fg(ACCENT_RED).bold(),
-                    cell.payload.clone().fg(ACCENT_RED),
-                ])));
-            }
-        }
+        let history_cell: Box<dyn HistoryCell> = match cell.kind {
+            CellKind::User => Box::new(UserCell(&cell.payload)),
+            CellKind::AgentMessage => Box::new(AgentMessageCell(&cell.payload)),
+            CellKind::Evidence => Box::new(EvidenceCell(&cell.payload)),
+            CellKind::Action => Box::new(ActionCell(&cell.payload)),
+            CellKind::Result => Box::new(ResultCell(&cell.payload)),
+            CellKind::Log => Box::new(LogCell(&cell.payload)),
+            CellKind::Error => Box::new(ErrorCell(&cell.payload)),
+        };
+
+        let lines = history_cell.display_lines(area.width);
 
         // Send this cell's lines backwards into our virtualized view
         for item in lines.into_iter().rev() {
-            push_item!(item);
+            push_item!(ListItem::new(item));
         }
     }
 

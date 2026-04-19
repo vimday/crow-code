@@ -15,9 +15,10 @@ pub struct CompactorConfig {
 impl Default for CompactorConfig {
     fn default() -> Self {
         Self {
-            max_history_tokens: 100_000, // 80% of 128K context window
-            context_window: 131_072,     // 128K default
-            preservation_turns: 6,
+            // Drastically reduced limits matching antigravity/codex swiftness
+            max_history_tokens: 16_000, // Keep context tight and fast
+            context_window: 131_072,    // 128K config bounds
+            preservation_turns: 2,      // Only keep the most immediate immediate context raw
         }
     }
 }
