@@ -198,11 +198,20 @@ pub(crate) async fn run_mcts_crucible(
     mcp_manager: Option<&crate::mcp::McpManager>,
     observer: &mut dyn crate::event::EventHandler,
 ) -> Result<Option<crate::mcts::BranchOutcome>> {
-    // 1. Initial Epistemic Loop (Serial Recon)
+    // 1. Initial Epistemic Loop (Serial Recon) — with hard timeout
     observer.handle_event(crate::event::AgentEvent::Log("Entering Epistemic Recon Loop (MCTS Pre-exploration)...".into()));
-    let baseline_plan =
-        epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, observer)
-            .await?;
+    let baseline_plan = match tokio::time::timeout(
+        std::time::Duration::from_secs(180),
+        epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, observer),
+    ).await {
+        Ok(result) => result?,
+        Err(_) => {
+            observer.handle_event(crate::event::AgentEvent::Error(
+                "MCTS pre-exploration timed out after 3 minutes (possible network hang). Aborting.".into()
+            ));
+            anyhow::bail!("MCTS pre-exploration timed out after 180s");
+        }
+    };
 
     if baseline_plan.operations.is_empty() {
         observer.handle_event(crate::event::AgentEvent::Log("Conversational Intent Detected (No codebase changes proposed)".into()));

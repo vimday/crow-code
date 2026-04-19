@@ -128,7 +128,19 @@ pub async fn explore_round(
         let snap_clone = snapshot_id.clone();
 
         join_set.spawn(async move {
-            run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd, &lang_clone, &snap_clone).await
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                run_branch_with_plan(0, plan, &frozen, &mat_cfg, &cmd, &lang_clone, &snap_clone),
+            ).await {
+                Ok(outcome) => outcome,
+                Err(_) => BranchOutcome {
+                    branch_id: 0,
+                    plan: empty_plan(),
+                    sandbox: dummy_sandbox(),
+                    passed: false,
+                    log: "Branch 0 timed out after 120s".into(),
+                },
+            }
         });
     }
 
@@ -144,18 +156,29 @@ pub async fn explore_round(
         let snap_clone = snapshot_id.clone();
 
         join_set.spawn(async move {
-            run_branch(
-                branch_id,
-                &comp,
-                &msgs,
-                temperature,
-                &frozen,
-                &mat_cfg,
-                &cmd,
-                &lang_clone,
-                &snap_clone,
-            )
-            .await
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                run_branch(
+                    branch_id,
+                    &comp,
+                    &msgs,
+                    temperature,
+                    &frozen,
+                    &mat_cfg,
+                    &cmd,
+                    &lang_clone,
+                    &snap_clone,
+                ),
+            ).await {
+                Ok(outcome) => outcome,
+                Err(_) => BranchOutcome {
+                    branch_id,
+                    plan: empty_plan(),
+                    sandbox: dummy_sandbox(),
+                    passed: false,
+                    log: format!("Branch {} timed out after 120s (likely network hang)", branch_id),
+                },
+            }
         });
     }
 
