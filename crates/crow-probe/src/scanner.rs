@@ -75,7 +75,7 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
     }
 
     // Sort descending by confidence so highest confidence runs first
-    candidates.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+    candidates.sort_by_key(|b| std::cmp::Reverse(b.confidence));
 
     Ok(ProjectProfile {
         primary_lang,

@@ -62,6 +62,23 @@ pub async fn run_epistemic_loop(
             );
         }
 
+        // ── Cancellation check ──────────────────────────────────────
+        // If the user pressed ESC/Ctrl+C, abort the loop gracefully
+        // by returning an empty plan (no-op) so the turn exits cleanly.
+        if observer.is_cancelled() {
+            observer.handle_event(AgentEvent::Log(
+                "Turn cancelled by user.".into(),
+            ));
+            return Ok(IntentPlan {
+                base_snapshot_id: crow_patch::SnapshotId("cancelled".into()),
+                rationale: String::new(),
+                is_partial: false,
+                confidence: crow_patch::Confidence::None,
+                requires_mcts: false,
+                operations: vec![],
+            });
+        }
+
         observer.handle_event(AgentEvent::Thinking(
             epistemic_step as u32,
             MAX_EPISTEMIC_STEPS as u32,

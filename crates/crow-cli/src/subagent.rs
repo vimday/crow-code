@@ -111,6 +111,9 @@ impl EventHandler for SubagentEventHandler<'_> {
             AgentEvent::Error(msg) => self
                 .parent
                 .handle_event(AgentEvent::Error(format!("[{}] {}", self.id, msg))),
+            AgentEvent::Markdown(msg) => self
+                .parent
+                .handle_event(AgentEvent::Markdown(msg)),
         }
     }
 }

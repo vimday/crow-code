@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn multiple_candidates_sorted_by_confidence() {
-        let mut candidates = vec![
+        let mut candidates = [
             VerificationCandidate {
                 command: VerificationCommand::new("make", vec!["test"]),
                 kind: VerificationKind::Test,
@@ -231,7 +231,7 @@ mod tests {
                 evidence_source: "Cargo.toml".into(),
             },
         ];
-        candidates.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.confidence));
         assert_eq!(candidates[0].confidence, ProbeConfidence::Validated);
         assert_eq!(candidates[1].confidence, ProbeConfidence::Inferred);
     }

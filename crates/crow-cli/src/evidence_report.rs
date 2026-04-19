@@ -3,10 +3,10 @@
 //! Formats the internal pipeline (snapshot anchoring, plan hydration,
 //! preflight verification, evidence matrix) into a structured report for CLI output.
 
+use crossterm::style::{Color, Stylize};
 use crow_evidence::types::{EvidenceMatrix, RiskKind};
 use crow_patch::{Confidence, EditOp, IntentPlan, SnapshotId};
 use std::fmt;
-use crossterm::style::{Color, Stylize};
 
 // ─── Report Structures ─────────────────────────────────────────────
 
@@ -161,11 +161,16 @@ impl Verdict {
 
 impl fmt::Display for EvidenceReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "\n  {}", "🦅 crow — Evidence Report".bold().with(Color::Cyan))?;
+        writeln!(
+            f,
+            "\n  {}",
+            "🦅 crow — Evidence Report".bold().with(Color::Cyan)
+        )?;
         writeln!(
             f,
             "  {}",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".with(Color::AnsiValue(240))
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                .with(Color::AnsiValue(240))
         )?;
 
         // Recon
@@ -228,7 +233,11 @@ impl fmt::Display for EvidenceReport {
         if self.hydration.snapshot_verified {
             writeln!(f, "    ✅ base_snapshot_id verified against workspace")?;
         } else {
-            writeln!(f, "    ❌ {}", "base_snapshot_id MISMATCH — plan may be stale".with(Color::AnsiValue(203)))?;
+            writeln!(
+                f,
+                "    ❌ {}",
+                "base_snapshot_id MISMATCH — plan may be stale".with(Color::AnsiValue(203))
+            )?;
         }
         writeln!(
             f,
@@ -255,25 +264,37 @@ impl fmt::Display for EvidenceReport {
                 )?;
             }
             PreflightOutcome::Errors { count, summary } => {
-                writeln!(f, "    ❌ {}", format!("{} error(s) detected", count).with(Color::AnsiValue(203)))?;
+                writeln!(
+                    f,
+                    "    ❌ {}",
+                    format!("{} error(s) detected", count).with(Color::AnsiValue(203))
+                )?;
                 for line in summary.lines().take(5) {
                     writeln!(f, "       {}", line.with(Color::AnsiValue(203)))?;
                 }
             }
             PreflightOutcome::Skipped { reason } => {
-                writeln!(f, "    ⏭️  Skipped: {}", reason.clone().with(Color::AnsiValue(245)))?;
+                writeln!(
+                    f,
+                    "    ⏭️  Skipped: {}",
+                    reason.clone().with(Color::AnsiValue(245))
+                )?;
             }
         }
 
         // Verdict
         writeln!(f, "\n  {}", "Evidence Summary".bold().with(Color::Cyan))?;
         let frame_color = Color::AnsiValue(240);
-        writeln!(f, "  {}", "╭─────────────────────────────────────────────╮".with(frame_color))?;
-        
+        writeln!(
+            f,
+            "  {}",
+            "╭─────────────────────────────────────────────╮".with(frame_color)
+        )?;
+
         let verdict_color = match &self.verdict {
             Verdict::AutoApply { .. } => Color::AnsiValue(114), // Greenish
             Verdict::ReviewRequired { .. } => Color::AnsiValue(221), // Yellowish
-            Verdict::Escalate { .. } => Color::AnsiValue(203), // Reddish
+            Verdict::Escalate { .. } => Color::AnsiValue(203),  // Reddish
         };
 
         writeln!(
@@ -311,19 +332,34 @@ impl fmt::Display for EvidenceReport {
         )?;
 
         if let Verdict::ReviewRequired { reason, .. } = &self.verdict {
-            writeln!(f, "  {}  Reason: {}", "│".with(frame_color), reason.clone().with(Color::Yellow))?;
+            writeln!(
+                f,
+                "  {}  Reason: {}",
+                "│".with(frame_color),
+                reason.clone().with(Color::Yellow)
+            )?;
         }
         if let Verdict::Escalate { risk_flags, .. } = &self.verdict {
             for flag in risk_flags {
-                writeln!(f, "  {}  🚨 {}", "│".with(frame_color), flag.clone().with(Color::AnsiValue(203)))?;
+                writeln!(
+                    f,
+                    "  {}  🚨 {}",
+                    "│".with(frame_color),
+                    flag.clone().with(Color::AnsiValue(203))
+                )?;
             }
         }
 
-        writeln!(f, "  {}", "╰─────────────────────────────────────────────╯".with(frame_color))?;
         writeln!(
             f,
             "  {}",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".with(Color::AnsiValue(240))
+            "╰─────────────────────────────────────────────╯".with(frame_color)
+        )?;
+        writeln!(
+            f,
+            "  {}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                .with(Color::AnsiValue(240))
         )?;
 
         Ok(())

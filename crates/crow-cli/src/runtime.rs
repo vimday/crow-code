@@ -60,6 +60,18 @@ impl SessionRuntime {
         cfg: &CrowConfig,
         prompt: &str,
         messages: &mut crate::context::ConversationManager,
+        view_mode: crate::event::ViewMode,
+    ) -> Result<SnapshotId> {
+        let mut observer = crate::event::CliEventHandler::new(view_mode);
+        self.execute_turn_with_observer(cfg, prompt, messages, &mut observer).await
+    }
+
+    pub async fn execute_turn_with_observer(
+        &mut self,
+        cfg: &CrowConfig,
+        prompt: &str,
+        messages: &mut crate::context::ConversationManager,
+        observer: &mut dyn crate::event::EventHandler,
     ) -> Result<SnapshotId> {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
 
@@ -137,36 +149,40 @@ impl SessionRuntime {
         }
 
         // ── Step 2: Epistemic loop against FROZEN baseline ──
-        let mut observer = crate::event::CliEventHandler::new();
-
         let plan = crate::epistemic::run_epistemic_loop(
             &self.compiler,
             messages,
             &frozen_root, // FROZEN SNAPSHOT — not live workspace
             Some(&self.mcp_manager),
-            &mut observer,
+            observer,
         )
         .await?;
 
         if plan.operations.is_empty() {
+            if !plan.rationale.trim().is_empty() {
+                observer.handle_event(crate::event::AgentEvent::Markdown(plan.rationale.clone()));
+            }
             return Ok(snapshot_id);
         }
 
-        println!();
-        println!(
-            "  📋 Code modification proposed ({} ops). Verifying...",
+        observer.handle_event(crate::event::AgentEvent::Log(format!(
+            "Code modification proposed ({} ops). Verifying...",
             plan.operations.len()
-        );
+        )));
+
+        // Capture the agent's rationale before the plan is moved into the crucible.
+        // This ensures every turn produces a readable final summary.
+        let turn_rationale = plan.rationale.clone();
+        let _turn_op_count = plan.operations.len();
 
         // ── Step 3: Crucible verification against the SAME frozen baseline ──
         let mcts_config = crate::mcts::MctsConfig::from_env();
         if !mcts_config.is_serial() {
             if !cfg.llm.prompt_caching {
-                println!(
-                    "    ⚠️  Warning: MCTS parallel mode (CROW_MCTS_BRANCHES={}) is running without prompt_caching enabled. \
-                     This may be expensive on providers that bill for repetitive input tokens.",
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "Warning: MCTS parallel mode (CROW_MCTS_BRANCHES={}) is running without prompt_caching enabled.",
                     mcts_config.branch_factor
-                );
+                )));
             }
 
             let winner = crate::run_mcts_crucible(
@@ -197,6 +213,11 @@ impl SessionRuntime {
                     &mut self.ledger,
                 )
                 .await?;
+
+                // Emit the agent's rationale as a proper final summary
+                if !turn_rationale.trim().is_empty() {
+                    observer.handle_event(crate::event::AgentEvent::Markdown(turn_rationale));
+                }
             }
             return Ok(snapshot_id);
         }
@@ -213,8 +234,14 @@ impl SessionRuntime {
 
         // Pass the already compiled plan as a jump-start for verification
         let target_snap = crucible
-            .execute_with_precompiled(messages, &snapshot_id, &mut self.ledger, plan)
+            .execute_with_precompiled(messages, &snapshot_id, &mut self.ledger, plan, observer)
             .await?;
+
+        // P0-3: Emit the agent's rationale as a final summary cell
+        // This replaces the old "Done" with actual readable content.
+        if !turn_rationale.trim().is_empty() {
+            observer.handle_event(crate::event::AgentEvent::Markdown(turn_rationale));
+        }
 
         Ok(target_snap)
     }

@@ -2,10 +2,7 @@ use crate::config::CrowConfig;
 use crate::render::{ColorTheme, TerminalRenderer};
 use crate::session::{Session, SessionStore};
 use anyhow::Result;
-use crossterm::{
-    style::{Color, Stylize},
-    terminal::size,
-};
+use crossterm::style::{Color, Stylize};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -28,6 +25,7 @@ enum SlashCommand {
     Clear,
     Compact,
     Exit,
+    View(crate::event::ViewMode),
     Unknown(String),
 }
 
@@ -37,16 +35,23 @@ impl SlashCommand {
         if !trimmed.starts_with('/') {
             return None;
         }
-        let command = trimmed
-            .trim_start_matches('/')
-            .split_whitespace()
-            .next()
-            .unwrap_or_default();
+        let mut parts = trimmed.trim_start_matches('/').split_whitespace();
+        let command = parts.next().unwrap_or_default();
         Some(match command {
             "help" | "?" => Self::Help,
             "status" => Self::Status,
             "clear" => Self::Clear,
             "compact" => Self::Compact,
+            "view" => {
+                let mode_str = parts.next().unwrap_or_default().to_lowercase();
+                let mode = match mode_str.as_str() {
+                    "focus" => crate::event::ViewMode::Focus,
+                    "evidence" => crate::event::ViewMode::Evidence,
+                    "audit" => crate::event::ViewMode::Audit,
+                    _ => crate::event::ViewMode::Evidence,
+                };
+                Self::View(mode)
+            }
             "exit" | "quit" => Self::Exit,
             other => Self::Unknown(other.to_string()),
         })
@@ -58,6 +63,7 @@ impl SlashCommand {
             "/status".into(),
             "/clear".into(),
             "/compact".into(),
+            "/view".into(),
             "/exit".into(),
         ]
     }
@@ -68,6 +74,7 @@ impl SlashCommand {
 struct SessionState {
     turns: usize,
     total_duration_ms: u128,
+    view_mode: crate::event::ViewMode,
 }
 
 impl SessionState {
@@ -75,6 +82,7 @@ impl SessionState {
         Self {
             turns: 0,
             total_duration_ms: 0,
+            view_mode: crate::event::ViewMode::Evidence,
         }
     }
 }
@@ -213,7 +221,19 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                 state.turns += 1;
                 let turn_start = Instant::now();
 
-                match runtime.execute_turn(cfg, input, &mut messages).await {
+                // Console 3.0: Top Connective Frame
+                println!(
+                    "\n  {} {}",
+                    "╭─ Goal ›".with(Color::Cyan).bold(),
+                    input.with(Color::AnsiValue(250))
+                );
+                // Print a visual spacer inside the frame
+                println!("  {}", "│".with(Color::DarkGrey));
+
+                match runtime
+                    .execute_turn(cfg, input, &mut messages, state.view_mode)
+                    .await
+                {
                     Ok(snapshot_id) => {
                         let elapsed = turn_start.elapsed();
                         state.total_duration_ms += elapsed.as_millis();
@@ -230,9 +250,6 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                                 );
                             }
                         }
-
-                        // ── Turn Footer ──
-                        print_turn_footer(cfg, &messages, &theme);
                     }
                     Err(e) => {
                         let elapsed = turn_start.elapsed();
@@ -241,16 +258,26 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                         println!();
                         println!(
                             "  {} {}",
-                            "✘".bold().with(Color::AnsiValue(203)),
+                            "│  ✘".bold().with(Color::AnsiValue(203)),
                             format!("{:#}", e).with(Color::AnsiValue(203))
                         );
                         println!(
-                            "  {}",
+                            "  {} {}",
+                            "│".with(Color::DarkGrey),
                             "Use follow-up instructions to recover, or /clear to reset context."
                                 .with(theme.dim)
                         );
                     }
                 }
+                
+                // Console 3.0: Bottom Connective Frame
+                let elapsed_ms = turn_start.elapsed().as_millis();
+                let ctx_bytes = format_bytes(messages.get_total_bytes());
+                println!(
+                    "  {}",
+                    format!("╰── completed in {}ms · ctx {}", elapsed_ms, ctx_bytes)
+                        .with(Color::DarkGrey)
+                );
                 println!();
             }
             Err(ReadlineError::Interrupted) => {
@@ -354,44 +381,6 @@ fn print_status(
     println!();
 }
 
-fn print_turn_footer(
-    cfg: &CrowConfig,
-    messages: &crate::context::ConversationManager,
-    theme: &ColorTheme,
-) {
-    let width = size().map(|(w, _)| w as usize).unwrap_or(80);
-    
-    let ctx_bytes = format_bytes(messages.get_total_bytes());
-    let write_mode = write_mode_badge(cfg);
-    let model = compact_model_name(cfg);
-    
-    let left_full = format!("◩  {} mode", write_mode);
-    let right_full = format!("[{}] crow-code · ctx {}", model, ctx_bytes);
-    
-    let left_compact = "◩".to_string();
-    let right_compact = format!("[{}] ctx {}", model, ctx_bytes);
-
-    let (left, right) = if left_full.len() + right_full.len() + 2 <= width {
-        (left_full, right_full)
-    } else if left_compact.len() + right_full.len() + 2 <= width {
-        (left_compact, right_full)
-    } else if left_compact.len() + right_compact.len() + 2 <= width {
-        (left_compact, right_compact)
-    } else {
-        ("".to_string(), right_compact)
-    };
-
-    let padding = width.saturating_sub(left.chars().count() + right.chars().count() + 2);
-    let space = " ".repeat(padding);
-
-    println!(
-        "\n  {}{}{}",
-        left.with(theme.dim),
-        space,
-        right.with(theme.dim)
-    );
-}
-
 // ─── Formatting Helpers ─────────────────────────────────────────────
 
 fn format_bytes(bytes: usize) -> String {
@@ -403,8 +392,6 @@ fn format_bytes(bytes: usize) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
-
-
 
 fn format_duration_ms(ms: u128) -> String {
     if ms < 1000 {
@@ -441,8 +428,6 @@ fn truncate_middle(input: &str, max_chars: usize) -> String {
     format!("{left}…{right}")
 }
 
-
-
 fn print_repl_banner(_cfg: &CrowConfig, theme: &ColorTheme, _session: &Session) {
     println!();
     println!(
@@ -463,8 +448,6 @@ fn build_prompt(
 }
 
 // Print turn header removed in pursuit of minimalism.
-
-
 
 fn print_kv_line(label: &str, value: &str) {
     println!(
@@ -543,6 +526,14 @@ fn handle_slash_command(cmd: SlashCommand, ctx: &mut ReplContext) -> CommandOutc
                     "History is already compact, nothing to do.".with(Color::DarkGrey)
                 );
             }
+            CommandOutcome::Continue
+        }
+        SlashCommand::View(mode) => {
+            ctx.state.view_mode = mode;
+            println!(
+                "  {}",
+                format!("👁 View mode set to: {:?}", mode).with(Color::Green)
+            );
             CommandOutcome::Continue
         }
         SlashCommand::Unknown(name) => {

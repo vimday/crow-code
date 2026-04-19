@@ -21,8 +21,10 @@
 - plan hydration with ground-truth file hashes
 - isolated sandbox materialization and patch application
 - preflight compile checks and full verification runs
-- session persistence and resume
-- multi-provider LLM routing (OpenAI-compatible, Anthropic, Ollama, DeepSeek, custom)
+- **native ThreadManager yielding an async non-blocking TUI** (Codex-style)
+- **session persistence and instant TUI rehydration** (`crow -r`)
+- **Per-tool Memory Security Approval** (Safe/Caution whitelist)
+- multi-provider LLM routing (OpenAI-compatible, Anthropic, Ollama, DeepSeek)
 - MCP stdio transport for external tools
 - evidence-first `plan` preview mode
 
@@ -80,8 +82,11 @@ Example:
 # Show help
 cargo run -p crow-cli -- help
 
-# Start interactive chat (also the default with no args)
-cargo run -p crow-cli -- chat
+# Drop into the native Ratatui workbench (default)
+cargo run -p crow-cli
+
+# Start interactive chat in the workbench, and resume previous context
+cargo run -p crow-cli -- -r
 
 # Compile a task into structured JSON only
 cargo run -p crow-cli -- compile "Add a short note to README.md"
@@ -89,7 +94,7 @@ cargo run -p crow-cli -- compile "Add a short note to README.md"
 # Preview a plan plus evidence without applying it
 cargo run -p crow-cli -- plan "Explain how this repo is organized"
 
-# Run the full autonomous loop
+# Run the full autonomous loop standalone
 cargo run -p crow-cli -- run "Fix a typo in README.md"
 ```
 
@@ -97,17 +102,16 @@ cargo run -p crow-cli -- run "Fix a typo in README.md"
 
 | Command | Purpose |
 |---|---|
-| `crow` / `crow chat` | Continuous chat REPL |
+| `crow` | Open the Codex-style interactive Ratatui Workbench |
+| `crow -r` / `--resume` | Open the Workbench, instantly resuming the last active session |
 | `crow compile <prompt>` | Show the parsed `AgentAction` JSON |
 | `crow plan <prompt>` | Preview a plan and evidence report |
 | `crow run <prompt>` | Full autonomous loop |
 | `crow dry-run <prompt>` | Alias for `run` |
-| `crow session list` | List saved sessions |
+| `crow session list` | List saved JSONL sessions under `~/.crow/sessions/` |
 | `crow session resume <id>` | Inspect a saved session without executing it |
-| `crow session resume-run <id>` | Restore a saved session and continue execution |
-| `crow mcp list-tools [server-name]` | List tools exposed by a configured MCP server |
+| `crow mcp list-tools` | List tools exposed by a configured MCP server |
 | `crow dashboard` | Open the dashboard |
-| `crow dream` | Run AutoDream memory consolidation |
 
 ## Safety model
 

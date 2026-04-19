@@ -17,6 +17,7 @@ pub mod runtime;
 mod session;
 pub mod snapshot;
 pub mod subagent;
+pub mod thread_manager;
 pub mod tui;
 
 use anyhow::Result;
@@ -46,14 +47,18 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some("chat") => chat::run_repl(&CrowConfig::load()?).await,
+        Some(cmd) if cmd == "-r" || cmd == "--resume" => {
+            // Drop into Console 4.0 Ratatui Workbench with resume flag
+            tui::run_workbench(&CrowConfig::load()?, true).await
+        }
         Some(unknown) => {
             eprintln!("Unknown command: {}", unknown);
             print_help();
             std::process::exit(1);
         }
         None => {
-            // Default to continuous REPL chat
-            chat::run_repl(&CrowConfig::load()?).await
+            // Drop into Console 4.0 Ratatui Workbench
+            tui::run_workbench(&CrowConfig::load()?, false).await
         }
     }
 }
@@ -177,7 +182,12 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
     let mut messages = context::ConversationManager::new(vec![]);
     let mut runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime
-        .execute_turn(&cfg, &prompt, &mut messages)
+        .execute_turn(
+            &cfg,
+            &prompt,
+            &mut messages,
+            crate::event::ViewMode::default(),
+        )
         .await
         .map(|_| ())
 }
@@ -388,7 +398,7 @@ pub(crate) async fn run_mcts_crucible(
 ) -> Result<Option<crate::mcts::BranchOutcome>> {
     // 1. Initial Epistemic Loop (Serial Recon)
     println!("\n[5/6] Entering Epistemic Recon Loop (MCTS Pre-exploration)...");
-    let mut obs = crate::event::CliEventHandler::new();
+    let mut obs = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
     let baseline_plan =
         epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, &mut obs)
             .await?;

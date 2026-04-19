@@ -239,17 +239,11 @@ impl AgentAction {
                 }
             }
             AgentAction::Recon { tool, .. } => match tool {
-                ReconAction::Search { pattern, .. } => {
-                    if pattern.trim().is_empty() {
-                        return Err("search pattern must not be empty".into());
-                    }
+                ReconAction::Search { pattern, .. } if pattern.trim().is_empty() => {
+                    return Err("search pattern must not be empty".into());
                 }
-                ReconAction::DirTree {
-                    max_depth: Some(d), ..
-                } => {
-                    if *d > 10 {
-                        return Err(format!("dir_tree max_depth {} exceeds limit of 10", d));
-                    }
+                ReconAction::DirTree { max_depth: Some(d), .. } if *d > 10 => {
+                    return Err(format!("dir_tree max_depth {} exceeds limit of 10", d));
                 }
                 _ => {}
             },

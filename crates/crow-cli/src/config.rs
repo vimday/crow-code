@@ -58,7 +58,7 @@ struct ConfigFile {
 }
 
 /// Configuration for a remote Model Context Protocol (MCP) server integration.
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct McpServerConfig {
     pub command: String,
     #[serde(default)]
@@ -88,7 +88,7 @@ struct WorkspaceConfigFile {
 // ─── Runtime configuration ──────────────────────────────────────
 
 /// All configuration for a crow session.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CrowConfig {
     pub workspace: PathBuf,
     pub llm: LlmProviderConfig,

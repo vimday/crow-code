@@ -33,6 +33,9 @@ pub enum AgentEvent {
     /// A general informational log.
     Log(String),
 
+    /// A final markdown block.
+    Markdown(String),
+
     /// A fatal error occurred during the loop.
     Error(String),
 }
@@ -40,40 +43,77 @@ pub enum AgentEvent {
 /// A receiver trait for AgentEvents, separating the engine from TUI/CLI rendering.
 pub trait EventHandler: Send {
     fn handle_event(&mut self, event: AgentEvent);
+
+    /// Returns true if the user has requested cancellation of the current turn.
+    /// The epistemic loop checks this at each iteration boundary.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+/// The level of detail provided to the user during the autonomous loop.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// Minimal output: Goal, Action, Result.
+    Focus,
+    /// Detailed trace: Goal, Evidence (file reads, recon), Action, Result.
+    #[default]
+    Evidence,
+    /// Full audit stream: Includes inner monologue / raw reasoning streams.
+    Audit,
+}
+
+pub struct TuiEventHandler {
+    tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
+    cancellation: Option<crate::tui::state::CancellationToken>,
+}
+
+impl TuiEventHandler {
+    pub fn new(
+        tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
+    ) -> Self {
+        Self { tx, cancellation: None }
+    }
+
+    pub fn with_cancellation(
+        tx: tokio::sync::mpsc::UnboundedSender<crate::tui::state::TuiMessage>,
+        token: crate::tui::state::CancellationToken,
+    ) -> Self {
+        Self { tx, cancellation: Some(token) }
+    }
+}
+
+impl EventHandler for TuiEventHandler {
+    fn handle_event(&mut self, event: AgentEvent) {
+        let _ = self.tx.send(crate::tui::state::TuiMessage::AgentEvent(event));
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.as_ref().is_some_and(|t| t.is_cancelled())
+    }
 }
 
 /// CLI event handler with spinner-based progress feedback.
 ///
-/// During model generation (tool calls / structured JSON), shows a spinner
-/// with a character counter. Discrete actions (file reads, recon, delegation)
-/// produce concise one-line output. The actual rendered markdown response
-/// happens after the IntentCompiler returns the parsed plan.
+/// Refactored for 'Crow Console 2.0' (Evidence-Native).
 pub struct CliEventHandler {
     spinner: Option<crate::epistemic_ui::SpinnerObserver>,
     stream_char_count: usize,
-
-    // Live Streaming State
-    rationale_processor: RationaleStreamProcessor,
-    markdown_state: crate::render::MarkdownStreamState,
-    renderer: crate::render::TerminalRenderer,
-    streaming_markdown_started: bool,
+    view_mode: ViewMode,
 }
 
 impl Default for CliEventHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new(ViewMode::default())
     }
 }
 
 impl CliEventHandler {
-    pub fn new() -> Self {
+    pub fn new(view_mode: ViewMode) -> Self {
         Self {
             spinner: None,
             stream_char_count: 0,
-            rationale_processor: RationaleStreamProcessor::default(),
-            markdown_state: crate::render::MarkdownStreamState::default(),
-            renderer: crate::render::TerminalRenderer::new(),
-            streaming_markdown_started: false,
+            view_mode,
         }
     }
 
@@ -81,8 +121,6 @@ impl CliEventHandler {
         if let Some(sp) = self.spinner.take() {
             sp.finish();
         }
-
-        self.finish_stream_block();
     }
 
     fn sync_print<F: FnOnce()>(&self, f: F) {
@@ -93,37 +131,20 @@ impl CliEventHandler {
         }
     }
 
-    fn ensure_stream_block(&mut self) {
-        if self.streaming_markdown_started {
-            return;
-        }
+    fn print_trace(&self, label: &str, body: &str, accent: Color) {
         self.sync_print(|| {
-            println!(); // Blank line before AI response
-        });
-        self.streaming_markdown_started = true;
-    }
-
-    fn finish_stream_block(&mut self) {
-        if let Some(final_md) = self.markdown_state.flush(&self.renderer) {
-            self.ensure_stream_block();
-            self.sync_print(|| {
-                print!("{final_md}");
-                if !final_md.ends_with('\n') {
-                    println!();
-                }
-            });
-        }
-
-        if self.streaming_markdown_started {
-            self.streaming_markdown_started = false;
-        }
-    }
-
-    fn print_trace(&self, icon: &str, body: &str, accent: Color) {
-        self.sync_print(|| {
+            let icon = match label {
+                "Evidence" => "◎",
+                "Action" => "▰",
+                "Result" => "✓",
+                _ => "•",
+            };
+            
             println!(
-                "  {} {}",
+                "  {} {} {:8} {}",
+                "│ ".with(Color::DarkGrey),
                 icon.with(accent),
+                label.with(accent).bold(),
                 body.with(Color::AnsiValue(245))
             );
         });
@@ -150,162 +171,102 @@ impl EventHandler for CliEventHandler {
             AgentEvent::Thinking(_step, _max) => {
                 self.stop_spinner();
                 self.stream_char_count = 0;
-                self.rationale_processor = RationaleStreamProcessor::default();
-                self.markdown_state = crate::render::MarkdownStreamState::default();
 
-                self.spinner = Some(crate::epistemic_ui::SpinnerObserver::new("Thinking...".to_string()));
+                self.spinner = Some(crate::epistemic_ui::SpinnerObserver::new(
+                    "Thinking...".to_string(),
+                ));
             }
             AgentEvent::StreamChunk(chunk) => {
                 self.stream_char_count += chunk.len();
 
-                // Extract unescaped rationale text incrementally
-                let extracted_text = self.rationale_processor.push(&chunk);
+                if self.view_mode == ViewMode::Audit {
+                    self.sync_print(|| {
+                        use std::io::Write;
+                        print!("{}", chunk.with(Color::AnsiValue(242)));
+                        let _ = std::io::stdout().flush();
+                    });
+                }
 
-                if !extracted_text.is_empty() {
-                    // Turn off the spinner so markdown can render cleanly
-                    if let Some(sp) = self.spinner.take() {
-                        sp.finish();
-                    }
-
-                    self.ensure_stream_block();
-                    if let Some(rendered) =
-                        self.markdown_state.push(&self.renderer, &extracted_text)
-                    {
-                        self.sync_print(|| {
-                            use std::io::Write;
-                            print!("{}", rendered);
-                            let _ = std::io::stdout().flush();
-                        });
-                    }
-                } else if let Some(ref mut sp) = self.spinner {
+                // We completely swallow rationale rendering to hide internal monologue.
+                // We just keep the spinner updating to show flow health.
+                if let Some(ref mut sp) = self.spinner {
                     let kb = self.stream_char_count as f64 / 1024.0;
-                    sp.set_status(format!("{:.1} KB streamed", kb));
+                    sp.set_status(format!("{:.1} KB transferred", kb));
                 }
             }
             AgentEvent::ActionStart(desc) => {
                 self.update_spinner(format!("Running action: {}", desc));
             }
             AgentEvent::ActionComplete(desc) => {
-                self.print_trace("✓", &desc, Color::AnsiValue(114));
+                self.print_trace("Action", &desc, Color::AnsiValue(114));
             }
             AgentEvent::ReadFiles(paths) => {
-                let display = if paths.len() <= 3 {
-                    paths.join(", ")
-                } else {
-                    format!("{}, ... ({} files)", paths[..2].join(", "), paths.len())
-                };
-                self.print_trace("✓", &format!("Read {}", display), Color::AnsiValue(245));
+                if self.view_mode != ViewMode::Focus {
+                    let display = if paths.len() <= 3 {
+                        paths.join(", ")
+                    } else {
+                        format!("{}, ... ({} files)", paths[..2].join(", "), paths.len())
+                    };
+                    self.print_trace(
+                        "Evidence",
+                        &format!("Read {}", display),
+                        Color::AnsiValue(245),
+                    );
+                }
             }
             AgentEvent::ReconStart(desc) => {
-                self.update_spinner(format!("Recon: {}", desc));
+                if self.view_mode != ViewMode::Focus {
+                    self.update_spinner(format!("Recon: {}", desc));
+                }
             }
             AgentEvent::DelegateStart(task) => {
-                self.update_spinner(format!("Delegating: {}", task));
+                if self.view_mode != ViewMode::Focus {
+                    self.update_spinner(format!("Delegating: {}", task));
+                }
             }
             AgentEvent::PlanSubmitted(plan) => {
                 if !plan.operations.is_empty() {
-                    let summary = format!(
-                        "Plan ready · {} operations",
-                        plan.operations.len()
-                    );
-                    self.print_trace("✓", &summary, Color::AnsiValue(114));
+                    let summary = format!("{} operations generated", plan.operations.len());
+                    self.print_trace("Action", &summary, Color::AnsiValue(81));
                 }
             }
             AgentEvent::CruciblePreflight(msg) => {
                 self.update_spinner(format!("Verifying: {}", msg));
             }
             AgentEvent::Log(msg) => {
-                if let Some(rationale) = msg.strip_prefix("       Rationale: ") {
-                    self.print_trace("↳", rationale, Color::AnsiValue(242));
-                } else if msg.contains("⚠") {
-                    self.sync_print(|| println!("  {}", msg.with(Color::Yellow)));
+                if msg.contains("⚠") {
+                    self.sync_print(|| println!("  {} {}", "│ ".with(Color::DarkGrey), msg.with(Color::Yellow)));
                 } else {
-                    self.sync_print(|| println!("  {}", msg.with(Color::AnsiValue(245))));
+                    if !msg.starts_with("       Rationale:") || self.view_mode == ViewMode::Audit {
+                        if msg.starts_with("✓ ") || msg.starts_with("↳") {
+                            self.print_trace(
+                                "Result",
+                                msg.trim_start_matches("✓ ").trim_start_matches("↳").trim(),
+                                Color::AnsiValue(245),
+                            );
+                        } else if self.view_mode != ViewMode::Focus {
+                            self.print_trace("Log", &msg, Color::AnsiValue(245));
+                        }
+                    }
                 }
             }
             AgentEvent::Error(err) => {
                 self.stop_spinner();
                 self.sync_print(|| {
                     eprintln!(
-                        "  {} {}",
+                        "  {} {} {}",
+                        "│ ".with(Color::DarkGrey),
                         "✘".bold().with(Color::AnsiValue(203)),
                         err.with(Color::AnsiValue(203))
                     );
                 });
             }
-        }
-    }
-}
-
-
-// ─── JSON Rationale Streaming ────────────────────────────────────────
-
-/// Incrementally extracts the "rationale" string from a streamed JSON response.
-#[derive(Default)]
-struct RationaleStreamProcessor {
-    buffer: String,
-    yielded_bytes: usize,
-    found_start: Option<usize>,
-    escaping: bool,
-    finished: bool,
-}
-
-impl RationaleStreamProcessor {
-    pub fn push(&mut self, chunk: &str) -> String {
-        self.buffer.push_str(chunk);
-        if self.finished {
-            return String::new();
-        }
-
-        if self.found_start.is_none() {
-            if let Some(key_idx) = self.buffer.find("\"rationale\"") {
-                let after_key = &self.buffer[key_idx + 11..];
-                if let Some(quote_idx) = after_key.find('"') {
-                    self.found_start = Some(key_idx + 11 + quote_idx + 1);
-                }
+            AgentEvent::Markdown(md) => {
+                let renderer = crate::render::TerminalRenderer::new();
+                println!();
+                renderer.print_markdown(&md);
+                println!();
             }
         }
-
-        let mut yielded = String::new();
-
-        if let Some(start) = self.found_start {
-            let scan_start = start + self.yielded_bytes;
-            if scan_start > self.buffer.len() {
-                return yielded;
-            }
-
-            let to_scan = &self.buffer[scan_start..];
-            let chars = to_scan.chars();
-
-            for c in chars {
-                if self.escaping {
-                    self.escaping = false;
-                    match c {
-                        'n' => yielded.push('\n'),
-                        'r' => yielded.push('\r'),
-                        't' => yielded.push('\t'),
-                        '"' => yielded.push('"'),
-                        '\\' => yielded.push('\\'),
-                        _ => {
-                            yielded.push('\\');
-                            yielded.push(c);
-                        }
-                    }
-                    self.yielded_bytes += c.len_utf8();
-                } else if c == '\\' {
-                    self.escaping = true;
-                    self.yielded_bytes += c.len_utf8();
-                } else if c == '"' {
-                    self.finished = true;
-                    self.yielded_bytes += c.len_utf8();
-                    return yielded;
-                } else {
-                    yielded.push(c);
-                    self.yielded_bytes += c.len_utf8();
-                }
-            }
-        }
-
-        yielded
     }
 }

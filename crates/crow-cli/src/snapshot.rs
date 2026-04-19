@@ -128,8 +128,7 @@ pub fn commit_applied_plan(
         .status()?;
 
     if !status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "Failed to execute git add. Git workspace may be corrupted.",
         ));
     }
@@ -160,8 +159,7 @@ pub fn commit_applied_plan(
     let commit_status = commit_cmd.current_dir(workspace_root).status()?;
 
     if !commit_status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "git commit failed. The applied changes remain uncommitted.",
         ));
     }

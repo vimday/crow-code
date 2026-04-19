@@ -146,7 +146,9 @@ fn apply_hunks(original: &str, hunks: &[DiffHunk], file_path: &str) -> Result<St
     let mut lines: Vec<String> = original.lines().map(String::from).collect();
 
     let mut sorted_hunks = hunks.to_vec();
-    sorted_hunks.sort_by(|a, b| b.original_start.cmp(&a.original_start));
+    // Sort hunks in reverse line order so that replacing text at the bottom
+    // doesn't invalidate line numbers for hunks at the top.
+    sorted_hunks.sort_by_key(|b| std::cmp::Reverse(b.original_start));
 
     // Convert strings back into physical line arrays for precise manipulation
     #[derive(Clone)]
