@@ -1,7 +1,9 @@
 pub mod components;
 pub mod dashboard;
+pub mod markdown_stream;
 pub mod render;
 pub mod state;
+pub mod theme;
 
 pub use dashboard::run_dashboard;
 
@@ -829,7 +831,7 @@ fn execute_command_string(
                     kind: CellKind::User,
                     payload: format!("/session {action}"),
                 });
-                
+
                 if action == "list" {
                     match crate::session::SessionStore::open() {
                         Ok(store) => match store.list() {

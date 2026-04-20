@@ -5,21 +5,33 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use super::state::{AppState, CellKind, OverlayState};
+use super::theme::{chars, colors, Styles};
 
 /// Left gutter width matching Codex's LIVE_PREFIX_COLS.
 const GUTTER: &str = "  ";
 
-// ── Color palette ────────────────────────────────────────────────────────────
-// Inspired by Codex's muted, professional palette.
-const DIM_GRAY: Color = Color::Indexed(242);
-const MID_GRAY: Color = Color::Indexed(245);
-const ACCENT_CYAN: Color = Color::Indexed(75);
-const ACCENT_GREEN: Color = Color::Indexed(114);
-const ACCENT_RED: Color = Color::Indexed(203);
-const VERDICT_BLUE: Color = Color::Indexed(69);
+// ── Color aliases from theme (backwards compat for cells) ────────────────────
+fn dim_gray() -> Color {
+    colors::text_muted()
+}
+fn mid_gray() -> Color {
+    colors::text_secondary()
+}
+fn accent_cyan() -> Color {
+    colors::accent_system()
+}
+fn accent_green() -> Color {
+    colors::accent_success()
+}
+fn accent_red() -> Color {
+    colors::accent_error()
+}
+fn verdict_blue() -> Color {
+    colors::accent_user()
+}
 
-// ── Spinner frames ───────────────────────────────────────────────────────────
-const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// ── Spinner frames from theme ────────────────────────────────────────────────
+const SPINNER: &[&str] = chars::SPINNER;
 
 pub fn render_app(f: &mut Frame, state: &mut AppState) {
     let size = f.size();
@@ -78,18 +90,25 @@ impl<'a> HistoryCell for UserCell<'a> {
 
 struct AgentMessageCell<'a>(&'a str);
 impl<'a> HistoryCell for AgentMessageCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(4).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        // Use the streaming markdown renderer for rich output
+        let mut renderer = super::markdown_stream::StreamingMarkdownRenderer::new();
+        let md_lines = renderer.set_content(self.0.to_string());
+        let mut out = Vec::new();
+        for (i, line) in md_lines.iter().enumerate() {
             let prefix = if i == 0 { "• " } else { "  " };
-            lines.push(Line::from(vec![
-                prefix.fg(DIM_GRAY).dim(),
-                line.to_string().fg(Color::White),
+            let mut spans = vec![Span::styled(prefix, Styles::evidence())];
+            spans.extend(line.spans.iter().cloned());
+            out.push(Line::from(spans));
+        }
+        if out.is_empty() {
+            // Fallback for empty content
+            out.push(Line::from(vec![
+                "• ".fg(dim_gray()).dim(),
+                self.0.to_string().fg(colors::text_primary()),
             ]));
         }
-        lines
+        out
     }
 }
 
@@ -100,10 +119,14 @@ impl<'a> HistoryCell for EvidenceCell<'a> {
         let wrap_width = width.saturating_sub(6).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { format!("{GUTTER}◎ ") } else { format!("{GUTTER}  ") };
+            let prefix = if i == 0 {
+                format!("{GUTTER}◎ ")
+            } else {
+                format!("{GUTTER}  ")
+            };
             lines.push(Line::from(vec![
-                prefix.fg(MID_GRAY),
-                line.to_string().fg(MID_GRAY).dim(),
+                prefix.fg(mid_gray()),
+                line.to_string().fg(mid_gray()).dim(),
             ]));
         }
         lines
@@ -117,10 +140,14 @@ impl<'a> HistoryCell for ActionCell<'a> {
         let wrap_width = width.saturating_sub(6).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { format!("{GUTTER}▰ ") } else { format!("{GUTTER}  ") };
+            let prefix = if i == 0 {
+                format!("{GUTTER}▰ ")
+            } else {
+                format!("{GUTTER}  ")
+            };
             lines.push(Line::from(vec![
-                prefix.fg(ACCENT_GREEN),
-                line.to_string().fg(ACCENT_GREEN),
+                prefix.fg(accent_green()),
+                line.to_string().fg(accent_green()),
             ]));
         }
         lines
@@ -134,10 +161,14 @@ impl<'a> HistoryCell for ResultCell<'a> {
         let wrap_width = width.saturating_sub(6).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { format!("{GUTTER}✓ ") } else { format!("{GUTTER}  ") };
+            let prefix = if i == 0 {
+                format!("{GUTTER}✓ ")
+            } else {
+                format!("{GUTTER}  ")
+            };
             lines.push(Line::from(vec![
-                prefix.fg(VERDICT_BLUE),
-                line.to_string().fg(VERDICT_BLUE),
+                prefix.fg(verdict_blue()),
+                line.to_string().fg(verdict_blue()),
             ]));
         }
         lines
@@ -151,10 +182,14 @@ impl<'a> HistoryCell for LogCell<'a> {
         let wrap_width = width.saturating_sub(6).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { format!("{GUTTER}• ") } else { format!("{GUTTER}  ") };
+            let prefix = if i == 0 {
+                format!("{GUTTER}• ")
+            } else {
+                format!("{GUTTER}  ")
+            };
             lines.push(Line::from(vec![
-                prefix.fg(DIM_GRAY),
-                line.to_string().fg(MID_GRAY),
+                prefix.fg(dim_gray()),
+                line.to_string().fg(mid_gray()),
             ]));
         }
         lines
@@ -168,10 +203,14 @@ impl<'a> HistoryCell for ErrorCell<'a> {
         let wrap_width = width.saturating_sub(6).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { format!("{GUTTER}✘ ") } else { format!("{GUTTER}  ") };
+            let prefix = if i == 0 {
+                format!("{GUTTER}✘ ")
+            } else {
+                format!("{GUTTER}  ")
+            };
             lines.push(Line::from(vec![
-                prefix.fg(ACCENT_RED).bold(),
-                line.to_string().fg(ACCENT_RED),
+                prefix.fg(accent_red()).bold(),
+                line.to_string().fg(accent_red()),
             ]));
         }
         lines
@@ -206,10 +245,14 @@ fn render_history(f: &mut Frame, state: &AppState, area: Rect) {
         let wrap_width = area.width.saturating_sub(6).max(1) as usize;
         let wrapped = textwrap::wrap(action, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { format!("{GUTTER}{frame} ") } else { format!("{GUTTER}  ") };
+            let prefix = if i == 0 {
+                format!("{GUTTER}{frame} ")
+            } else {
+                format!("{GUTTER}  ")
+            };
             lines.push(Line::from(vec![
-                prefix.fg(ACCENT_CYAN),
-                line.to_string().fg(ACCENT_CYAN),
+                prefix.fg(accent_cyan()),
+                line.to_string().fg(accent_cyan()),
             ]));
         }
         for item in lines.into_iter().rev() {
@@ -302,7 +345,11 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         format!(" {}", state.git_branch)
     };
 
-    let risk_color = if state.is_dirty { ACCENT_RED } else { DIM_GRAY };
+    let risk_color = if state.is_dirty {
+        accent_red()
+    } else {
+        dim_gray()
+    };
 
     // Right side: model · workspace · view mode · write mode
     let mut right_parts: Vec<String> = Vec::new();
@@ -315,7 +362,7 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
 
     let right = format!(" {} ", right_parts.join(" · "));
 
-    let left_span = Line::from(vec![left.fg(DIM_GRAY), git_info.fg(risk_color)]);
+    let left_span = Line::from(vec![left.fg(dim_gray()), git_info.fg(risk_color)]);
 
     let left_w = left_span.width().min(area.width as usize);
     let right_w = right.chars().count().min(area.width as usize);
@@ -330,7 +377,7 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         .split(area);
 
     let left_widget = Paragraph::new(left_span);
-    let right_widget = Paragraph::new(right.fg(DIM_GRAY));
+    let right_widget = Paragraph::new(right.fg(dim_gray()));
 
     // Fill middle with `─`
     let mid_w = status_chunks[1].width as usize;
@@ -350,25 +397,26 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     // If there is a pending command approval, render the security prompt instead
     if let crate::tui::state::ApprovalState::PendingCommand(ref cmd) = state.approval_state {
-        let warning_style = ratatui::style::Style::default().fg(ACCENT_RED).bold();
+        let warning_style = Styles::error();
+        composer_lines.push(Line::from(vec![Span::styled(
+            "⚠️  Security Approval Required",
+            warning_style,
+        )]));
         composer_lines.push(Line::from(vec![
-            Span::styled("⚠️  Security Approval Required", warning_style)
-        ]));
-        composer_lines.push(Line::from(vec![
-            "Command: ".fg(DIM_GRAY),
+            "Command: ".fg(dim_gray()),
             cmd.clone().into(),
         ]));
         composer_lines.push(Line::from(vec![
             "Execute this command? [y/N/a (always)]: "
                 .fg(Color::Indexed(221))
                 .bold(),
-            "█".fg(ACCENT_CYAN),
+            "█".fg(accent_cyan()),
         ]));
 
         let composer_widget = Paragraph::new(composer_lines).block(
             Block::default()
                 .borders(Borders::TOP)
-                .border_style(ratatui::style::Style::default().fg(ACCENT_RED)), // Red border for danger
+                .border_style(Styles::error()),
         );
 
         f.render_widget(composer_widget, area);
@@ -391,13 +439,17 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
     let after_lines: Vec<&str> = after_cursor.split_inclusive('\n').collect();
 
     let is_running = state.is_task_running();
-    let prompt_color = if is_running { DIM_GRAY } else { Color::Green };
+    let prompt_color = if is_running {
+        dim_gray()
+    } else {
+        colors::accent_success()
+    };
     let block_cursor = if is_running { " " } else { "█" };
 
     if text.is_empty() {
         composer_lines.push(Line::from(vec![
             "❯ ".fg(prompt_color).bold(),
-            block_cursor.fg(ACCENT_CYAN),
+            block_cursor.fg(accent_cyan()),
         ]));
     } else {
         // Reconstruct the lines with the cursor inserted
@@ -428,7 +480,7 @@ fn render_composer(f: &mut Frame, state: &AppState, area: Rect) {
         };
 
         let cursor_style = ratatui::style::Style::default()
-            .bg(ACCENT_CYAN)
+            .bg(accent_cyan())
             .fg(Color::Black);
         mid_line.push(Span::styled(cursor_char.clone(), cursor_style));
         mid_line.push(after_rest.into());
@@ -503,7 +555,7 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, query: &str, selected_i
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" Command Palette ({query}) "))
-            .border_style(ratatui::style::Style::default().fg(ACCENT_CYAN)),
+            .border_style(ratatui::style::Style::default().fg(accent_cyan())),
     );
 
     f.render_widget(list, popup_area);
