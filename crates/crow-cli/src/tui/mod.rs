@@ -585,11 +585,14 @@ async fn run_tui_loop(
                     // Flush any remaining stream buffer
                     let renderer = crate::render::TerminalRenderer::new();
                     if let Some(flushed) = state.stream_state.flush(&renderer) {
-                        for line in flushed.lines() {
-                            state.history.push(Cell {
-                                kind: CellKind::AgentMessage,
-                                payload: line.to_string(),
-                            });
+                        let trimmed = flushed.trim();
+                        if !(trimmed.starts_with('{') && trimmed.contains("\"action\"")) {
+                            for line in flushed.lines() {
+                                state.history.push(Cell {
+                                    kind: CellKind::AgentMessage,
+                                    payload: line.to_string(),
+                                });
+                            }
                         }
                     }
                     state.active_action = None;
@@ -981,12 +984,19 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             // rendered ANSI at safe paragraph/fence boundaries.
             let renderer = crate::render::TerminalRenderer::new();
             if let Some(rendered) = state.stream_state.push(&renderer, &chunk) {
-                // A safe boundary was found — push rendered markdown to history
-                for line in rendered.lines() {
-                    state.history.push(Cell {
-                        kind: CellKind::AgentMessage,
-                        payload: line.to_string(),
-                    });
+                // Filter: suppress raw JSON plan output from display.
+                // The LLM emits JSON like {"action":"submit_plan",...} as text.
+                // The rationale will be emitted later via AgentEvent::Markdown.
+                let trimmed = rendered.trim();
+                if trimmed.starts_with('{') && trimmed.contains("\"action\"") {
+                    // Silently skip — this is internal plan JSON, not user-facing
+                } else {
+                    for line in rendered.lines() {
+                        state.history.push(Cell {
+                            kind: CellKind::AgentMessage,
+                            payload: line.to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -994,11 +1004,14 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             // Flush any remaining stream buffer before rendering final markdown
             let renderer = crate::render::TerminalRenderer::new();
             if let Some(flushed) = state.stream_state.flush(&renderer) {
-                for line in flushed.lines() {
-                    state.history.push(Cell {
-                        kind: CellKind::AgentMessage,
-                        payload: line.to_string(),
-                    });
+                let trimmed = flushed.trim();
+                if !(trimmed.starts_with('{') && trimmed.contains("\"action\"")) {
+                    for line in flushed.lines() {
+                        state.history.push(Cell {
+                            kind: CellKind::AgentMessage,
+                            payload: line.to_string(),
+                        });
+                    }
                 }
             }
             // Then render the final markdown block
