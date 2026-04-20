@@ -131,8 +131,9 @@ impl SkillLoader {
             } else if path.is_file() {
                 let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
                 if file_name.ends_with("SKILL.md") || file_name.ends_with("skill.md") {
-                    if let Ok(skill) = Self::load_skill(&path, root) {
-                        skills.push(skill);
+                    match Self::load_skill(&path, root) {
+                        Ok(skill) => skills.push(skill),
+                        Err(e) => tracing::warn!("Failed to load skill {}: {}", path.display(), e),
                     }
                 }
             }
@@ -282,8 +283,9 @@ impl SkillLoader {
             if path.is_dir() {
                 let skill_file = path.join("SKILL.md");
                 if skill_file.exists() {
-                    if let Ok(skill) = Self::load_plugin_skill(&skill_file, plugin_name) {
-                        skills.push(skill);
+                    match Self::load_plugin_skill(&skill_file, plugin_name) {
+                        Ok(skill) => skills.push(skill),
+                        Err(e) => tracing::warn!("Failed to load plugin skill {}: {}", skill_file.display(), e),
                     }
                 }
             }

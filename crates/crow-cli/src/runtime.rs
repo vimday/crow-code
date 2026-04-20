@@ -143,15 +143,29 @@ impl SessionRuntime {
         skill_dirs.push(self.workspace.join(".crow").join("skills"));
 
         let skill_loader = crow_brain::skill::SkillLoader::new(skill_dirs);
-        let mut loaded_skills = Vec::new();
-        if let Ok(skills) = skill_loader.load_all() {
-            loaded_skills = skills;
-        }
+        let loaded_skills = match skill_loader.load_all() {
+            Ok(skills) => skills,
+            Err(e) => {
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "    ⚠️ Skill loading failed: {e}"
+                )));
+                Vec::new()
+            }
+        };
+
+        // Implicit skill resolution (codex pattern).
+        // Matches triggers against the prompt, checks env dependencies,
+        // and sorts by scope priority (User > Repo > System).
+        let available_skills: Vec<_> =
+            crow_brain::skill::resolve_skills_for_context(&loaded_skills, prompt)
+                .into_iter()
+                .cloned()
+                .collect();
 
         let sys_msgs = crate::prompt::PromptBuilder::new()
             .with_repo_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
-            .with_dynamic_skills(&loaded_skills)
+            .with_dynamic_skills(&available_skills)
             .with_contract(&snapshot_id)
             .build();
 

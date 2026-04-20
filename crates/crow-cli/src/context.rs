@@ -63,6 +63,15 @@ impl ConversationManager {
         self.enforce_budget();
     }
 
+    /// Clear ALL state: system prompts AND conversation history.
+    /// This is the semantically correct "/clear" — both the model
+    /// and the TUI should see a fresh conversation.
+    pub fn clear_all(&mut self) {
+        self.system_messages.clear();
+        self.conversation.clear();
+    }
+
+
     pub fn push_user(&mut self, content: impl Into<String>) {
         self.conversation.push_back(Memory {
             message: ChatMessage::user(content),

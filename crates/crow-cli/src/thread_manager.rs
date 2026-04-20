@@ -95,7 +95,7 @@ impl ThreadManager {
             }
             Op::Clear => {
                 let mut msgs = self.messages.lock().await;
-                msgs.set_system(vec![]);
+                msgs.clear_all();
             }
             Op::SwarmRun(prompt) => {
                 let token = CancellationToken::new();
@@ -124,14 +124,18 @@ impl ThreadManager {
                 .execute_turn_with_observer(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
                 .await;
 
-            // Sync mutated messages back
-            *msgs_clone.lock().await = local_msgs.clone();
+            // Only sync mutated messages back if the turn was NOT cancelled.
+            // Previously this was unconditional, meaning cancelled turns could
+            // overwrite concurrent mutations (e.g. /clear) and leak partial state.
+            let was_cancelled = token.is_cancelled();
 
             let mut state = thread_state.lock().await;
-            if token.is_cancelled() {
+            if was_cancelled {
                 state.status = TurnStatus::Aborted;
                 let _ = ui_tx.send(TuiMessage::TurnComplete(false));
             } else {
+                // Safe to write back: turn completed normally
+                *msgs_clone.lock().await = local_msgs.clone();
                 match result {
                     Ok(snapshot_id) => {
                         state.status = TurnStatus::Completed(Some(snapshot_id.clone()));

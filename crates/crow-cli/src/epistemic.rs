@@ -52,6 +52,8 @@ pub async fn run_epistemic_loop(
     // Track action signatures to detect duplicate recon loops.
     let mut seen_actions: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut consecutive_dupes = 0u32;
+    // Track subagent delegation depth structurally (codex pattern) instead of via prompt text.
+    let mut delegation_count = 0usize;
 
     loop {
         epistemic_step += 1;
@@ -170,13 +172,6 @@ pub async fn run_epistemic_loop(
                 observer.handle_event(AgentEvent::DelegateStart(task.clone()));
                 observer.handle_event(AgentEvent::Log(format!("       Rationale: {rationale}")));
 
-                // Check for recursion depth via parsing previous delegation messages
-                let delegation_count = messages
-                    .as_messages()
-                    .iter()
-                    .filter(|m| m.content.contains("[SYSTEM: SUBAGENT DELEGATION COMPLETE]"))
-                    .count();
-
                 if delegation_count >= 3 {
                     observer.handle_event(AgentEvent::Log(
                         "    ⚠️ Subagent recursion limit reached. Halting delegation.".into(),
@@ -184,6 +179,8 @@ pub async fn run_epistemic_loop(
                     messages.push_user("[SYSTEM] Subagent recursion limit exceeded (max 3). You must resolve the task yourself without delegating further.".to_string());
                     continue;
                 }
+
+                delegation_count += 1;
 
                 observer.handle_event(AgentEvent::ActionStart(
                     "Spawning isolated Subagent Worker runtime".into(),

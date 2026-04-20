@@ -931,13 +931,26 @@ fn execute_command_string(
             "cargo test",
         ];
 
-        let is_safe = safe_prefixes
+        // SECURITY: Reject commands with shell metacharacters from the fast
+        // path. Execution goes through `sh -c`, so `!cargo test && curl ...`
+        // would bypass the prefix allowlist without this check.
+        const SHELL_METACHARACTERS: &[&str] = &[
+            "&&", "||", ";", "|", "$", "`", ">", "<", "(", ")", "{", "}",
+            "\n", "\\",
+        ];
+        let has_metacharacters = SHELL_METACHARACTERS
+            .iter()
+            .any(|meta| bash_cmd.contains(meta));
+
+        let prefix_matches = safe_prefixes
             .iter()
             .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{safe} ")))
             || state
                 .allowed_safe_patterns
                 .iter()
                 .any(|safe| bash_cmd == *safe || bash_cmd.starts_with(&format!("{safe} ")));
+
+        let is_safe = prefix_matches && !has_metacharacters;
 
         if is_safe {
             state.history.push(Cell {
@@ -948,6 +961,7 @@ fn execute_command_string(
         } else {
             state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd);
         }
+
 
         state.composer.clear();
         state.composer_cursor = 0;
