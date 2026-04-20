@@ -15,10 +15,12 @@ pub struct CompactorConfig {
 impl Default for CompactorConfig {
     fn default() -> Self {
         Self {
-            // Drastically reduced limits matching antigravity/codex swiftness
-            max_history_tokens: 16_000, // Keep context tight and fast
-            context_window: 131_072,    // 128K config bounds
-            preservation_turns: 2,      // Only keep the most immediate immediate context raw
+            // ~80% of 128K context window (yomi pattern: DEFAULT_COMPACT_THRESHOLD)
+            // Previous 16K value was far too aggressive — system prompt alone
+            // exceeds 16K tokens causing compaction on the very first message.
+            max_history_tokens: 80_000,
+            context_window: 131_072, // 128K config bounds
+            preservation_turns: 4,   // Keep enough recent context for coherent reasoning
         }
     }
 }
