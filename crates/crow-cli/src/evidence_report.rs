@@ -491,7 +491,7 @@ mod tests {
             verdict: Verdict::from_evidence(make_green_evidence()),
         };
 
-        let output = format!("{}", report);
+        let output = format!("{report}");
         assert!(output.contains("Evidence Report"));
         assert!(output.contains("AUTO-APPLY"));
         assert!(output.contains("snap_a3f7c2d"));

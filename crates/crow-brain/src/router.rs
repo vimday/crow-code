@@ -173,8 +173,8 @@ mod tests {
         config.provider_kind = ProviderKind::Custom("claude".into());
         config.model = "claude-sonnet-4-20250514".into();
         let desc = describe_provider(&config);
-        assert!(desc.contains("Anthropic"), "got: {}", desc);
-        assert!(desc.contains("claude-sonnet-4-20250514"), "got: {}", desc);
+        assert!(desc.contains("Anthropic"), "got: {desc}");
+        assert!(desc.contains("claude-sonnet-4-20250514"), "got: {desc}");
     }
 
     #[test]
@@ -183,6 +183,6 @@ mod tests {
         config.provider_kind = ProviderKind::Custom("ollama".into());
         config.model = "llama3".into();
         let desc = describe_provider(&config);
-        assert!(desc.contains("Ollama"), "got: {}", desc);
+        assert!(desc.contains("Ollama"), "got: {desc}");
     }
 }

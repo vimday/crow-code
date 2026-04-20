@@ -105,7 +105,7 @@ mod tests {
 
     fn numbered_output(n: usize) -> String {
         (1..=n)
-            .map(|i| format!("line {}", i))
+            .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -212,8 +212,8 @@ mod tests {
             "   |                  ^^^^^^^ expected u32",
         ];
         // Pad with 200 more lines of noise
-        let noise: Vec<String> = (0..200).map(|i| format!("test {} ... ok", i)).collect();
-        let noise_refs: Vec<&str> = noise.iter().map(|s| s.as_str()).collect();
+        let noise: Vec<String> = (0..200).map(|i| format!("test {i} ... ok")).collect();
+        let noise_refs: Vec<&str> = noise.iter().map(std::string::String::as_str).collect();
         lines.extend_from_slice(&noise_refs);
         // Add a summary tail
         lines.push("test result: FAILED. 5 passed; 1 failed");

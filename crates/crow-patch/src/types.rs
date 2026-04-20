@@ -519,7 +519,7 @@ mod tests {
                 tool: ReconAction::ListDir { path },
                 ..
             } => assert_eq!(path.as_str(), "src"),
-            _ => panic!("wrong variant: {:?}", action),
+            _ => panic!("wrong variant: {action:?}"),
         }
         assert!(action.validate().is_ok());
     }

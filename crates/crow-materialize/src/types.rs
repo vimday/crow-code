@@ -280,7 +280,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             MaterializeError::SourceNotFound(_) => {}
-            other => panic!("expected SourceNotFound, got: {:?}", other),
+            other => panic!("expected SourceNotFound, got: {other:?}"),
         }
     }
 
@@ -302,7 +302,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("crow_test_no_cleanup");
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let handle = SandboxHandle::new(tmp.clone(), MaterializationDriver::SafeCopy);
+        let handle = SandboxHandle::new(tmp, MaterializationDriver::SafeCopy);
         let path = handle.into_path();
 
         assert!(path.exists(), "path should still exist after into_path");

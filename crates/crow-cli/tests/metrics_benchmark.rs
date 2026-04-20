@@ -86,8 +86,7 @@ fn benchmark_zero_pollution_on_failed_apply() {
     let final_status = get_git_status(workspace);
     assert!(
         final_status.is_empty(),
-        "CRITICAL FAILURE: Workspace was polluted! Status: {}",
-        final_status
+        "CRITICAL FAILURE: Workspace was polluted! Status: {final_status}"
     );
 
     let original_content = std::fs::read_to_string(workspace.join("src_file.rs")).unwrap();

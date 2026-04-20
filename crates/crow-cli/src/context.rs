@@ -344,8 +344,8 @@ mod tests {
         // Force a bloat in history
         let blob = "b".repeat(80 * 1024);
         for i in 0..15 {
-            manager.push_assistant(format!("Response iteration {}", i));
-            manager.push_file_read(&[format!("file_{}.rs", i)], blob.clone());
+            manager.push_assistant(format!("Response iteration {i}"));
+            manager.push_file_read(&[format!("file_{i}.rs")], blob.clone());
         }
 
         manager.enforce_budget();

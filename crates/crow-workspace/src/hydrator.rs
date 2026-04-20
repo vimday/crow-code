@@ -189,7 +189,7 @@ mod tests {
         if let EditOp::Delete { precondition, .. } = &hydrated.operations[0] {
             match precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
-                other => panic!("Expected MustExistWithHash, got {:?}", other),
+                other => panic!("Expected MustExistWithHash, got {other:?}"),
             }
         } else {
             panic!("Expected Delete op");
@@ -221,7 +221,7 @@ mod tests {
             // Source must be hydrated with real hash
             match source_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
-                other => panic!("Expected source MustExistWithHash, got {:?}", other),
+                other => panic!("Expected source MustExistWithHash, got {other:?}"),
             }
             // Dest must be MustNotExist since on_conflict is Fail
             assert_eq!(*dest_precondition, FilePrecondition::MustNotExist);
@@ -255,12 +255,12 @@ mod tests {
         {
             match source_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
-                other => panic!("Expected source hash, got {:?}", other),
+                other => panic!("Expected source hash, got {other:?}"),
             }
             // Dest exists, so system must have hydrated its hash
             match dest_precondition {
                 FilePrecondition::MustExistWithHash(h) => assert!(!h.is_empty()),
-                other => panic!("Expected dest hash for existing file, got {:?}", other),
+                other => panic!("Expected dest hash for existing file, got {other:?}"),
             }
         } else {
             panic!("Expected Rename op");

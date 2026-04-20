@@ -207,11 +207,9 @@ impl StreamingMarkdownRenderer {
                         )));
                         code_language = None;
                     }
-                    TagEnd::Item => {
-                        if !current_line.is_empty() {
-                            self.lines.push(Line::from(current_line));
-                            current_line = Vec::new();
-                        }
+                    TagEnd::Item if !current_line.is_empty() => {
+                        self.lines.push(Line::from(current_line));
+                        current_line = Vec::new();
                     }
                     TagEnd::List(_) => {
                         list_stack.pop();
@@ -369,7 +367,7 @@ mod tests {
         let lines = r.set_content("```rust\nfn main() {}\n```".to_string());
         let output: String = lines
             .iter()
-            .map(|l| l.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(output.contains("fn main()"));
@@ -382,7 +380,7 @@ mod tests {
         let lines = r.append("world");
         let output: String = lines
             .iter()
-            .map(|l| l.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(output.contains("Hello world"));

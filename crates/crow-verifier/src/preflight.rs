@@ -302,7 +302,7 @@ mod tests {
         let diags: Vec<CompileDiagnostic> = (0..15)
             .map(|i| CompileDiagnostic {
                 level: "error".into(),
-                message: format!("error number {}", i),
+                message: format!("error number {i}"),
                 file: Some("src/lib.rs".into()),
                 line: Some(i + 1),
                 column: None,

@@ -185,14 +185,12 @@ mod tests {
         // Negation rules must NOT leak through — globset can't represent them
         assert!(
             !patterns.iter().any(|p| p.starts_with('!')),
-            "negation rules should be filtered: {:?}",
-            patterns
+            "negation rules should be filtered: {patterns:?}"
         );
         // Comments must also be excluded
         assert!(
             !patterns.iter().any(|p| p.starts_with('#')),
-            "comments should be filtered: {:?}",
-            patterns
+            "comments should be filtered: {patterns:?}"
         );
     }
 }

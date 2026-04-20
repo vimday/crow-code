@@ -163,6 +163,6 @@ mod tests {
     #[test]
     fn verifier_error_display() {
         let err = VerifierError::CommandNotFound("rustc".into());
-        assert_eq!(format!("{}", err), "command not found: rustc");
+        assert_eq!(format!("{err}"), "command not found: rustc");
     }
 }

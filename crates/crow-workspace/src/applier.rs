@@ -560,7 +560,7 @@ mod tests {
             "contextless pure insertion must be rejected"
         );
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("contextless pure insertion"), "got: {}", msg);
+        assert!(msg.contains("contextless pure insertion"), "got: {msg}");
     }
 
     #[test]
@@ -620,7 +620,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ApplyError::HunkConflict { path, .. } => assert_eq!(path, "test.rs"),
-            other => panic!("expected HunkConflict, got {:?}", other),
+            other => panic!("expected HunkConflict, got {other:?}"),
         }
     }
 
@@ -653,7 +653,7 @@ mod tests {
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("1-based"), "got: {}", msg);
+        assert!(msg.contains("1-based"), "got: {msg}");
     }
 
     #[test]
@@ -674,7 +674,7 @@ mod tests {
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("overlaps"), "got: {}", msg);
+        assert!(msg.contains("overlaps"), "got: {msg}");
     }
 
     #[test]
@@ -713,7 +713,7 @@ mod tests {
         }];
         let result = apply_hunks(original, &hunks, "test.rs").unwrap();
         // Must preserve CRLF endings
-        assert!(result.contains("\r\n"), "expected CRLF, got: {:?}", result);
+        assert!(result.contains("\r\n"), "expected CRLF, got: {result:?}");
         assert!(!result.contains("line 2"));
         assert!(result.contains("replaced\r\n"));
     }
@@ -758,7 +758,7 @@ mod tests {
         let result = apply_hunks(original, &hunks, "test.rs");
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("ambiguous match"), "got: {}", msg);
+        assert!(msg.contains("ambiguous match"), "got: {msg}");
     }
 
     #[test]

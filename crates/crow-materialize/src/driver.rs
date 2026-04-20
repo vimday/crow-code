@@ -499,15 +499,14 @@ mod tests {
 
         for dir_name in &["node_modules", "target"] {
             let dir_path = handle.path().join(dir_name);
-            assert!(dir_path.exists(), "{} should exist", dir_name);
+            assert!(dir_path.exists(), "{dir_name} should exist");
             assert!(
                 !dir_path
                     .symlink_metadata()
                     .unwrap()
                     .file_type()
                     .is_symlink(),
-                "{} must NOT be a symlink",
-                dir_name
+                "{dir_name} must NOT be a symlink"
             );
             let entries: Vec<_> = fs::read_dir(&dir_path).unwrap().collect();
             assert!(
@@ -608,8 +607,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.contains("absolute symlink"),
-            "error should mention absolute symlink: {}",
-            err
+            "error should mention absolute symlink: {err}"
         );
 
         let _ = fs::remove_dir_all(&workspace);
@@ -629,8 +627,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.contains("out-of-bounds"),
-            "error should mention out-of-bounds: {}",
-            err
+            "error should mention out-of-bounds: {err}"
         );
 
         let _ = fs::remove_dir_all(&workspace);
