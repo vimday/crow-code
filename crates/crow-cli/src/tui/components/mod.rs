@@ -16,3 +16,5 @@ pub trait Component {
 pub mod chat_view;
 pub mod command_palette;
 pub mod info_bar;
+pub mod composer;
+pub mod history;

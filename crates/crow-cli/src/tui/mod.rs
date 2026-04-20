@@ -1,3 +1,4 @@
+pub mod component;
 pub mod components;
 pub mod dashboard;
 pub mod markdown_stream;
@@ -283,8 +284,11 @@ async fn run_tui_loop(
     cfg: CrowConfig,
     thread_manager: &Arc<crate::thread_manager::ThreadManager>,
 ) -> Result<()> {
+    let mut composer_comp = components::composer::ComposerComponent::new();
+    let mut history_comp = components::history::HistoryComponent::new();
+
     loop {
-        terminal.draw(|f| render_app(f, state))?;
+        terminal.draw(|f| render_app(f, state, &mut composer_comp, &mut history_comp))?;
 
         // Poll for keyboard events
         if event::poll(Duration::from_millis(50))? {
@@ -357,38 +361,58 @@ async fn run_tui_loop(
                     state.last_ctrl_c = None;
 
                     // ── Shell Command Approval Interception ───────────────────
-                    if let crate::tui::state::ApprovalState::PendingCommand(cmd) =
+                    if let crate::tui::state::ApprovalState::PendingCommand(cmd, mut selected_idx) =
                         state.approval_state.clone()
                     {
                         match key.code {
-                            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                                // Approved
-                                state.approval_state = crate::tui::state::ApprovalState::None;
-                                state.history.push(Cell {
-                                    kind: CellKind::User,
-                                    payload: format!("!{cmd}"),
-                                });
-                                state.active_action = Some(format!("$ {cmd}"));
-                                execute_shell_command(cmd, tx.clone());
+                            KeyCode::Up => {
+                                selected_idx = selected_idx.saturating_sub(1);
+                                state.approval_state = crate::tui::state::ApprovalState::PendingCommand(cmd, selected_idx);
                             }
-                            KeyCode::Char('a') | KeyCode::Char('A') => {
-                                // Approved Always
-                                state.approval_state = crate::tui::state::ApprovalState::None;
-                                let prefix =
-                                    cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
-                                state.allowed_safe_patterns.insert(prefix.clone());
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: format!("Whitelist updated: '{prefix}' will auto-execute for this session."),
-                                });
-                                state.history.push(Cell {
-                                    kind: CellKind::User,
-                                    payload: format!("!{cmd}"),
-                                });
-                                state.active_action = Some(format!("$ {cmd}"));
-                                execute_shell_command(cmd, tx.clone());
+                            KeyCode::Down => {
+                                selected_idx = (selected_idx + 1).min(2);
+                                state.approval_state = crate::tui::state::ApprovalState::PendingCommand(cmd, selected_idx);
                             }
-                            _ => {
+                            KeyCode::Enter => {
+                                match selected_idx {
+                                    0 => {
+                                        // Allow Once
+                                        state.approval_state = crate::tui::state::ApprovalState::None;
+                                        state.history.push(Cell {
+                                            kind: CellKind::User,
+                                            payload: format!("!{cmd}"),
+                                        });
+                                        state.active_action = Some(format!("$ {cmd}"));
+                                        execute_shell_command(cmd, tx.clone());
+                                    }
+                                    1 => {
+                                        // Allow Always
+                                        state.approval_state = crate::tui::state::ApprovalState::None;
+                                        let prefix =
+                                            cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
+                                        state.allowed_safe_patterns.insert(prefix.clone());
+                                        state.history.push(Cell {
+                                            kind: CellKind::Log,
+                                            payload: format!("Whitelist updated: '{prefix}' will auto-execute for this session."),
+                                        });
+                                        state.history.push(Cell {
+                                            kind: CellKind::User,
+                                            payload: format!("!{cmd}"),
+                                        });
+                                        state.active_action = Some(format!("$ {cmd}"));
+                                        execute_shell_command(cmd, tx.clone());
+                                    }
+                                    _ => {
+                                        // Reject
+                                        state.approval_state = crate::tui::state::ApprovalState::None;
+                                        state.history.push(Cell {
+                                            kind: CellKind::Log,
+                                            payload: format!("Command cancelled: {cmd}"),
+                                        });
+                                    }
+                                }
+                            }
+                            KeyCode::Esc => {
                                 // Cancelled
                                 state.approval_state = crate::tui::state::ApprovalState::None;
                                 state.history.push(Cell {
@@ -396,185 +420,50 @@ async fn run_tui_loop(
                                     payload: format!("Command cancelled: {cmd}"),
                                 });
                             }
+                            _ => {}
                         }
                         continue;
                     }
 
-                    // ── Overlay Modal Interception ──────────────────────────────
-                    if let crate::tui::state::OverlayState::CommandPalette {
-                        query: _,
-                        selected_idx,
-                    } = &mut state.overlay_state
-                    {
-                        match key.code {
-                            KeyCode::Esc => {
-                                state.overlay_state = crate::tui::state::OverlayState::None;
+
+
+                    // ── Global Hotkeys ─────────────────────────────
+                    if key.code == KeyCode::Tab {
+                        if state.focus == crate::tui::state::Focus::Composer {
+                            state.focus = crate::tui::state::Focus::History;
+                        } else {
+                            state.focus = crate::tui::state::Focus::Composer;
+                        }
+                        continue;
+                    }
+
+                    // ── Route Event to Focused Component ─────────────────────────────
+                    use crate::tui::component::Component;
+                    let action = match state.focus {
+                        crate::tui::state::Focus::Composer => composer_comp.handle_event(&Event::Key(key), state)?,
+                        crate::tui::state::Focus::History => history_comp.handle_event(&Event::Key(key), state)?,
+                        _ => None,
+                    };
+
+                    if let Some(act) = action {
+                        match act {
+                            crate::tui::component::TuiAction::SubmitCommand(cmd) => {
+                                state.composer = cmd;
+                                handle_enter(state, tx, &cfg, thread_manager);
                             }
-                            KeyCode::Down => {
-                                let commands =
-                                    crate::tui::state::get_palette_commands(&state.composer);
-                                let max_idx = commands.len().saturating_sub(1);
-                                *selected_idx = (*selected_idx + 1).min(max_idx);
-                            }
-                            KeyCode::Up => {
-                                *selected_idx = selected_idx.saturating_sub(1);
-                            }
-                            KeyCode::Enter => {
-                                let commands =
-                                    crate::tui::state::get_palette_commands(&state.composer);
-                                let cmd = if let Some((c, _)) = commands.get(*selected_idx) {
-                                    c.clone()
-                                } else {
-                                    String::new()
-                                };
-                                let cmd_string = cmd;
-                                state.overlay_state = crate::tui::state::OverlayState::None;
-                                state.composer.clear();
-                                state.composer_cursor = 0;
-                                // Need to manually execute command
-                                execute_command_string(state, cmd_string, tx, &cfg, thread_manager);
-                            }
-                            KeyCode::Backspace => {
-                                // If they backspace past 0, close overlay. Else pop char from composer.
-                                if state.composer.is_empty() {
-                                    state.overlay_state = crate::tui::state::OverlayState::None;
-                                } else {
-                                    state.composer.pop();
-                                    state.composer_cursor = state.composer.chars().count();
-                                    if state.composer.is_empty() {
-                                        state.overlay_state = crate::tui::state::OverlayState::None;
-                                    } else if let crate::tui::state::OverlayState::CommandPalette { query, selected_idx } = &mut state.overlay_state {
-                                        *query = state.composer.clone();
-                                        *selected_idx = 0; // reset selection
-                                    }
-                                }
-                            }
-                            KeyCode::Char(c) => {
-                                // Let normal typing carry into composer
-                                insert_char_at_cursor(state, c);
-                                if let crate::tui::state::OverlayState::CommandPalette {
-                                    query,
-                                    selected_idx,
-                                } = &mut state.overlay_state
-                                {
-                                    *query = state.composer.clone();
-                                    *selected_idx = 0; // reset selection
-                                }
-                            }
-                            KeyCode::Tab => {
-                                handle_tab_completion(state);
-                                if let crate::tui::state::OverlayState::CommandPalette {
-                                    query,
-                                    selected_idx,
-                                } = &mut state.overlay_state
-                                {
-                                    *query = state.composer.clone();
-                                    *selected_idx = 0; // reset selection
-                                }
+                            crate::tui::component::TuiAction::FocusNext => {
+                                state.focus = crate::tui::state::Focus::History;
                             }
                             _ => {}
                         }
-                        continue; // Do not pass modal keys through
-                    }
-
-                    match key.code {
-                        // ── Ctrl+J: newline in composer ──────────────────────
-                        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            insert_char_at_cursor(state, '\n');
-                        }
-
-                        // ── Ctrl+L: clear screen ─────────────────────────────
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            state.history.clear();
-                            state.scroll_offset = 0;
-                        }
-
-                        // ── Ctrl+U: clear composer line ──────────────────────
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            state.composer.clear();
-                            state.composer_cursor = 0;
-                        }
-
-                        // ── Enter: submit ────────────────────────────────────
-                        KeyCode::Enter => {
-                            handle_enter(state, tx, &cfg, thread_manager);
-                        }
-
-                        // ── Up/Down: input history ───────────────────────────
-                        KeyCode::Up if !state.input_history.is_empty() => {
-                            let idx = match state.input_history_idx {
-                                Some(i) => i.saturating_sub(1),
-                                None => state.input_history.len() - 1,
-                            };
-                            state.input_history_idx = Some(idx);
-                            state.composer = state.input_history[idx].clone();
-                            state.composer_cursor = state.composer.chars().count();
-                        }
-                        KeyCode::Down => {
-                            if let Some(idx) = state.input_history_idx {
-                                let next = idx + 1;
-                                if next >= state.input_history.len() {
-                                    state.input_history_idx = None;
-                                    state.composer.clear();
-                                    state.composer_cursor = 0;
-                                } else {
-                                    state.input_history_idx = Some(next);
-                                    state.composer = state.input_history[next].clone();
-                                    state.composer_cursor = state.composer.chars().count();
-                                }
-                            }
-                        }
-
-                        // ── Left/Right: cursor movement ──────────────────────
-                        KeyCode::Left => {
-                            state.composer_cursor = state.composer_cursor.saturating_sub(1);
-                        }
-                        KeyCode::Right => {
-                            let len = state.composer.chars().count();
-                            if state.composer_cursor < len {
-                                state.composer_cursor += 1;
-                            }
-                        }
-
-                        // ── Text input ───────────────────────────────────────
-                        KeyCode::Char(c) => {
-                            insert_char_at_cursor(state, c);
-                            if state.composer.starts_with('/') {
-                                state.overlay_state =
-                                    crate::tui::state::OverlayState::CommandPalette {
-                                        query: state.composer.clone(),
-                                        selected_idx: 0,
-                                    };
-                            }
-                        }
-                        KeyCode::Backspace if state.composer_cursor > 0 => {
-                            let idx = state.composer_cursor - 1;
-                            let mut chars: Vec<char> = state.composer.chars().collect();
-                            chars.remove(idx);
-                            state.composer = chars.into_iter().collect();
-                            state.composer_cursor -= 1;
-                        }
-                        KeyCode::Delete => {
-                            let chars: Vec<char> = state.composer.chars().collect();
-                            if state.composer_cursor < chars.len() {
-                                let mut new_chars = chars;
-                                new_chars.remove(state.composer_cursor);
-                                state.composer = new_chars.into_iter().collect();
-                            }
-                        }
-                        KeyCode::Tab => {
-                            handle_tab_completion(state);
-                        }
-                        _ => {}
                     }
                 }
-                Event::Paste(text) => {
-                    for c in text.chars() {
-                        if c != '\r' {
-                            insert_char_at_cursor(state, c);
-                        }
+                Event::Paste(text)
+                    // Route Paste to the focused component.
+                    if state.focus == crate::tui::state::Focus::Composer => {
+                        use crate::tui::component::Component;
+                        let _ = composer_comp.handle_event(&Event::Paste(text), state);
                     }
-                }
                 _ => {}
             }
         }
@@ -959,7 +848,7 @@ fn execute_command_string(
             });
             execute_shell_command(bash_cmd, tx.clone());
         } else {
-            state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd);
+            state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd, 0);
         }
 
 

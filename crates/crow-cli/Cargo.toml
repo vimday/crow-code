@@ -26,6 +26,7 @@ crow-mcp = { version = "0.1.0", path = "../crow-mcp" }
 reqwest = { version = "0.13.2", features = ["default-tls"] }
 chrono = "0.4.44"
 ratatui = "0.26.1"
+tui-textarea = "0.4.0"
 crossterm = "0.27.0"
 rustyline = "14.0"
 indicatif = "0.17.8"

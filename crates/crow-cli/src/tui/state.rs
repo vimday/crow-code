@@ -94,13 +94,14 @@ impl CancellationToken {
 #[derive(Clone)]
 pub enum ApprovalState {
     None,
-    PendingCommand(String),
+    PendingCommand(String, usize),
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub enum OverlayState {
-    None,
-    CommandPalette { query: String, selected_idx: usize },
+pub enum Focus {
+    Composer,
+    Explorer,
+    History,
 }
 
 pub struct AppState {
@@ -129,7 +130,7 @@ pub struct AppState {
     pub allowed_safe_patterns: std::collections::HashSet<String>,
 
     // TUI Modal Overlay
-    pub overlay_state: OverlayState,
+
 
     // Quit state (Codex-style: Ctrl+C twice to quit)
     pub last_ctrl_c: Option<Instant>,
@@ -140,6 +141,7 @@ pub struct AppState {
     pub workspace_name: String,
     pub git_branch: String,
     pub is_dirty: bool,
+    pub focus: Focus,
 
     // Incremental Markdown Streaming (Yomi-inspired)
     pub stream_state: crate::render::MarkdownStreamState,
@@ -164,13 +166,14 @@ impl AppState {
             task_queue: std::collections::VecDeque::new(),
             approval_state: ApprovalState::None,
             allowed_safe_patterns: std::collections::HashSet::new(),
-            overlay_state: OverlayState::None,
+
             last_ctrl_c: None,
             model_info,
             write_mode,
             workspace_name,
             git_branch: "detecting...".into(),
             is_dirty: false,
+            focus: Focus::Composer,
             stream_state: crate::render::MarkdownStreamState::default(),
         }
     }
