@@ -209,72 +209,6 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
     });
 }
 
-fn handle_tab_completion(state: &mut AppState) {
-    let text = state.composer.clone();
-
-    // Universal file path completion for the last token in the composer.
-    let last_word_idx = text
-        .rfind(|c: char| c.is_whitespace())
-        .map(|idx| idx + 1)
-        .unwrap_or(0);
-    let path_prefix = &text[last_word_idx..];
-
-    if !path_prefix.is_empty() {
-        let mut parent_dir = std::path::Path::new(".");
-        let mut file_prefix = path_prefix;
-
-        if let Some(slash_idx) = path_prefix.rfind('/') {
-            parent_dir = std::path::Path::new(&path_prefix[..=slash_idx]);
-            file_prefix = &path_prefix[slash_idx + 1..];
-            if parent_dir.as_os_str().is_empty() {
-                parent_dir = std::path::Path::new("/");
-            }
-        }
-
-        if let Ok(entries) = std::fs::read_dir(parent_dir) {
-            let mut matches = Vec::new();
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(file_prefix) {
-                    if entry.path().is_dir() {
-                        matches.push(format!("{name}/"));
-                    } else {
-                        matches.push(name);
-                    }
-                }
-            }
-
-            if matches.len() == 1 {
-                let parent_str = parent_dir.to_string_lossy();
-                let parent_part = if parent_str == "." || parent_str == "./" {
-                    String::new()
-                } else {
-                    parent_str.to_string()
-                };
-
-                let new_text = format!("{}{}{}", &text[..last_word_idx], parent_part, matches[0]);
-
-                state.composer = new_text;
-                state.composer_cursor = state.composer.chars().count();
-                return;
-            }
-        }
-    }
-
-    // Normal text mode fallback: insert 4 spaces if no completion match
-    for _ in 0..4 {
-        insert_char_at_cursor(state, ' ');
-    }
-}
-
-fn insert_char_at_cursor(state: &mut AppState, c: char) {
-    let mut chars: Vec<char> = state.composer.chars().collect();
-    // Clamp cursor, just in case
-    let cursor = state.composer_cursor.min(chars.len());
-    chars.insert(cursor, c);
-    state.composer = chars.into_iter().collect();
-    state.composer_cursor += 1;
-}
 
 async fn run_tui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -428,6 +362,14 @@ async fn run_tui_loop(
 
 
                     // ── Global Hotkeys ─────────────────────────────
+                    if key.code == KeyCode::PageUp {
+                        state.scroll_offset = state.scroll_offset.saturating_add(5);
+                        continue;
+                    }
+                    if key.code == KeyCode::PageDown {
+                        state.scroll_offset = state.scroll_offset.saturating_sub(5);
+                        continue;
+                    }
                     if key.code == KeyCode::Tab {
                         if state.focus == crate::tui::state::Focus::Composer {
                             state.focus = crate::tui::state::Focus::History;
