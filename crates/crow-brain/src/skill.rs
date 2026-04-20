@@ -25,8 +25,45 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub triggers: Vec<String>,
+    /// Environment variables required by this skill (codex pattern).
+    /// The system will check these are set before injecting the skill.
+    #[serde(default)]
+    pub env_dependencies: Vec<String>,
+    /// Scope level for priority ordering during skill resolution.
+    #[serde(default)]
+    pub scope: SkillScope,
     #[serde(skip)]
     pub source_path: PathBuf,
+}
+
+/// Skill scope (codex pattern: User > Repo > System priority ordering).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillScope {
+    /// User-defined skills (highest priority)
+    User,
+    /// Repository-scoped skills
+    #[default]
+    Repo,
+    /// System/built-in skills (lowest priority)
+    System,
+}
+
+/// Tracks how a skill was invoked for analytics (codex pattern).
+#[derive(Debug, Clone)]
+pub struct SkillInvocation {
+    pub skill_name: String,
+    pub invocation_type: InvocationType,
+    pub timestamp: std::time::Instant,
+}
+
+/// How a skill was triggered (codex pattern).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationType {
+    /// User explicitly requested the skill
+    Explicit,
+    /// System auto-detected the skill from context
+    Implicit,
 }
 
 /// Plugin descriptor for loading skills from external plugins.
@@ -45,6 +82,10 @@ struct SkillFrontmatter {
     description: String,
     #[serde(default)]
     triggers: Vec<String>,
+    #[serde(default)]
+    env_dependencies: Vec<String>,
+    #[serde(default)]
+    scope: SkillScope,
 }
 
 /// Skill loader that scans directories for SKILL.md files
@@ -142,6 +183,8 @@ impl SkillLoader {
             name: skill_name,
             description: frontmatter.description,
             triggers: frontmatter.triggers,
+            env_dependencies: frontmatter.env_dependencies,
+            scope: frontmatter.scope,
             source_path: path.to_path_buf(),
         })
     }
@@ -291,9 +334,57 @@ impl SkillLoader {
             name: skill_name,
             description: frontmatter.description,
             triggers: frontmatter.triggers,
+            env_dependencies: frontmatter.env_dependencies,
+            scope: frontmatter.scope,
             source_path: path.to_path_buf(),
         })
     }
+}
+
+// ── Skill Resolution (Codex-inspired) ────────────────────────────────────────
+
+/// Check if a skill's environment dependencies are satisfied.
+/// Returns a list of missing env var names (codex pattern).
+pub fn resolve_skill_dependencies(skill: &Skill) -> Vec<String> {
+    skill
+        .env_dependencies
+        .iter()
+        .filter(|var| std::env::var(var).is_err())
+        .cloned()
+        .collect()
+}
+
+/// Filter skills to only those whose env dependencies are satisfied.
+pub fn filter_available_skills(skills: &[Skill]) -> Vec<&Skill> {
+    skills
+        .iter()
+        .filter(|s| resolve_skill_dependencies(s).is_empty())
+        .collect()
+}
+
+/// Resolve skills that should be implicitly injected for a given user message.
+/// Matches skill triggers against the message content (codex pattern).
+/// Returns skills sorted by scope priority (User > Repo > System).
+pub fn resolve_skills_for_context<'a>(skills: &'a [Skill], user_message: &str) -> Vec<&'a Skill> {
+    let msg_lower = user_message.to_ascii_lowercase();
+    let mut matched: Vec<&Skill> = skills
+        .iter()
+        .filter(|s| resolve_skill_dependencies(s).is_empty())
+        .filter(|s| {
+            s.triggers
+                .iter()
+                .any(|trigger| msg_lower.contains(&trigger.to_ascii_lowercase()))
+        })
+        .collect();
+
+    // Sort by scope priority: User > Repo > System
+    matched.sort_by_key(|s| match s.scope {
+        SkillScope::User => 0,
+        SkillScope::Repo => 1,
+        SkillScope::System => 2,
+    });
+
+    matched
 }
 
 #[cfg(test)]
