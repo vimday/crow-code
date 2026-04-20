@@ -195,12 +195,14 @@ impl SerialCrucible<'_> {
         let compiled_plan = if let Some(p) = precompiled_plan {
             p
         } else {
+            let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
             epistemic::run_epistemic_loop(
                 self.compiler,
                 messages,
                 self.frozen_root,
                 self.mcp_manager,
                 observer,
+                file_state_store,
             )
             .await?
         };

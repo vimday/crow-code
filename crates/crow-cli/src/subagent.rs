@@ -52,12 +52,14 @@ impl SubagentWorker {
             parent: parent_observer,
         };
 
+        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
         crate::epistemic::run_epistemic_loop(
             &self.compiler,
             &mut sub_messages,
             frozen_root,
             mcp_manager,
             &mut observer,
+            file_state_store,
         )
         .await
     }

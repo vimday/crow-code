@@ -47,6 +47,7 @@ pub async fn run_epistemic_loop(
     frozen_root: &Path,
     mcp_manager: Option<&crate::mcp::McpManager>,
     observer: &mut dyn EventHandler,
+    file_state_store: std::sync::Arc<crate::file_state::FileStateStore>,
 ) -> Result<IntentPlan> {
     let mut epistemic_step = 0;
     // Track action signatures to detect duplicate recon loops.
@@ -102,8 +103,30 @@ pub async fn run_epistemic_loop(
 
         let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {e:?}"))?;
 
-        // If it's a SubmitPlan, return immediately before pushing to history.
+        // If it's a SubmitPlan, intercept to enforce hallucination guard before returning.
         if let AgentAction::SubmitPlan { plan } = action {
+            // Anti-Hallucination Guard: Ensure all modified files have been recorded.
+            if let Some(bad_path) = plan.operations.iter().find_map(|op| {
+                if let crow_patch::EditOp::Modify { path, .. } = op {
+                    if !file_state_store.has_recorded(path.as_str()) {
+                        return Some(path.as_str().to_string());
+                    }
+                }
+                None
+            }) {
+                observer.handle_event(AgentEvent::Log(format!(
+                    "    ⚠️  Hallucination Guard: Attempted to modify unread file: `{bad_path}`. Rejecting plan."
+                )));
+                messages.push_assistant(serde_json::to_string(&AgentAction::SubmitPlan { plan })?);
+                messages.push_user(format!(
+                    "[SYSTEM: HALLUCINATION GUARD]\n\
+                     You attempted to modify the file `{bad_path}`, but you have not read it during this turn.\n\
+                     You MUST use the `read_files` action to examine the current contents of a file BEFORE you submit a patch for it.\n\
+                     Output a `read_files` action first to read `{bad_path}`."
+                ));
+                continue;
+            }
+
             observer.handle_event(AgentEvent::StateChanged {
                 from: "Streaming".into(),
                 to: "PlanReady".into(),
@@ -153,6 +176,12 @@ pub async fn run_epistemic_loop(
                 let file_contents = read_files_to_context(&paths, frozen_root);
                 let path_strings: Vec<String> =
                     paths.iter().map(|s| s.as_str().to_string()).collect();
+                
+                // Record state to pass the hallucination guard for future modifications.
+                for p in paths.iter() {
+                    file_state_store.record(p.as_str(), 1); 
+                }
+                
                 messages.push_file_read(&path_strings, file_contents);
             }
             AgentAction::Recon { tool, rationale } => {

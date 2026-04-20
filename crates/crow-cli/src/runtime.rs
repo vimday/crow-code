@@ -142,6 +142,7 @@ impl SessionRuntime {
         messages: &mut crate::context::ConversationManager,
         observer: &mut dyn crate::event::EventHandler,
     ) -> Result<SnapshotId> {
+        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
 
         let profile = crate::scan_workspace(&self.workspace).map_err(|e| anyhow::anyhow!(e))?;
@@ -212,6 +213,7 @@ impl SessionRuntime {
             &frozen_root, // FROZEN SNAPSHOT — not live workspace
             Some(&self.mcp_manager),
             observer,
+            std::sync::Arc::clone(&file_state_store),
         )
         .await?;
 
@@ -415,12 +417,14 @@ impl SessionRuntime {
         messages.push_user(format!("Task:\n{prompt}"));
 
         let mut obs = crate::event::CliEventHandler::default();
+        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
         let compiled_plan = crate::epistemic::run_epistemic_loop(
             &self.compiler,
             &mut messages,
             &frozen_root,
             Some(&self.mcp_manager),
             &mut obs,
+            std::sync::Arc::clone(&file_state_store),
         )
         .await?;
 
@@ -623,12 +627,14 @@ impl SessionRuntime {
         println!("  Entering crucible loop...\n");
 
         let mut obs = crate::event::CliEventHandler::default();
+        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
         let compiled_plan = crate::epistemic::run_epistemic_loop(
             &self.compiler,
             &mut messages,
             &frozen_root,
             Some(&self.mcp_manager),
             &mut obs,
+            std::sync::Arc::clone(&file_state_store),
         )
         .await?;
 

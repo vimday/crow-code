@@ -227,9 +227,10 @@ pub(crate) async fn run_mcts_crucible(
     observer.handle_event(crate::event::AgentEvent::Log(
         "Entering Epistemic Recon Loop (MCTS Pre-exploration)...".into(),
     ));
+    let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
     let baseline_plan = match tokio::time::timeout(
         std::time::Duration::from_secs(180),
-        epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, observer),
+        epistemic::run_epistemic_loop(compiler, messages, frozen_root, mcp_manager, observer, file_state_store),
     )
     .await
     {

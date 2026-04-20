@@ -42,9 +42,19 @@ pub struct Cell {
 // ── Cancellation Token ───────────────────────────────────────────────────────
 
 /// Shared cancellation flag for interrupting a running agent turn.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CancellationToken {
-    inner: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    inner: std::sync::Arc<arc_swap::ArcSwap<tokio_util::sync::CancellationToken>>,
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self {
+            inner: std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                tokio_util::sync::CancellationToken::new(),
+            ))),
+        }
+    }
 }
 
 impl CancellationToken {
@@ -53,18 +63,29 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        self.inner.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.inner.load().cancel();
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.inner.load(std::sync::atomic::Ordering::SeqCst)
+        self.inner.load().is_cancelled()
     }
 
-    /// Reset the cancellation flag for a new turn.
-    /// Without this, a cancelled turn leaves the flag permanently set,
-    /// causing all subsequent turns to see a stale cancellation.
-    pub fn reset(&self) {
-        self.inner.store(false, std::sync::atomic::Ordering::SeqCst);
+    /// Retrieve the underlying tokio cancellation token for native loop awaiting.
+    pub fn runtime_token(&self) -> tokio_util::sync::CancellationToken {
+        (**self.inner.load()).clone()
+    }
+
+    /// Safely rotation mechanism utilizing ArcSwap.
+    /// If the token is already canceled, atomically spawn and swap in a fresh token
+    /// allowing legacy listeners to gracefully fall off rather than deadlocking.
+    pub fn reset_if_cancelled(&self) {
+        if self.is_cancelled() {
+            self.inner.store(std::sync::Arc::new(tokio_util::sync::CancellationToken::new()));
+        }
+    }
+
+    pub fn force_reset(&self) {
+        self.inner.store(std::sync::Arc::new(tokio_util::sync::CancellationToken::new()));
     }
 }
 

@@ -8,6 +8,7 @@ mod diff;
 mod epistemic;
 pub mod epistemic_ui;
 pub mod event;
+pub mod file_state;
 mod evidence_report;
 mod legacy_god;
 mod mcp;
