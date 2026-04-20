@@ -4,6 +4,12 @@
 
 If you want an open-source, evidence-driven autonomous coding developer workstation with a dynamic ratatui-powered TUI, non-blocking agentic swarms, and pure sandboxed verifications, you are in the right place.
 
+## Core Capabilities
+- **Monte Carlo Tree Search (MCTS) Crucible**: Parallel execution and validation of generative patching against an immutable snapshot representation of your code.
+- **Micro-Compaction Memory Pipeline**: Retains cognitive coherence over long sessions by asynchronously rewriting and pruning older conversation history to strictly abide by tokenizer limits.
+- **Implicit Skill Resolution**: Dynamically ingests `SKILL.md` configurations scoped to your workspace and resolves matching capabilities intelligently against unstructured prompts.
+- **AutoDream Consolidation**: Spawns isolated long-term structural processing daemons to compress temporal execution traces into rigid architectural invariants for downstream sessions.
+
 ---
 
 ## Quickstart

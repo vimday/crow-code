@@ -245,6 +245,7 @@ impl IntentCompiler {
                             "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {reason}\n\nPlease fix and resubmit."
                         )));
                         // Use a synthetic serde error for the error list
+                        #[allow(clippy::unwrap_used)]
                         errors.push(
                             serde_json::from_str::<()>(&format!("\"validation: {reason}\""))
                                 .unwrap_err(),

@@ -220,12 +220,12 @@ pub async fn execute(
             // Both branches allocate a small temp buffer and return
             // the data by value, avoiding cross-borrow issues.
             v = async {
-                let pipe = stdout_pipe.as_mut().unwrap();
+                let pipe = stdout_pipe.as_mut().expect("stdout is checked by !stdout_done");
                 let mut tmp = vec![0u8; to_read];
                 pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
             }, if !stdout_done => Chunk::Stdout(v),
             v = async {
-                let pipe = stderr_pipe.as_mut().unwrap();
+                let pipe = stderr_pipe.as_mut().expect("stderr is checked by !stderr_done");
                 let mut tmp = vec![0u8; to_read];
                 pipe.read(&mut tmp).await.map(|n| { tmp.truncate(n); tmp })
             }, if !stderr_done => Chunk::Stderr(v),

@@ -70,8 +70,7 @@ impl<'a> AutoDream<'a> {
 
         // 2. Gather: Pull events from ledger
         let ledger_content = std::fs::read_to_string(&ledger_path)?;
-        let lines: Vec<&str> = ledger_content.lines().collect();
-        let event_count = lines.len();
+        let event_count = ledger_content.lines().count();
 
         println!("  🌙 [AutoDream] Collected {event_count} raw events from the ledger.");
 

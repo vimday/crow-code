@@ -30,7 +30,9 @@ Our TUI is built on `ratatui` and relies on semantic, extension-driven styling t
   - `"text".cyan().bold()`
   - `"text".dark_gray()`
   - `vec![...].into()` instead of manual `Span` arrays.
-- **Palette**: The TUI enforces a strict and muted color palette (`ACCENT_CYAN`, `DIM_GRAY`, `VERDICT_BLUE`, etc.) defined in `crates/crow-cli/src/tui/render.rs`. Stick to these definitions rather than passing anonymous RGB colors.
+- **Dynamic Theme System**: The TUI runs an adaptive semantic palette via `ThemeConfig` (defined in `crates/crow-cli/src/tui/theme.rs`). It employs ITU-R BT.601 luminance detection via the `COLORFGBG` heuristic to automatically render light or dark modes.
+  - Rely on theme constants like `theme.accent_user`, `theme.accent_system`, `theme.surface` rather than passing raw RGB colors. 
+  - Ensure background blending uses `blend()` helpers instead of crude overrides.
 
 ## 4. Workflows & Committing
 - When introducing cross-workspace UI changes, update `walkthrough.md` or similar documentation inside the artifact tracking directories.

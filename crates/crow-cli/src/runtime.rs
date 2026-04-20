@@ -51,6 +51,74 @@ impl SessionRuntime {
         })
     }
 
+    /// Materializes a frozen copy of the workspace to prevent time-of-check divergence.
+    async fn materialize_baseline(&self, profile: &crow_probe::ProjectProfile) -> Result<crow_materialize::SandboxHandle> {
+        let baseline_mat_config = MaterializeConfig {
+            source: self.workspace.clone(),
+            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
+            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
+            allow_hardlinks: false,
+        };
+        tokio::task::spawn_blocking(move || materialize(&baseline_mat_config))
+            .await
+            .context("Materialization task panicked")?
+            .context("Failed to materialize baseline snapshot")
+    }
+
+    /// Builds a semantic map of the codebase, hitting memory cache if the snapshot hash hasn't mutated.
+    fn build_repo_map_with_cache(
+        &self,
+        cfg: &CrowConfig,
+        snapshot_id: &SnapshotId,
+        frozen_root: &std::path::Path,
+    ) -> Result<Arc<RepoMap>> {
+        let mut repo_map_cloned = None;
+        if let Some((cached_snap, map)) = self.cached_repo_map.lock().expect("Cache lock poisoned").as_ref() {
+            if cached_snap == snapshot_id {
+                repo_map_cloned = Some(Arc::clone(map));
+            }
+        }
+
+        match repo_map_cloned {
+            Some(map) => Ok(map),
+            None => {
+                let map = cfg
+                    .build_repo_map_for(frozen_root)
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .context("Failed to build repo map from frozen baseline")?;
+                let arc_map = Arc::new(map);
+                *self.cached_repo_map.lock().expect("Cache lock poisoned") =
+                    Some((snapshot_id.clone(), Arc::clone(&arc_map)));
+                Ok(arc_map)
+            }
+        }
+    }
+
+    /// Discovers system and repository skills, validates dependencies, and implicitly matches them to the given prompt.
+    fn load_and_resolve_skills(&self, prompt: &str, observer: &mut dyn crate::event::EventHandler) -> Vec<crow_brain::skill::Skill> {
+        let mut skill_dirs = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            skill_dirs.push(home.join(".crow").join("skills"));
+        }
+        skill_dirs.push(self.workspace.join(".crow").join("skills"));
+
+        let skill_loader = crow_brain::skill::SkillLoader::new(skill_dirs);
+        let loaded_skills = match skill_loader.load_all() {
+            Ok(skills) => skills,
+            Err(e) => {
+                observer.handle_event(crate::event::AgentEvent::Log(format!(
+                    "    ⚠️ Skill loading failed: {e}"
+                )));
+                Vec::new()
+            }
+        };
+
+        crow_brain::skill::resolve_skills_for_context(&loaded_skills, prompt)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     /// Snapshot-safe execution turn.
     /// Freezes the workspace baseline first, then runs the epistemic loop against
     /// the frozen snapshot. This ensures planning context and verification baseline
@@ -88,47 +156,13 @@ impl SessionRuntime {
         };
 
         // ── Step 1: Freeze baseline BEFORE planning ──
-        // This ensures the epistemic loop reads from the same snapshot that
-        // will be used for verification. No live workspace mutations can
-        // invalidate planning context.
-        let baseline_mat_config = MaterializeConfig {
-            source: self.workspace.clone(),
-            artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
-            skip_patterns: profile.ignore_spec.ignore_patterns.clone(),
-            allow_hardlinks: false,
-        };
-        let frozen_sandbox = tokio::task::spawn_blocking(move || materialize(&baseline_mat_config))
-            .await
-            .context("Materialization task panicked")?
-            .context("Failed to materialize baseline snapshot")?;
-
+        let frozen_sandbox = self.materialize_baseline(&profile).await?;
         let frozen_root = frozen_sandbox.path().to_path_buf();
 
-        // Leverage cached repo_map if snapshot hasn't changed.
-        let mut repo_map_cloned = None;
-        if let Some((cached_snap, map)) = self.cached_repo_map.lock().unwrap().as_ref() {
-            if cached_snap == &snapshot_id {
-                repo_map_cloned = Some(Arc::clone(map));
-            }
-        }
-
         // Build repo map from the FROZEN snapshot, not live workspace
-        let repo_map = match repo_map_cloned {
-            Some(map) => map,
-            None => {
-                let frozen_for_map = frozen_root.clone();
-                let map = cfg
-                    .build_repo_map_for(&frozen_for_map)
-                    .map_err(|e| anyhow::anyhow!(e))
-                    .context("Failed to build repo map from frozen baseline")?;
-                let arc_map = Arc::new(map);
-                *self.cached_repo_map.lock().unwrap() =
-                    Some((snapshot_id.clone(), Arc::clone(&arc_map)));
-                arc_map
-            }
-        };
+        let repo_map = self.build_repo_map_with_cache(cfg, &snapshot_id, &frozen_root)?;
 
-        let _ = self.ledger.lock().unwrap().append(
+        let _ = self.ledger.lock().expect("Ledger lock poisoned").append(
             crow_workspace::ledger::LedgerEvent::SnapshotCreated {
                 id: snapshot_id.clone(),
                 git_hash: snapshot_id.0.clone(),
@@ -136,31 +170,7 @@ impl SessionRuntime {
             },
         );
 
-        let mut skill_dirs = Vec::new();
-        if let Some(home) = dirs::home_dir() {
-            skill_dirs.push(home.join(".crow").join("skills"));
-        }
-        skill_dirs.push(self.workspace.join(".crow").join("skills"));
-
-        let skill_loader = crow_brain::skill::SkillLoader::new(skill_dirs);
-        let loaded_skills = match skill_loader.load_all() {
-            Ok(skills) => skills,
-            Err(e) => {
-                observer.handle_event(crate::event::AgentEvent::Log(format!(
-                    "    ⚠️ Skill loading failed: {e}"
-                )));
-                Vec::new()
-            }
-        };
-
-        // Implicit skill resolution (codex pattern).
-        // Matches triggers against the prompt, checks env dependencies,
-        // and sorts by scope priority (User > Repo > System).
-        let available_skills: Vec<_> =
-            crow_brain::skill::resolve_skills_for_context(&loaded_skills, prompt)
-                .into_iter()
-                .cloned()
-                .collect();
+        let available_skills = self.load_and_resolve_skills(prompt, observer);
 
         let sys_msgs = crate::prompt::PromptBuilder::new()
             .with_repo_map(&repo_map, &snapshot_id)
