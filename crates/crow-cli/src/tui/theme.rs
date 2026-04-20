@@ -83,6 +83,93 @@ impl Default for ThemeConfig {
     }
 }
 
+impl ThemeConfig {
+    /// Light theme for terminals with light backgrounds (codex pattern).
+    pub fn light() -> Self {
+        Self {
+            background: Color::Reset,
+            surface: Color::Reset,
+
+            text_primary: hex("#1A1A2E"),
+            text_secondary: hex("#5A5A6F"),
+            text_muted: hex("#7A7A8F"),
+
+            accent_user: hex("#3A3A4F"),
+            user_msg_bg: hex("#E8E8F0"),
+            accent_system: hex("#0078D4"),
+            accent_success: hex("#107C41"),
+            accent_warning: hex("#C47F00"),
+            accent_error: hex("#D13438"),
+
+            code_bg: hex("#F0F0F5"),
+            code_fg: hex("#0078D4"),
+            code_border: hex("#C0C0CF"),
+
+            border: hex("#C0C0CF"),
+            border_active: hex("#5A5A6F"),
+            divider: hex("#C0C0CF"),
+        }
+    }
+}
+
+// ── Terminal Color Detection (Codex-inspired) ────────────────────────────────
+
+/// Returns true if the given RGB background color is "light" (codex pattern).
+/// Uses ITU-R BT.601 luminance formula.
+pub fn is_light_background(bg: (u8, u8, u8)) -> bool {
+    let (r, g, b) = bg;
+    let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    y > 128.0
+}
+
+/// Alpha-blend a foreground color over a background (codex pattern).
+#[allow(dead_code)]
+pub fn blend(fg: (u8, u8, u8), bg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
+    let r = (fg.0 as f32 * alpha + bg.0 as f32 * (1.0 - alpha)) as u8;
+    let g = (fg.1 as f32 * alpha + bg.1 as f32 * (1.0 - alpha)) as u8;
+    let b = (fg.2 as f32 * alpha + bg.2 as f32 * (1.0 - alpha)) as u8;
+    (r, g, b)
+}
+
+/// Auto-detect the terminal background color and select an appropriate theme.
+/// Falls back to dark theme if detection fails (most common terminal type).
+pub fn auto_detect_theme() -> ThemeConfig {
+    if let Some(is_light) = detect_terminal_is_light() {
+        if is_light {
+            return ThemeConfig::light();
+        }
+    }
+    ThemeConfig::default()
+}
+
+/// Detect if terminal has a light background using environment heuristics.
+/// Uses `COLORFGBG` (set by most terminals: "fg;bg" where bg > 8 = light)
+/// and `TERMINAL_THEME` (explicit override).
+fn detect_terminal_is_light() -> Option<bool> {
+    // Explicit override via env var
+    if let Ok(theme) = std::env::var("CROW_THEME") {
+        return match theme.to_ascii_lowercase().as_str() {
+            "light" => Some(true),
+            "dark" => Some(false),
+            _ => None,
+        };
+    }
+
+    // COLORFGBG is set by many terminals (xterm, iTerm2, etc.)
+    // Format: "foreground;background" where values are ANSI color indices
+    // Background index > 8 typically indicates a light background
+    if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
+        if let Some(bg_str) = colorfgbg.rsplit(';').next() {
+            if let Ok(bg_idx) = bg_str.trim().parse::<u8>() {
+                // ANSI colors 0-6 are dark, 7+ and 9+ are light
+                return Some(bg_idx >= 7 && bg_idx != 8);
+            }
+        }
+    }
+
+    None // Can't determine — use default (dark)
+}
+
 // ── Global thread-safe theme ─────────────────────────────────────────────────
 
 static THEME_CONFIG: LazyLock<RwLock<ThemeConfig>> =
@@ -98,6 +185,11 @@ pub fn set_theme(config: ThemeConfig) {
     if let Ok(mut theme) = THEME_CONFIG.write() {
         *theme = config;
     }
+}
+
+/// Initialize theme with auto-detection. Call once at TUI startup.
+pub fn init_theme() {
+    set_theme(auto_detect_theme());
 }
 
 /// Reset to default theme.

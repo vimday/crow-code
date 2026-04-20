@@ -53,6 +53,10 @@ fn refresh_git_state(state: &mut AppState, workspace: &std::path::Path) {
 }
 
 pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
+    // Auto-detect terminal background (light/dark) and set theme (codex pattern).
+    // Must happen before entering alternate screen which may change terminal state.
+    theme::init_theme();
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -582,17 +586,14 @@ async fn run_tui_loop(
                     handle_agent_event(state, ev);
                 }
                 TuiMessage::TurnComplete(success) => {
-                    // Flush any remaining stream buffer
+                    // Flush any remaining stream buffer (JSON filtering is built into flush())
                     let renderer = crate::render::TerminalRenderer::new();
                     if let Some(flushed) = state.stream_state.flush(&renderer) {
-                        let trimmed = flushed.trim();
-                        if !(trimmed.starts_with('{') && trimmed.contains("\"action\"")) {
-                            for line in flushed.lines() {
-                                state.history.push(Cell {
-                                    kind: CellKind::AgentMessage,
-                                    payload: line.to_string(),
-                                });
-                            }
+                        for line in flushed.lines() {
+                            state.history.push(Cell {
+                                kind: CellKind::AgentMessage,
+                                payload: line.to_string(),
+                            });
                         }
                     }
                     state.active_action = None;
@@ -980,41 +981,31 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_action = Some("Thinking...".into());
         }
         AgentEvent::StreamChunk(chunk) => {
-            // Incremental markdown streaming: accumulate chunks and flush
-            // rendered ANSI at safe paragraph/fence boundaries.
+            // Newline-gated markdown streaming (codex pattern).
+            // JSON plan filtering is built into push().
             let renderer = crate::render::TerminalRenderer::new();
             if let Some(rendered) = state.stream_state.push(&renderer, &chunk) {
-                // Filter: suppress raw JSON plan output from display.
-                // The LLM emits JSON like {"action":"submit_plan",...} as text.
-                // The rationale will be emitted later via AgentEvent::Markdown.
-                let trimmed = rendered.trim();
-                if trimmed.starts_with('{') && trimmed.contains("\"action\"") {
-                    // Silently skip — this is internal plan JSON, not user-facing
-                } else {
-                    for line in rendered.lines() {
-                        state.history.push(Cell {
-                            kind: CellKind::AgentMessage,
-                            payload: line.to_string(),
-                        });
-                    }
+                for line in rendered.lines() {
+                    state.history.push(Cell {
+                        kind: CellKind::AgentMessage,
+                        payload: line.to_string(),
+                    });
                 }
             }
         }
         AgentEvent::Markdown(md) => {
-            // Flush any remaining stream buffer before rendering final markdown
+            // Flush stream buffer, then render final markdown block.
+            // JSON filtering is built into flush().
             let renderer = crate::render::TerminalRenderer::new();
             if let Some(flushed) = state.stream_state.flush(&renderer) {
-                let trimmed = flushed.trim();
-                if !(trimmed.starts_with('{') && trimmed.contains("\"action\"")) {
-                    for line in flushed.lines() {
-                        state.history.push(Cell {
-                            kind: CellKind::AgentMessage,
-                            payload: line.to_string(),
-                        });
-                    }
+                for line in flushed.lines() {
+                    state.history.push(Cell {
+                        kind: CellKind::AgentMessage,
+                        payload: line.to_string(),
+                    });
                 }
             }
-            // Then render the final markdown block
+            // Render the final markdown block
             let rendered = renderer.render_markdown(&md);
             for line in rendered.lines() {
                 state.history.push(Cell {

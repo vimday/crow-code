@@ -10,17 +10,18 @@ pub struct CompactorConfig {
     pub context_window: usize,
     /// Number of recent turns to preserve exactly during compaction
     pub preservation_turns: usize,
+    /// Maximum retries for LLM-based compaction (codex pattern: backoff on failure)
+    pub max_retries: usize,
 }
 
 impl Default for CompactorConfig {
     fn default() -> Self {
         Self {
-            // ~80% of 128K context window (yomi pattern: DEFAULT_COMPACT_THRESHOLD)
-            // Previous 16K value was far too aggressive — system prompt alone
-            // exceeds 16K tokens causing compaction on the very first message.
+            // ~80% of 128K context window (codex pattern: DEFAULT_COMPACT_THRESHOLD)
             max_history_tokens: 80_000,
             context_window: 131_072, // 128K config bounds
             preservation_turns: 4,   // Keep enough recent context for coherent reasoning
+            max_retries: 2,          // Retry twice on transient LLM failures
         }
     }
 }
@@ -30,6 +31,7 @@ pub struct Compactor {
 }
 
 const CLEARED_MARKER: &str = "[Old tool result content cleared]";
+const SUMMARY_PREFIX: &str = "[COMPACTED HISTORY SUMMARY]";
 
 impl Compactor {
     pub fn new(config: CompactorConfig) -> Self {
@@ -41,6 +43,11 @@ impl Compactor {
         let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
         let estimated_tokens = total_chars / 4;
         estimated_tokens > self.config.max_history_tokens
+    }
+
+    /// Approximate token count for a single message (codex utility pattern).
+    pub fn approx_token_count(text: &str) -> usize {
+        text.len() / 4
     }
 
     /// Phase 1: Micro-compaction (free, no API call).
@@ -60,7 +67,8 @@ impl Compactor {
         for (idx, msg) in messages.iter().enumerate() {
             // Only clear old tool-result-like messages outside the preservation window
             if idx < keep_start
-                && msg.content.starts_with("[RECON RESULT]")
+                && (msg.content.starts_with("[RECON RESULT]")
+                    || msg.content.starts_with("[FILE CONTENTS]"))
                 && msg.content != CLEARED_MARKER
             {
                 let mut cleared = msg.clone();
@@ -80,6 +88,7 @@ impl Compactor {
     }
 
     /// Auto-compact: try micro-compaction first, then full LLM summarization.
+    /// Includes retry with exponential backoff (codex pattern).
     pub async fn compact(
         &self,
         messages: &[ChatMessage],
@@ -95,14 +104,42 @@ impl Compactor {
                 return Ok(micro_compacted);
             }
             // Micro wasn't enough — fall through to full compaction on micro result
-            return self.full_compact(&micro_compacted, compiler).await;
+            return self
+                .full_compact_with_retry(&micro_compacted, compiler)
+                .await;
         }
 
-        // Phase 2: Full LLM summarization
-        self.full_compact(messages, compiler).await
+        // Phase 2: Full LLM summarization with retry
+        self.full_compact_with_retry(messages, compiler).await
+    }
+
+    /// Full compaction with exponential backoff retry (codex pattern).
+    async fn full_compact_with_retry(
+        &self,
+        messages: &[ChatMessage],
+        compiler: &Arc<IntentCompiler>,
+    ) -> Result<Vec<ChatMessage>> {
+        let mut last_err = None;
+
+        for attempt in 0..=self.config.max_retries {
+            match self.full_compact(messages, compiler).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_err = Some(e);
+                    if attempt < self.config.max_retries {
+                        // Exponential backoff: 500ms, 1s, 2s...
+                        let delay = std::time::Duration::from_millis(500 * (1 << attempt));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Compaction failed after retries")))
     }
 
     /// Full compaction: summarize old messages via LLM API call.
+    /// Preserves user messages with token budget (codex pattern).
     async fn full_compact(
         &self,
         messages: &[ChatMessage],
@@ -118,13 +155,131 @@ impl Compactor {
             .await
             .context("Failed to run LLM compaction")?;
 
-        let compressed_msg =
-            ChatMessage::assistant(format!("[COMPACTED HISTORY SUMMARY]\n{summary}"));
+        // Codex pattern: preserve user messages from old history with token budget
+        let user_messages = collect_user_messages(old_messages);
 
-        let mut next_messages = Vec::with_capacity(recent_messages.len() + 1);
-        next_messages.push(compressed_msg);
-        next_messages.extend_from_slice(recent_messages);
+        build_compacted_history(&user_messages, &summary, recent_messages)
+    }
+}
 
-        Ok(next_messages)
+/// Collect user messages from old history for preservation during compaction.
+fn collect_user_messages(messages: &[ChatMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .filter(|m| matches!(m.role, crate::compiler::ChatRole::User))
+        .filter(|m| !m.content.starts_with(SUMMARY_PREFIX))
+        .filter(|m| !m.content.starts_with("[SYSTEM"))
+        .map(|m| m.content.clone())
+        .collect()
+}
+
+/// Build compacted history (codex pattern):
+/// 1. Include truncated user messages (token-budget limited)
+/// 2. Summary of old conversation
+/// 3. Recent messages preserved exactly
+fn build_compacted_history(
+    user_messages: &[String],
+    summary: &str,
+    recent_messages: &[ChatMessage],
+) -> Result<Vec<ChatMessage>> {
+    const USER_MSG_TOKEN_BUDGET: usize = 20_000;
+    let mut next_messages = Vec::new();
+
+    // Include recent user messages from old history (token-budget limited, codex pattern)
+    let mut remaining_budget = USER_MSG_TOKEN_BUDGET;
+    let mut selected: Vec<&str> = Vec::new();
+    for msg in user_messages.iter().rev() {
+        let tokens = Compactor::approx_token_count(msg);
+        if tokens <= remaining_budget {
+            selected.push(msg);
+            remaining_budget = remaining_budget.saturating_sub(tokens);
+        } else {
+            break;
+        }
+    }
+    selected.reverse();
+    for msg in selected {
+        next_messages.push(ChatMessage::user(msg));
+    }
+
+    // Add compaction summary
+    next_messages.push(ChatMessage::assistant(format!(
+        "{SUMMARY_PREFIX}\n{summary}"
+    )));
+
+    // Preserve recent messages exactly
+    next_messages.extend_from_slice(recent_messages);
+
+    Ok(next_messages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::ChatMessage;
+
+    #[test]
+    fn micro_compact_clears_old_recon() {
+        let config = CompactorConfig {
+            preservation_turns: 1,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::assistant("[RECON RESULT] some old content"),
+            ChatMessage::user("latest question"),
+        ];
+        let result = compactor.micro_compact(&messages).unwrap();
+        assert_eq!(result[0].content, CLEARED_MARKER);
+        assert_eq!(result[1].content, "latest question");
+    }
+
+    #[test]
+    fn micro_compact_clears_file_contents() {
+        let config = CompactorConfig {
+            preservation_turns: 1,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::assistant("[FILE CONTENTS] big file dump"),
+            ChatMessage::user("question about file"),
+        ];
+        let result = compactor.micro_compact(&messages).unwrap();
+        assert_eq!(result[0].content, CLEARED_MARKER);
+    }
+
+    #[test]
+    fn approx_token_count_works() {
+        assert_eq!(Compactor::approx_token_count("hello world!"), 3);
+        assert_eq!(Compactor::approx_token_count(""), 0);
+    }
+
+    #[test]
+    fn should_compact_respects_threshold() {
+        let config = CompactorConfig {
+            max_history_tokens: 10,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        // 44 chars / 4 = 11 tokens > 10 threshold
+        let messages = vec![ChatMessage::user(
+            "a]".repeat(22), // 44 chars
+        )];
+        assert!(compactor.should_compact(&messages));
+    }
+
+    #[test]
+    fn collect_user_messages_filters_system_and_summaries() {
+        let messages = vec![
+            ChatMessage::user("real question"),
+            ChatMessage::user("[SYSTEM COMPACTION REQUEST] blah"),
+            ChatMessage::user("[COMPACTED HISTORY SUMMARY]\nold stuff"),
+            ChatMessage::user("another real question"),
+        ];
+        let collected = collect_user_messages(&messages);
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected[0], "real question");
+        assert_eq!(collected[1], "another real question");
     }
 }
