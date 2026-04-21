@@ -98,12 +98,16 @@ impl Component for InfoBar {
         // Center: active action + elapsed time + spinner
         let center_spans = if let Some(ref action) = self.active_action {
             let spinner = SPINNER_FRAMES[self.spinner_idx % SPINNER_FRAMES.len()];
-            let elapsed = self.elapsed_secs
+            let elapsed = self
+                .elapsed_secs
                 .map(|s| format!(" {s}s"))
                 .unwrap_or_default();
 
             vec![
-                Span::styled(format!(" {spinner} "), ratatui::style::Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!(" {spinner} "),
+                    ratatui::style::Style::default().fg(Color::Cyan),
+                ),
                 Span::styled(
                     // Truncate action text to fit
                     if action.len() > 30 {
@@ -113,14 +117,20 @@ impl Component for InfoBar {
                     },
                     ratatui::style::Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(elapsed, ratatui::style::Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    elapsed,
+                    ratatui::style::Style::default().fg(Color::DarkGray),
+                ),
             ]
         } else {
-            vec![Span::styled(" Ready", ratatui::style::Style::default().fg(Color::DarkGray))]
+            vec![Span::styled(
+                " Ready",
+                ratatui::style::Style::default().fg(Color::DarkGray),
+            )]
         };
 
-        let center_widget = Paragraph::new(Line::from(center_spans))
-            .block(Block::default().borders(Borders::NONE));
+        let center_widget =
+            Paragraph::new(Line::from(center_spans)).block(Block::default().borders(Borders::NONE));
         f.render_widget(center_widget, chunks[1]);
 
         // Right: token usage gauge (Yomi-style usage bar)

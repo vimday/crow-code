@@ -11,6 +11,15 @@ use ratatui::{
 
 use super::theme::{chars, colors, Styles};
 
+lazy_static::lazy_static! {
+    static ref SYNTAX_SET: syntect::parsing::SyntaxSet = syntect::parsing::SyntaxSet::load_defaults_newlines();
+    static ref THEME_SET: syntect::highlighting::ThemeSet = syntect::highlighting::ThemeSet::load_defaults();
+}
+
+fn translate_syn_style(style: syntect::highlighting::Style) -> Style {
+    Style::default().fg(ratatui::style::Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b))
+}
+
 /// Tracks the state of markdown parsing for incremental rendering.
 #[derive(Debug, Clone, Copy)]
 enum ListState {
@@ -98,6 +107,7 @@ impl StreamingMarkdownRenderer {
         let mut code_language = self.state.code_language.clone();
         let mut list_stack: Vec<ListState> = self.state.list_stack.clone();
         let mut current_style = self.state.current_style;
+        let mut highlighter: Option<syntect::easy::HighlightLines<'_>> = None;
 
         for event in parser {
             match event {
@@ -118,7 +128,16 @@ impl StreamingMarkdownRenderer {
                             current_line = Vec::new();
                         }
                         if let CodeBlockKind::Fenced(lang) = kind {
-                            code_language = Some(lang.to_string());
+                            let lang_str = lang.to_string();
+                            code_language = Some(lang_str.clone());
+                            let syntax = SYNTAX_SET.find_syntax_by_token(&lang_str)
+                                .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+                            let theme = &THEME_SET.themes["base16-ocean.dark"];
+                            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
+                        } else {
+                            let syntax = SYNTAX_SET.find_syntax_plain_text();
+                            let theme = &THEME_SET.themes["base16-ocean.dark"];
+                            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
                         }
                     }
                     Tag::List(start_num) => {
@@ -261,13 +280,28 @@ impl StreamingMarkdownRenderer {
                                 current_line = Vec::new();
                             }
                             let expanded = line.replace('\t', "  ");
-                            self.lines.push(Line::from(vec![
-                                Span::styled(
-                                    format!("{} ", chars::CODE_VERTICAL),
-                                    Style::default().fg(colors::code_border()),
-                                ),
-                                Span::styled(expanded, Styles::code_block()),
-                            ]));
+                            let mut spans = vec![Span::styled(
+                                format!("{} ", chars::CODE_VERTICAL),
+                                Style::default().fg(colors::code_border()),
+                            )];
+                            
+                            if let Some(hl) = highlighter.as_mut() {
+                                // We feed the line to the highlighter.
+                                match hl.highlight_line(&expanded, &SYNTAX_SET) {
+                                    Ok(ranges) => {
+                                        for (style, s) in ranges {
+                                            spans.push(Span::styled(s.to_string(), translate_syn_style(style)));
+                                        }
+                                    }
+                                    Err(_) => {
+                                        spans.push(Span::styled(expanded, Styles::code_block()));
+                                    }
+                                }
+                            } else {
+                                spans.push(Span::styled(expanded, Styles::code_block()));
+                            }
+                            
+                            self.lines.push(Line::from(spans));
                         }
                     } else {
                         current_line.push(Span::styled(text.to_string(), current_style));

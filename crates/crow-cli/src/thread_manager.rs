@@ -84,10 +84,13 @@ impl ThreadManager {
                 }
 
                 let token = CancellationToken::new();
-                let turn_id = format!("turn-{:08x}", std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros() as u32);
+                let turn_id = format!(
+                    "turn-{:08x}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u32
+                );
                 state.status = TurnStatus::InProgress;
                 state.cancellation = Some(token.clone());
                 state.turn_id = Some(turn_id.clone());
@@ -95,9 +98,9 @@ impl ThreadManager {
                 state.started_at = Some(Instant::now());
 
                 // Emit structured turn started event
-                let _ = self.ui_tx.send(TuiMessage::AgentEvent(
-                    AgentEvent::Turn(TurnEvent::Started { turn_id }),
-                ));
+                let _ = self.ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                    TurnEvent::Started { turn_id },
+                )));
 
                 // Spawn autonomous turn
                 self.spawn_turn(prompt, token);
@@ -220,7 +223,10 @@ impl ThreadManager {
                     status: TurnStatus::InProgress,
                     cancellation: Some(token.clone()),
                     turn_id: Some(id.clone()),
-                    phase: TurnPhase::EpistemicLoop { step: 0, max_steps: 0 },
+                    phase: TurnPhase::EpistemicLoop {
+                        step: 0,
+                        max_steps: 0,
+                    },
                     started_at: Some(Instant::now()),
                 },
             );
@@ -244,7 +250,7 @@ impl ThreadManager {
 
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
-            let mut worker = crate::subagent::SubagentWorker::new(compiler_instance.clone());
+            let mut worker = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Generic, compiler_instance.clone());
             // Replace worker id for consistency with the UI
             worker.id = id.clone();
 

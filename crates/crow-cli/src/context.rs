@@ -71,7 +71,6 @@ impl ConversationManager {
         self.conversation.clear();
     }
 
-
     pub fn push_user(&mut self, content: impl Into<String>) {
         self.conversation.push_back(Memory {
             message: ChatMessage::user(content),

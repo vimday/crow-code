@@ -53,7 +53,10 @@ impl SessionRuntime {
     }
 
     /// Materializes a frozen copy of the workspace to prevent time-of-check divergence.
-    async fn materialize_baseline(&self, profile: &crow_probe::ProjectProfile) -> Result<crow_materialize::SandboxHandle> {
+    async fn materialize_baseline(
+        &self,
+        profile: &crow_probe::ProjectProfile,
+    ) -> Result<crow_materialize::SandboxHandle> {
         let baseline_mat_config = MaterializeConfig {
             source: self.workspace.clone(),
             artifact_dirs: profile.ignore_spec.artifact_dirs.clone(),
@@ -74,7 +77,12 @@ impl SessionRuntime {
         frozen_root: &std::path::Path,
     ) -> Result<Arc<RepoMap>> {
         let mut repo_map_cloned = None;
-        if let Some((cached_snap, map)) = self.cached_repo_map.lock().expect("Cache lock poisoned").as_ref() {
+        if let Some((cached_snap, map)) = self
+            .cached_repo_map
+            .lock()
+            .expect("Cache lock poisoned")
+            .as_ref()
+        {
             if cached_snap == snapshot_id {
                 repo_map_cloned = Some(Arc::clone(map));
             }
@@ -96,7 +104,11 @@ impl SessionRuntime {
     }
 
     /// Discovers system and repository skills, validates dependencies, and implicitly matches them to the given prompt.
-    fn load_and_resolve_skills(&self, prompt: &str, observer: &mut dyn crate::event::EventHandler) -> Vec<crow_brain::skill::Skill> {
+    fn load_and_resolve_skills(
+        &self,
+        prompt: &str,
+        observer: &mut dyn crate::event::EventHandler,
+    ) -> Vec<crow_brain::skill::Skill> {
         let mut skill_dirs = Vec::new();
         if let Some(home) = dirs::home_dir() {
             skill_dirs.push(home.join(".crow").join("skills"));

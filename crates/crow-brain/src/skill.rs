@@ -285,7 +285,11 @@ impl SkillLoader {
                 if skill_file.exists() {
                     match Self::load_plugin_skill(&skill_file, plugin_name) {
                         Ok(skill) => skills.push(skill),
-                        Err(e) => tracing::warn!("Failed to load plugin skill {}: {}", skill_file.display(), e),
+                        Err(e) => tracing::warn!(
+                            "Failed to load plugin skill {}: {}",
+                            skill_file.display(),
+                            e
+                        ),
                     }
                 }
             }

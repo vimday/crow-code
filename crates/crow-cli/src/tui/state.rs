@@ -80,12 +80,16 @@ impl CancellationToken {
     /// allowing legacy listeners to gracefully fall off rather than deadlocking.
     pub fn reset_if_cancelled(&self) {
         if self.is_cancelled() {
-            self.inner.store(std::sync::Arc::new(tokio_util::sync::CancellationToken::new()));
+            self.inner.store(std::sync::Arc::new(
+                tokio_util::sync::CancellationToken::new(),
+            ));
         }
     }
 
     pub fn force_reset(&self) {
-        self.inner.store(std::sync::Arc::new(tokio_util::sync::CancellationToken::new()));
+        self.inner.store(std::sync::Arc::new(
+            tokio_util::sync::CancellationToken::new(),
+        ));
     }
 }
 
@@ -130,7 +134,6 @@ pub struct AppState {
     pub allowed_safe_patterns: std::collections::HashSet<String>,
 
     // TUI Modal Overlay
-
 
     // Quit state (Codex-style: Ctrl+C twice to quit)
     pub last_ctrl_c: Option<Instant>,
@@ -188,33 +191,6 @@ impl AppState {
 }
 
 pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
-    if query.starts_with('!') {
-        let all = vec![
-            ("!cargo check", "Run cargo check"),
-            ("!cargo test", "Run cargo test"),
-            ("!cargo build", "Run cargo build"),
-            ("!git status", "Check git status"),
-            ("!git diff", "Show git diff"),
-            ("!git add .", "Stage all changes"),
-            ("!ls -la", "List directory contents"),
-            ("!pwd", "Print working directory"),
-        ];
-
-        let trimmed_query = query.trim_end();
-        if trimmed_query == "!" || trimmed_query.is_empty() {
-            return all
-                .into_iter()
-                .map(|(c, d)| (c.to_string(), d.to_string()))
-                .collect();
-        } else {
-            return all
-                .into_iter()
-                .filter(|(cmd, _)| cmd.starts_with(trimmed_query))
-                .map(|(c, d)| (c.to_string(), d.to_string()))
-                .collect();
-        }
-    }
-
     let all = vec![
         ("/help", "Show manual"),
         ("/status", "Print system status"),
@@ -226,13 +202,14 @@ pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
         ("/session list", "List saved sessions"),
         ("/session resume", "Resume a saved session"),
     ];
-    if query == "/" || query.is_empty() {
+    let trimmed_query = query.trim_end();
+    if trimmed_query == "/" || trimmed_query.is_empty() {
         all.into_iter()
             .map(|(c, d)| (c.to_string(), d.to_string()))
             .collect()
     } else {
         all.into_iter()
-            .filter(|(cmd, _)| cmd.starts_with(query))
+            .filter(|(cmd, _)| cmd.starts_with(trimmed_query))
             .map(|(c, d)| (c.to_string(), d.to_string()))
             .collect()
     }

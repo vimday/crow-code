@@ -14,27 +14,18 @@ const GUTTER: &str = "  ";
 fn dim_gray() -> Color {
     colors::text_muted()
 }
-fn mid_gray() -> Color {
-    colors::text_secondary()
-}
 fn accent_cyan() -> Color {
     colors::accent_system()
 }
-fn accent_green() -> Color {
-    colors::accent_success()
-}
 fn accent_red() -> Color {
     colors::accent_error()
-}
-fn verdict_blue() -> Color {
-    colors::accent_user()
 }
 
 // ── Spinner frames from theme ────────────────────────────────────────────────
 const SPINNER: &[&str] = chars::SPINNER;
 
 pub fn render_app(
-    f: &mut Frame, 
+    f: &mut Frame,
     state: &mut AppState,
     composer_comp: &mut crate::tui::components::composer::ComposerComponent,
     history_comp: &mut crate::tui::components::history::HistoryComponent,
@@ -45,7 +36,7 @@ pub fn render_app(
         state.approval_state,
         crate::tui::state::ApprovalState::PendingCommand(..)
     ) {
-        3 
+        3
     } else {
         // Assume text area height defaults to 5 for now
         5
@@ -54,27 +45,38 @@ pub fn render_app(
     let swarm_lines = if state.active_swarms.is_empty() { 0 } else { 1 };
     let popup_lines = composer_comp.get_popup_height(state);
 
+    let main_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(78),
+            Constraint::Percentage(22),
+        ])
+        .split(size);
+
+    let main_area = main_split[0];
+    let side_area = main_split[1];
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),                     // Conversation pane
-            Constraint::Length(swarm_lines),        // Swarm bar
-            Constraint::Length(1),                  // Status bar
-            Constraint::Length(popup_lines),        // Dynamic Command Palette Popup
-            Constraint::Length(composer_lines),     // Composer 
+            Constraint::Min(0),                 // Conversation pane
+            Constraint::Length(swarm_lines),    // Swarm bar
+            Constraint::Length(1),              // Status bar
+            Constraint::Length(popup_lines),    // Dynamic Command Palette Popup
+            Constraint::Length(composer_lines), // Composer
         ])
-        .split(size);
+        .split(main_area);
 
     use crate::tui::component::Component;
 
     history_comp.render(f, chunks[0], state);
-    
+
     if swarm_lines > 0 {
         render_swarm_bar(f, state, chunks[1]);
     }
-    
+
     render_status_bar(f, state, chunks[2]);
-    
+
     // Group the bottom areas for passing to composer
     let compound_composer_rect = ratatui::layout::Rect {
         x: chunks[3].x,
@@ -83,6 +85,64 @@ pub fn render_app(
         height: chunks[3].height + chunks[4].height,
     };
     composer_comp.render(f, compound_composer_rect, state);
+    
+    // Render side context dashboard
+    render_side_context(f, state, side_area);
+}
+
+// ── Side Context Dashboard ───────────────────────────────────────────────────
+
+fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
+    use ratatui::widgets::{Block, Borders, Paragraph};
+    use ratatui::style::{Style, Color};
+    
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(Color::DarkGray));
+        
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", chars::CODE_TOP_LEFT), Styles::user_header()),
+        Span::styled("ENVIRONMENT", Styles::evidence()),
+    ]));
+    
+    let path = if state.workspace_name.is_empty() { "memfs" } else { &state.workspace_name };
+    lines.push(Line::from(vec![
+        Span::styled("    Path:   ", Styles::evidence()),
+        Span::styled(path, Styles::code_block()),
+    ]));
+    
+    lines.push(Line::from(vec![
+        Span::styled("    Branch: ", Styles::evidence()),
+        Span::styled(&state.git_branch, Styles::code_block()),
+        if state.is_dirty {
+            Span::styled(" *", Styles::error())
+        } else {
+            Span::styled("", Styles::evidence())
+        }
+    ]));
+    
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", chars::CODE_TOP_LEFT), Styles::user_header()),
+        Span::styled("AGENT CONTEXT", Styles::evidence()),
+    ]));
+    
+    let mode_str = format!("{:?}", state.view_mode);
+    lines.push(Line::from(vec![
+        Span::styled("    Auth:   ", Styles::evidence()),
+        Span::styled(mode_str, Styles::success()),
+    ]));
+    
+    lines.push(Line::from(vec![
+        Span::styled("    Write:  ", Styles::evidence()),
+        Span::styled(&state.write_mode, Styles::warning()),
+    ]));
+        
+    let p = Paragraph::new(lines).block(block);
+    f.render_widget(p, area);
 }
 
 // ── Conversation Pane ────────────────────────────────────────────────────────
@@ -94,14 +154,22 @@ pub trait HistoryCell {
 struct UserCell<'a>(&'a str);
 impl<'a> HistoryCell for UserCell<'a> {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = vec![Line::from("")];
+        let mut lines = Vec::new();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 { "› " } else { "  " };
+            let prefix = if wrapped.len() == 1 {
+                Span::styled(format!("{} ", chars::USER_BAR), Styles::user_header())
+            } else if i == 0 {
+                Span::styled(format!("{} ", chars::CODE_TOP_LEFT), Styles::user_header())
+            } else if i == wrapped.len() - 1 {
+                Span::styled(format!("{} ", chars::CODE_BOTTOM_LEFT), Styles::user_header())
+            } else {
+                Span::styled(format!("{} ", chars::USER_BAR), Styles::user_header())
+            };
             lines.push(Line::from(vec![
-                prefix.white().bold().dim(),
-                line.to_string().white(),
+                prefix,
+                Span::styled(line.to_string(), Styles::user_content()),
             ]));
         }
         lines.push(Line::from(""));
@@ -117,16 +185,27 @@ impl<'a> HistoryCell for AgentMessageCell<'a> {
         let md_lines = renderer.set_content(self.0.to_string());
         let mut out = Vec::new();
         for (i, line) in md_lines.iter().enumerate() {
-            let prefix = if i == 0 { "• " } else { "  " };
-            let mut spans = vec![Span::styled(prefix, Styles::evidence())];
-            spans.extend(line.spans.iter().cloned());
-            out.push(Line::from(spans));
+            let prefix = if md_lines.len() == 1 {
+                Span::styled(format!("{} ", chars::USER_BAR), Styles::assistant_content())
+            } else if i == 0 {
+                Span::styled(format!("{} ", chars::CODE_TOP_LEFT), Styles::assistant_content())
+            } else if i == md_lines.len() - 1 {
+                Span::styled(format!("{} ", chars::CODE_BOTTOM_LEFT), Styles::assistant_content())
+            } else {
+                Span::styled(format!("{} ", chars::USER_BAR), Styles::assistant_content())
+            };
+            
+            let mut new_spans = vec![prefix];
+            for span in line.spans.iter() {
+                new_spans.push(span.clone());
+            }
+            out.push(Line::from(new_spans));
         }
         if out.is_empty() {
             // Fallback for empty content
             out.push(Line::from(vec![
-                "• ".fg(dim_gray()).dim(),
-                self.0.to_string().fg(colors::text_primary()),
+                Span::styled(format!("{} ", chars::USER_BAR), Styles::assistant_content()),
+                Span::styled(self.0.to_string(), Styles::assistant_content()),
             ]));
         }
         out
@@ -141,13 +220,13 @@ impl<'a> HistoryCell for EvidenceCell<'a> {
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
             let prefix = if i == 0 {
-                format!("{GUTTER}◎ ")
+                format!("{GUTTER}{} ", chars::BULLET)
             } else {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                prefix.fg(mid_gray()),
-                line.to_string().fg(mid_gray()).dim(),
+                Span::styled(prefix, Styles::evidence()),
+                Span::styled(line.to_string(), Styles::evidence()),
             ]));
         }
         lines
@@ -162,13 +241,13 @@ impl<'a> HistoryCell for ActionCell<'a> {
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
             let prefix = if i == 0 {
-                format!("{GUTTER}▰ ")
+                format!("{GUTTER}▶ ")
             } else {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                prefix.fg(accent_green()),
-                line.to_string().fg(accent_green()),
+                Span::styled(prefix, Styles::success()),
+                Span::styled(line.to_string(), Styles::success()),
             ]));
         }
         lines
@@ -188,8 +267,8 @@ impl<'a> HistoryCell for ResultCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                prefix.fg(verdict_blue()),
-                line.to_string().fg(verdict_blue()),
+                Span::styled(prefix, Styles::tool_header()),
+                Span::styled(line.to_string(), Styles::tool_header()),
             ]));
         }
         lines
@@ -204,13 +283,13 @@ impl<'a> HistoryCell for LogCell<'a> {
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
             let prefix = if i == 0 {
-                format!("{GUTTER}• ")
+                format!("{GUTTER}{} ", chars::BULLET)
             } else {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                prefix.fg(dim_gray()),
-                line.to_string().fg(mid_gray()),
+                Span::styled(prefix, Styles::evidence()),
+                Span::styled(line.to_string(), Styles::evidence()),
             ]));
         }
         lines
@@ -230,8 +309,8 @@ impl<'a> HistoryCell for ErrorCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                prefix.fg(accent_red()).bold(),
-                line.to_string().fg(accent_red()),
+                Span::styled(prefix, Styles::error()),
+                Span::styled(line.to_string(), Styles::error()),
             ]));
         }
         lines
@@ -377,10 +456,15 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
     // Center: active action + elapsed time with spinner
     let center = if let Some(ref action) = state.active_action {
         let spinner = SPINNER_FRAMES[state.spinner_idx % SPINNER_FRAMES.len()];
-        let elapsed = state.task_start_time
+        let elapsed = state
+            .task_start_time
             .map(|t| {
                 let secs = t.elapsed().as_secs();
-                if secs < 60 { format!("{secs}s") } else { format!("{}m{}s", secs / 60, secs % 60) }
+                if secs < 60 {
+                    format!("{secs}s")
+                } else {
+                    format!("{}m{}s", secs / 60, secs % 60)
+                }
             })
             .unwrap_or_default();
         let action_display = if action.len() > 30 {
@@ -443,4 +527,3 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
 
 // ── Composer ─────────────────────────────────────────────────────────────────
 // Codex pattern: top border only, left gutter aligned, `❯ ` prompt.
-

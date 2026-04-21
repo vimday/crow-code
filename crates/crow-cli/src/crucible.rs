@@ -271,8 +271,7 @@ impl SerialCrucible<'_> {
         }
 
         if let Ok(mut l) = ledger.lock() {
-            let _ = l
-            .append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
+            let _ = l.append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
                 plan_id: plan_id.clone(),
                 snapshot_id: snapshot_id.clone(),
                 timestamp: chrono::Utc::now(),
@@ -307,13 +306,11 @@ impl SerialCrucible<'_> {
             // Preflight compile check
             let start_preflight = std::time::Instant::now();
             if let Ok(mut guard) = ledger.lock() {
-            let _ = guard.append(
-                crow_workspace::ledger::LedgerEvent::PreflightStarted {
+                let _ = guard.append(crow_workspace::ledger::LedgerEvent::PreflightStarted {
                     plan_id: plan_id.clone(),
                     sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
                     timestamp: chrono::Utc::now(),
-                },
-            );
+                });
             }
 
             observer.handle_event(AgentEvent::CruciblePreflight("Compile check".into()));
@@ -331,14 +328,12 @@ impl SerialCrucible<'_> {
                 PreflightResult::Clean | PreflightResult::Skipped(_)
             );
             if let Ok(mut guard) = ledger.lock() {
-            let _ = guard.append(
-                crow_workspace::ledger::LedgerEvent::PreflightTested {
+                let _ = guard.append(crow_workspace::ledger::LedgerEvent::PreflightTested {
                     plan_id: plan_id.clone(),
                     passed: passed_preflight,
                     duration_ms: start_preflight.elapsed().as_millis() as u64,
                     timestamp: chrono::Utc::now(),
-                },
-            );
+                });
             }
 
             match preflight_result {
@@ -411,13 +406,11 @@ impl SerialCrucible<'_> {
                 &result.test_run.truncated_log,
             );
             if let Ok(mut guard) = ledger.lock() {
-                let _ = guard.append(
-                    crow_workspace::ledger::LedgerEvent::PlanRolledBack {
-                        plan_id,
-                        reason: format!("Verification failed: {:?}", result.test_run.outcome),
-                        timestamp: chrono::Utc::now(),
-                    },
-                );
+                let _ = guard.append(crow_workspace::ledger::LedgerEvent::PlanRolledBack {
+                    plan_id,
+                    reason: format!("Verification failed: {:?}", result.test_run.outcome),
+                    timestamp: chrono::Utc::now(),
+                });
             }
         }
 

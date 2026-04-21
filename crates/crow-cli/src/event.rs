@@ -17,10 +17,7 @@ pub enum TurnEvent {
     /// The turn was aborted by the user.
     Aborted { turn_id: String, reason: String },
     /// The turn transitioned to a new phase.
-    PhaseChanged {
-        turn_id: String,
-        phase: TurnPhase,
-    },
+    PhaseChanged { turn_id: String, phase: TurnPhase },
 }
 
 /// Phases of a turn lifecycle — used for status bar and telemetry.
@@ -268,29 +265,41 @@ impl Drop for CliEventHandler {
 impl EventHandler for CliEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::Turn(turn_ev) => {
-                match turn_ev {
-                    TurnEvent::Started { turn_id } => {
-                        if self.view_mode == ViewMode::Audit {
-                            self.print_trace("Turn", &format!("Started [{turn_id}]"), Color::AnsiValue(117));
-                        }
-                    }
-                    TurnEvent::Completed { turn_id, success, .. } => {
-                        if self.view_mode == ViewMode::Audit {
-                            let status = if success { "✓" } else { "✘" };
-                            self.print_trace("Turn", &format!("{status} Completed [{turn_id}]"), Color::AnsiValue(117));
-                        }
-                    }
-                    TurnEvent::Aborted { turn_id, reason } => {
-                        self.print_trace("Turn", &format!("Aborted [{turn_id}]: {reason}"), Color::AnsiValue(203));
-                    }
-                    TurnEvent::PhaseChanged { phase, .. } => {
-                        if self.view_mode == ViewMode::Audit {
-                            self.print_trace("Phase", &format!("{phase}"), Color::AnsiValue(245));
-                        }
+            AgentEvent::Turn(turn_ev) => match turn_ev {
+                TurnEvent::Started { turn_id } => {
+                    if self.view_mode == ViewMode::Audit {
+                        self.print_trace(
+                            "Turn",
+                            &format!("Started [{turn_id}]"),
+                            Color::AnsiValue(117),
+                        );
                     }
                 }
-            }
+                TurnEvent::Completed {
+                    turn_id, success, ..
+                } => {
+                    if self.view_mode == ViewMode::Audit {
+                        let status = if success { "✓" } else { "✘" };
+                        self.print_trace(
+                            "Turn",
+                            &format!("{status} Completed [{turn_id}]"),
+                            Color::AnsiValue(117),
+                        );
+                    }
+                }
+                TurnEvent::Aborted { turn_id, reason } => {
+                    self.print_trace(
+                        "Turn",
+                        &format!("Aborted [{turn_id}]: {reason}"),
+                        Color::AnsiValue(203),
+                    );
+                }
+                TurnEvent::PhaseChanged { phase, .. } => {
+                    if self.view_mode == ViewMode::Audit {
+                        self.print_trace("Phase", &format!("{phase}"), Color::AnsiValue(245));
+                    }
+                }
+            },
             AgentEvent::Thinking(_step, _max) => {
                 self.stop_spinner();
                 self.stream_char_count = 0;

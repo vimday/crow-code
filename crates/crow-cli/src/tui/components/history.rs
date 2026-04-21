@@ -3,10 +3,7 @@ use super::super::component::{Component, TuiAction};
 use super::super::state::AppState;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
-use ratatui::{
-    layout::Rect,
-    Frame,
-};
+use ratatui::{layout::Rect, Frame};
 
 pub struct HistoryComponent {
     /// Whether auto-scroll to bottom is active.
@@ -41,13 +38,12 @@ impl Component for HistoryComponent {
                         self.auto_scroll = false;
                     }
                 }
-                KeyCode::Down
-                    if state.scroll_offset > 0 => {
-                        state.scroll_offset -= 1;
-                        if state.scroll_offset == 0 {
-                            self.auto_scroll = true;
-                        }
+                KeyCode::Down if state.scroll_offset > 0 => {
+                    state.scroll_offset -= 1;
+                    if state.scroll_offset == 0 {
+                        self.auto_scroll = true;
                     }
+                }
                 KeyCode::PageUp => {
                     state.scroll_offset = state.scroll_offset.saturating_add(10);
                     self.auto_scroll = false;

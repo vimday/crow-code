@@ -176,12 +176,12 @@ pub async fn run_epistemic_loop(
                 let file_contents = read_files_to_context(&paths, frozen_root);
                 let path_strings: Vec<String> =
                     paths.iter().map(|s| s.as_str().to_string()).collect();
-                
+
                 // Record state to pass the hallucination guard for future modifications.
                 for p in paths.iter() {
-                    file_state_store.record(p.as_str(), 1); 
+                    file_state_store.record(p.as_str(), 1);
                 }
-                
+
                 messages.push_file_read(&path_strings, file_contents);
             }
             AgentAction::Recon { tool, rationale } => {
@@ -215,7 +215,7 @@ pub async fn run_epistemic_loop(
                     "Spawning isolated Subagent Worker runtime".into(),
                 ));
 
-                let subagent = crate::subagent::SubagentWorker::new(compiler.clone());
+                let subagent = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Explorer, compiler.clone());
 
                 let sys_msgs = messages
                     .as_messages()

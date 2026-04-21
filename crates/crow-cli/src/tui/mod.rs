@@ -186,8 +186,10 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
 
         match output {
             Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let stdout_stripped = strip_ansi_escapes::strip(&out.stdout);
+                let stderr_stripped = strip_ansi_escapes::strip(&out.stderr);
+                let stdout = String::from_utf8_lossy(&stdout_stripped).into_owned();
+                let stderr = String::from_utf8_lossy(&stderr_stripped).into_owned();
                 let mut report = stdout;
                 if !stderr.is_empty() {
                     if !report.is_empty() {
@@ -209,7 +211,6 @@ fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>
         let _ = tx.send(TuiMessage::SessionComplete);
     });
 }
-
 
 async fn run_tui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -811,8 +812,7 @@ fn execute_command_string(
         // path. Execution goes through `sh -c`, so `!cargo test && curl ...`
         // would bypass the prefix allowlist without this check.
         const SHELL_METACHARACTERS: &[&str] = &[
-            "&&", "||", ";", "|", "$", "`", ">", "<", "(", ")", "{", "}",
-            "\n", "\\",
+            "&&", "||", ";", "|", "$", "`", ">", "<", "(", ")", "{", "}", "\n", "\\",
         ];
         let has_metacharacters = SHELL_METACHARACTERS
             .iter()
@@ -837,7 +837,6 @@ fn execute_command_string(
         } else {
             state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd, 0);
         }
-
 
         state.composer.clear();
         state.composer_cursor = 0;
@@ -878,7 +877,9 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                         });
                     }
                 }
-                TurnEvent::Completed { turn_id, success, .. } => {
+                TurnEvent::Completed {
+                    turn_id, success, ..
+                } => {
                     if state.view_mode == ViewMode::Audit {
                         let status = if success { "✓" } else { "✘" };
                         state.history.push(Cell {
