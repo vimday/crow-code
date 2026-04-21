@@ -1,8 +1,74 @@
 use crossterm::style::{Color, Stylize};
 use crow_patch::IntentPlan;
 
+// ── Structured Protocol Layer (SQ/EQ Pattern) ──────────────────────
+
+/// Turn lifecycle events — always delivered, represent major phase transitions.
+#[derive(Debug, Clone)]
+pub enum TurnEvent {
+    /// A new turn has begun.
+    Started { turn_id: String },
+    /// The turn completed (success or failure).
+    Completed {
+        turn_id: String,
+        success: bool,
+        token_usage: Option<TokenUsageSummary>,
+    },
+    /// The turn was aborted by the user.
+    Aborted { turn_id: String, reason: String },
+    /// The turn transitioned to a new phase.
+    PhaseChanged {
+        turn_id: String,
+        phase: TurnPhase,
+    },
+}
+
+/// Phases of a turn lifecycle — used for status bar and telemetry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnPhase {
+    Materializing,
+    BuildingRepoMap,
+    Compacting,
+    EpistemicLoop { step: u32, max_steps: u32 },
+    CruciblePreflight,
+    CrucibleVerification { attempt: u32 },
+    Applying,
+    Complete,
+}
+
+impl std::fmt::Display for TurnPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Materializing => write!(f, "Materializing"),
+            Self::BuildingRepoMap => write!(f, "Building Repo Map"),
+            Self::Compacting => write!(f, "Compacting"),
+            Self::EpistemicLoop { step, max_steps } => write!(f, "Epistemic [{step}/{max_steps}]"),
+            Self::CruciblePreflight => write!(f, "Preflight"),
+            Self::CrucibleVerification { attempt } => write!(f, "Crucible [attempt {attempt}]"),
+            Self::Applying => write!(f, "Applying"),
+            Self::Complete => write!(f, "Complete"),
+        }
+    }
+}
+
+/// Token usage summary attached to turn completion events.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsageSummary {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    pub context_window: u32,
+}
+
+// ── The Combined Agent Event ────────────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
+    // ── Turn lifecycle (new structured protocol) ────────────────────
+    /// Structured turn lifecycle event.
+    Turn(TurnEvent),
+
+    // ── Core events (existing, kept for backward compat) ────────────
     /// Agent is analyzing the codebase and thinking.
     Thinking(u32, u32),
 
@@ -202,6 +268,29 @@ impl Drop for CliEventHandler {
 impl EventHandler for CliEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
         match event {
+            AgentEvent::Turn(turn_ev) => {
+                match turn_ev {
+                    TurnEvent::Started { turn_id } => {
+                        if self.view_mode == ViewMode::Audit {
+                            self.print_trace("Turn", &format!("Started [{turn_id}]"), Color::AnsiValue(117));
+                        }
+                    }
+                    TurnEvent::Completed { turn_id, success, .. } => {
+                        if self.view_mode == ViewMode::Audit {
+                            let status = if success { "✓" } else { "✘" };
+                            self.print_trace("Turn", &format!("{status} Completed [{turn_id}]"), Color::AnsiValue(117));
+                        }
+                    }
+                    TurnEvent::Aborted { turn_id, reason } => {
+                        self.print_trace("Turn", &format!("Aborted [{turn_id}]: {reason}"), Color::AnsiValue(203));
+                    }
+                    TurnEvent::PhaseChanged { phase, .. } => {
+                        if self.view_mode == ViewMode::Audit {
+                            self.print_trace("Phase", &format!("{phase}"), Color::AnsiValue(245));
+                        }
+                    }
+                }
+            }
             AgentEvent::Thinking(_step, _max) => {
                 self.stop_spinner();
                 self.stream_char_count = 0;

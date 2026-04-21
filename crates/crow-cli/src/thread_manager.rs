@@ -1,11 +1,12 @@
 use crate::config::CrowConfig;
 use crate::context::ConversationManager;
-use crate::event::EventHandler;
+use crate::event::{AgentEvent, EventHandler, TurnEvent, TurnPhase};
 use crate::runtime::SessionRuntime;
 use crate::session::{Session, SessionStore};
 use crate::tui::state::{CancellationToken, TuiMessage};
 use crow_patch::SnapshotId;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 
 /// Represents the deterministic state of an agent Turn lifecycle.
@@ -26,10 +27,13 @@ pub enum Op {
     SwarmRun(String),
 }
 
-/// The state tracking for the active thread.
-pub struct CodexThread {
+/// The state tracking for the active thread, with phase-level granularity.
+pub struct TurnState {
     pub status: TurnStatus,
     pub cancellation: Option<CancellationToken>,
+    pub turn_id: Option<String>,
+    pub phase: TurnPhase,
+    pub started_at: Option<Instant>,
 }
 
 /// ThreadManager sits between the TUI loop and the SessionRuntime, decoupling
@@ -39,9 +43,9 @@ pub struct ThreadManager {
     messages: Arc<Mutex<ConversationManager>>,
     config: CrowConfig,
     ui_tx: mpsc::UnboundedSender<TuiMessage>,
-    thread_state: Arc<Mutex<CodexThread>>,
+    thread_state: Arc<Mutex<TurnState>>,
     session_id: Arc<Mutex<Option<String>>>,
-    swarm_state: Arc<Mutex<std::collections::HashMap<String, CodexThread>>>,
+    swarm_state: Arc<Mutex<std::collections::HashMap<String, TurnState>>>,
 }
 
 impl ThreadManager {
@@ -57,9 +61,12 @@ impl ThreadManager {
             messages,
             config,
             ui_tx,
-            thread_state: Arc::new(Mutex::new(CodexThread {
+            thread_state: Arc::new(Mutex::new(TurnState {
                 status: TurnStatus::Idle,
                 cancellation: None,
+                turn_id: None,
+                phase: TurnPhase::Complete,
+                started_at: None,
             })),
             session_id: Arc::new(Mutex::new(initial_session_id)),
             swarm_state: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -77,8 +84,20 @@ impl ThreadManager {
                 }
 
                 let token = CancellationToken::new();
+                let turn_id = format!("turn-{:08x}", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u32);
                 state.status = TurnStatus::InProgress;
                 state.cancellation = Some(token.clone());
+                state.turn_id = Some(turn_id.clone());
+                state.phase = TurnPhase::Materializing;
+                state.started_at = Some(Instant::now());
+
+                // Emit structured turn started event
+                let _ = self.ui_tx.send(TuiMessage::AgentEvent(
+                    AgentEvent::Turn(TurnEvent::Started { turn_id }),
+                ));
 
                 // Spawn autonomous turn
                 self.spawn_turn(prompt, token);
@@ -188,7 +207,7 @@ impl ThreadManager {
         // Register swarm task
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::ZERO)
             .as_micros();
         // Extract out action args
         let id = format!("swarm-{:04x}", (ts % 0xffff) as u16);
@@ -197,9 +216,12 @@ impl ThreadManager {
             let mut s = swarm_state.lock().await;
             s.insert(
                 id.clone(),
-                CodexThread {
+                TurnState {
                     status: TurnStatus::InProgress,
                     cancellation: Some(token.clone()),
+                    turn_id: Some(id.clone()),
+                    phase: TurnPhase::EpistemicLoop { step: 0, max_steps: 0 },
+                    started_at: Some(Instant::now()),
                 },
             );
         }

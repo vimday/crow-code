@@ -757,6 +757,7 @@ fn apply_code_block_background(line: &str) -> String {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::expect_used)]
 fn normalize_nested_fences(markdown: &str) -> String {
     #[derive(Debug, Clone)]
     struct FenceLine {

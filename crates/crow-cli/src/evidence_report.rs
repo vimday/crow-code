@@ -374,6 +374,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crow_evidence::types::{RiskFlag, TestOutcome, TestRun, TestScope};

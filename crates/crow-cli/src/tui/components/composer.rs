@@ -26,18 +26,28 @@ impl<'a> Default for ComposerComponent<'a> {
     }
 }
 
+/// Create a fresh textarea with standard styling.
+/// Extracted to eliminate 4x duplication of textarea reset logic.
+fn make_textarea<'a>() -> TextArea<'a> {
+    let mut textarea = TextArea::default();
+    textarea.set_block(Block::default().borders(Borders::NONE));
+    textarea.set_cursor_line_style(Style::default());
+    let placeholder = Style::default().fg(ratatui::style::Color::DarkGray);
+    textarea.set_placeholder_text("Ask Crow anything...");
+    textarea.set_placeholder_style(placeholder);
+    textarea.set_line_number_style(Style::default().fg(ratatui::style::Color::DarkGray));
+    textarea
+}
+
 impl<'a> ComposerComponent<'a> {
     pub fn new() -> Self {
-        let mut textarea = TextArea::default();
-        textarea.set_block(Block::default().borders(Borders::NONE));
-        textarea.set_cursor_line_style(Style::default());
-        let placeholder = Style::default().fg(ratatui::style::Color::DarkGray);
-        textarea.set_placeholder_text("Ask Crow anything...");
-        textarea.set_placeholder_style(placeholder);
-        
-        // Remove line numbers
-        textarea.set_line_number_style(Style::default().fg(ratatui::style::Color::DarkGray));
-        Self { textarea, active_popup: ActivePopup::None }
+        Self { textarea: make_textarea(), active_popup: ActivePopup::None }
+    }
+
+    /// Reset textarea to a clean state. Used after submission.
+    fn reset_textarea(&mut self) {
+        self.textarea = make_textarea();
+        self.active_popup = ActivePopup::None;
     }
 
     pub fn get_popup_height(&self, state: &AppState) -> u16 {
@@ -55,7 +65,15 @@ impl<'a> ComposerComponent<'a> {
 
 
 impl<'a> Component for ComposerComponent<'a> {
-    fn handle_event(&mut self, event: &Event, _state: &mut AppState) -> Result<Option<TuiAction>> {
+    fn handle_event(&mut self, event: &Event, state: &mut AppState) -> Result<Option<TuiAction>> {
+        // Handle bracketed paste events (Ctrl+V / terminal paste)
+        if let Event::Paste(ref text) = event {
+            for line in text.lines() {
+                self.textarea.insert_str(line);
+            }
+            return Ok(None);
+        }
+
         if let Event::Key(key) = event {
             // Check if we are in overlay mode
             if let ActivePopup::CommandPalette { query: _, ref mut selected_idx, ref options } = self.active_popup {
@@ -82,37 +100,49 @@ impl<'a> Component for ComposerComponent<'a> {
                 if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                     if let Some((cmd, _)) = options.get(*selected_idx) {
                         let text = cmd.clone();
-                        // Reset and submit
-                        self.active_popup = ActivePopup::None;
-                        self.textarea = TextArea::default();
-                        self.textarea.set_block(Block::default().borders(Borders::NONE));
-                        self.textarea.set_cursor_line_style(Style::default());
-                        let placeholder = Style::default().fg(ratatui::style::Color::DarkGray);
-                        self.textarea.set_placeholder_text("Ask Crow anything...");
-                        self.textarea.set_placeholder_style(placeholder);
-                        self.textarea.set_line_number_style(Style::default().fg(ratatui::style::Color::DarkGray));
+                        self.reset_textarea();
                         return Ok(Some(TuiAction::SubmitCommand(text)));
                     }
                 }
             }
 
-            // Normal textarea handling (arrows, typings, etc.)
-            // If they press Enter here (no popup), submit it
+            // ── Ctrl+U: clear current line (Unix convention) ──────────
+            if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.reset_textarea();
+                return Ok(None);
+            }
+
+            // ── Input history navigation: ↑/↓ when composer is empty ──
+            if key.code == KeyCode::Up
+                && self.textarea.lines().join("").trim().is_empty()
+                && !state.input_history.is_empty()
+            {
+                let idx = state.input_history_idx
+                    .map(|i| i.saturating_sub(1))
+                    .unwrap_or(state.input_history.len().saturating_sub(1));
+                state.input_history_idx = Some(idx);
+                self.reset_textarea();
+                self.textarea.insert_str(&state.input_history[idx]);
+                return Ok(None);
+            }
+            if key.code == KeyCode::Down && state.input_history_idx.is_some() {
+                let idx = state.input_history_idx.unwrap_or(0) + 1;
+                if idx < state.input_history.len() {
+                    state.input_history_idx = Some(idx);
+                    self.reset_textarea();
+                    self.textarea.insert_str(&state.input_history[idx]);
+                } else {
+                    state.input_history_idx = None;
+                    self.reset_textarea();
+                }
+                return Ok(None);
+            }
+
+            // Normal textarea handling — Enter submits (Shift+Enter = newline)
             if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                 let lines = self.textarea.lines().to_vec();
                 let text = lines.join("\n");
-                
-                // Clear the textarea after passing content up
-                self.textarea = TextArea::default();
-                self.textarea.set_block(Block::default().borders(Borders::NONE));
-                self.textarea.set_cursor_line_style(Style::default());
-                let placeholder = Style::default().fg(ratatui::style::Color::DarkGray);
-                self.textarea.set_placeholder_text("Ask Crow anything...");
-                self.textarea.set_placeholder_style(placeholder);
-                self.textarea.set_line_number_style(Style::default().fg(ratatui::style::Color::DarkGray));
-                
-                self.active_popup = ActivePopup::None; // Explicit reset
-                
+                self.reset_textarea();
                 return Ok(Some(TuiAction::SubmitCommand(text)));
             }
 
@@ -137,55 +167,9 @@ impl<'a> Component for ComposerComponent<'a> {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
-        // If there is a pending command approval, render the security prompt instead
+        // If there is a pending command approval, render the security prompt
         if let crate::tui::state::ApprovalState::PendingCommand(ref cmd, selected_idx) = state.approval_state {
-            use ratatui::text::{Line, Span};
-            use ratatui::widgets::{Paragraph, List, ListItem};
-            use ratatui::style::Stylize;
-            
-            let mut composer_lines = Vec::new();
-            composer_lines.push(Line::from(vec![Span::styled(
-                "⚠️  Security Approval Required",
-                ratatui::style::Style::default().fg(ratatui::style::Color::Red).bold(),
-            )]));
-            composer_lines.push(Line::from(vec![
-                "Command: ".dark_gray(),
-                cmd.clone().into(),
-            ]));
-
-            let composer_widget = Paragraph::new(composer_lines).block(
-                Block::default().borders(Borders::NONE)
-            );
-            frame.render_widget(composer_widget, area);
-
-            // Render floating interaction popup
-            let options = ["[✓] Allow Once",
-                "[★] Allow Always (Whitelist)",
-                "[X] Reject"];
-            let list_items: Vec<ListItem> = options
-                .iter()
-                .enumerate()
-                .map(|(i, &opt)| {
-                    if i == selected_idx {
-                        ListItem::new(opt).style(Style::default().bg(ratatui::style::Color::LightRed).fg(ratatui::style::Color::Black).bold())
-                    } else {
-                        ListItem::new(opt)
-                    }
-                })
-                .collect();
-                
-            let popup_list = List::new(list_items)
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(ratatui::style::Color::LightRed)).title(" Action "));
-            
-            let popup_area = Rect {
-                x: area.x.saturating_add(6),
-                y: area.y.saturating_sub(5),
-                width: 35,
-                height: 5,
-            };
-            frame.render_widget(ratatui::widgets::Clear, popup_area);
-            frame.render_widget(popup_list, popup_area);
-            
+            render_approval_popup(frame, area, cmd, selected_idx);
             return;
         }
 
@@ -247,4 +231,63 @@ impl<'a> Component for ComposerComponent<'a> {
             }
         }
     }
+}
+
+// ── Extracted approval popup renderer ─────────────────────────────────
+
+/// Render the security approval popup. Extracted from inline render() to
+/// reduce complexity and enable dynamic sizing.
+fn render_approval_popup(frame: &mut Frame, area: Rect, cmd: &str, selected_idx: usize) {
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Paragraph, List, ListItem};
+    use ratatui::style::Stylize;
+    
+    let composer_lines = vec![
+        Line::from(vec![Span::styled(
+            "⚠️  Security Approval Required",
+            ratatui::style::Style::default().fg(ratatui::style::Color::Red).bold(),
+        )]),
+        Line::from(vec![
+            "Command: ".dark_gray(),
+            cmd.to_string().into(),
+        ]),
+        Line::from(vec![
+            "  (y=Allow  a=Always  n=Reject  Esc=Cancel)".dark_gray(),
+        ]),
+    ];
+
+    let composer_widget = Paragraph::new(composer_lines).block(
+        Block::default().borders(Borders::NONE)
+    );
+    frame.render_widget(composer_widget, area);
+
+    // Render floating interaction popup — dynamically sized to terminal width
+    let options = ["[✓] Allow Once",
+        "[★] Allow Always (Whitelist)",
+        "[X] Reject"];
+    let list_items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, &opt)| {
+            if i == selected_idx {
+                ListItem::new(opt).style(Style::default().bg(ratatui::style::Color::LightRed).fg(ratatui::style::Color::Black).bold())
+            } else {
+                ListItem::new(opt)
+            }
+        })
+        .collect();
+        
+    let popup_list = List::new(list_items)
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(ratatui::style::Color::LightRed)).title(" Action "));
+    
+    // Dynamic sizing: cap popup width to terminal width - 12, minimum 30
+    let popup_width = area.width.saturating_sub(12).clamp(30, 40);
+    let popup_area = Rect {
+        x: area.x.saturating_add(6),
+        y: area.y.saturating_sub(5),
+        width: popup_width,
+        height: 5,
+    };
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+    frame.render_widget(popup_list, popup_area);
 }

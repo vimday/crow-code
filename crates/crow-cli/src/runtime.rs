@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crate::config::CrowConfig;
 use crate::mcp::McpManager;
 use anyhow::{Context, Result};
@@ -311,9 +312,11 @@ impl SessionRuntime {
 
     fn get_or_build_repo_map(&self, cfg: &CrowConfig) -> Result<Arc<RepoMap>> {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
-        if let Some((cached_snap, map)) = self.cached_repo_map.lock().unwrap().as_ref() {
-            if cached_snap == &snapshot_id {
-                return Ok(Arc::clone(map));
+        if let Ok(guard) = self.cached_repo_map.lock() {
+            if let Some((cached_snap, map)) = guard.as_ref() {
+                if cached_snap == &snapshot_id {
+                    return Ok(Arc::clone(map));
+                }
             }
         }
         let map = cfg
@@ -321,7 +324,9 @@ impl SessionRuntime {
             .map_err(|e| anyhow::anyhow!(e))
             .context("Failed to build repo map")?;
         let arc_map = Arc::new(map);
-        *self.cached_repo_map.lock().unwrap() = Some((snapshot_id, Arc::clone(&arc_map)));
+        if let Ok(mut guard) = self.cached_repo_map.lock() {
+            *guard = Some((snapshot_id, Arc::clone(&arc_map)));
+        }
         Ok(arc_map)
     }
 

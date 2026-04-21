@@ -337,6 +337,7 @@ fn default_requires_mcts() -> bool {
 // ─── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

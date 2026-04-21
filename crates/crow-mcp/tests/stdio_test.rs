@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crow_mcp::McpClient;
 use std::io::Write;
 use tempfile::NamedTempFile;

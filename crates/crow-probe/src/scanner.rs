@@ -89,6 +89,7 @@ pub fn scan_workspace(root: &Path) -> Result<ProjectProfile, String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;

@@ -270,14 +270,14 @@ impl SerialCrucible<'_> {
             .context("Failed to apply plan to sandbox")?;
         }
 
-        let _ = ledger
-            .lock()
-            .unwrap()
+        if let Ok(mut l) = ledger.lock() {
+            let _ = l
             .append(crow_workspace::ledger::LedgerEvent::PlanHydrated {
                 plan_id: plan_id.clone(),
                 snapshot_id: snapshot_id.clone(),
                 timestamp: chrono::Utc::now(),
             });
+        }
 
         observer.handle_event(AgentEvent::ActionComplete("Plan applied to sandbox".into()));
 
@@ -306,13 +306,15 @@ impl SerialCrucible<'_> {
             use crow_verifier::preflight::{self, PreflightResult};
             // Preflight compile check
             let start_preflight = std::time::Instant::now();
-            let _ = ledger.lock().unwrap().append(
+            if let Ok(mut guard) = ledger.lock() {
+            let _ = guard.append(
                 crow_workspace::ledger::LedgerEvent::PreflightStarted {
                     plan_id: plan_id.clone(),
                     sandbox_path: attempt_sandbox.path().to_string_lossy().into_owned(),
                     timestamp: chrono::Utc::now(),
                 },
             );
+            }
 
             observer.handle_event(AgentEvent::CruciblePreflight("Compile check".into()));
 
@@ -328,7 +330,8 @@ impl SerialCrucible<'_> {
                 preflight_result,
                 PreflightResult::Clean | PreflightResult::Skipped(_)
             );
-            let _ = ledger.lock().unwrap().append(
+            if let Ok(mut guard) = ledger.lock() {
+            let _ = guard.append(
                 crow_workspace::ledger::LedgerEvent::PreflightTested {
                     plan_id: plan_id.clone(),
                     passed: passed_preflight,
@@ -336,6 +339,7 @@ impl SerialCrucible<'_> {
                     timestamp: chrono::Utc::now(),
                 },
             );
+            }
 
             match preflight_result {
                 PreflightResult::Clean => {
@@ -406,13 +410,15 @@ impl SerialCrucible<'_> {
                 &format!("{:?}", result.test_run.outcome),
                 &result.test_run.truncated_log,
             );
-            let _ = ledger.lock().unwrap().append(
-                crow_workspace::ledger::LedgerEvent::PlanRolledBack {
-                    plan_id,
-                    reason: format!("Verification failed: {:?}", result.test_run.outcome),
-                    timestamp: chrono::Utc::now(),
-                },
-            );
+            if let Ok(mut guard) = ledger.lock() {
+                let _ = guard.append(
+                    crow_workspace::ledger::LedgerEvent::PlanRolledBack {
+                        plan_id,
+                        reason: format!("Verification failed: {:?}", result.test_run.outcome),
+                        timestamp: chrono::Utc::now(),
+                    },
+                );
+            }
         }
 
         Ok(EpochOutcome::RetryVerification)

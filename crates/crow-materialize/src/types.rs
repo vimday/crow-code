@@ -234,6 +234,7 @@ pub fn materialize(config: &MaterializeConfig) -> Result<SandboxHandle, Material
 // ─── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

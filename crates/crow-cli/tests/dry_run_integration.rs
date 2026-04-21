@@ -3,6 +3,7 @@
 //! instead of calling the real LLM. This proves the physical loop
 //! is wired correctly end-to-end without requiring network access.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::{
     Confidence, EditOp, FilePrecondition, IntentPlan, PreconditionState, SnapshotId, WorkspacePath,

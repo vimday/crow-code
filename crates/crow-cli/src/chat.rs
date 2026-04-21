@@ -167,7 +167,9 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
     rl.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
 
     let history_path = dirs_home().join(".crow").join("repl_history.txt");
-    let _ = std::fs::create_dir_all(history_path.parent().unwrap());
+    if let Some(parent) = history_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let _ = rl.load_history(&history_path);
 
     let store = SessionStore::open().ok();

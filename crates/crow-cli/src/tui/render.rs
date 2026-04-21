@@ -353,6 +353,8 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         return;
     }
 
+    const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
     // Left side: mode hint + task/branch info
     let left = if state.is_task_running() {
         " esc to interrupt ".to_string()
@@ -370,6 +372,25 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         accent_red()
     } else {
         dim_gray()
+    };
+
+    // Center: active action + elapsed time with spinner
+    let center = if let Some(ref action) = state.active_action {
+        let spinner = SPINNER_FRAMES[state.spinner_idx % SPINNER_FRAMES.len()];
+        let elapsed = state.task_start_time
+            .map(|t| {
+                let secs = t.elapsed().as_secs();
+                if secs < 60 { format!("{secs}s") } else { format!("{}m{}s", secs / 60, secs % 60) }
+            })
+            .unwrap_or_default();
+        let action_display = if action.len() > 30 {
+            format!("{}…", &action[..29])
+        } else {
+            action.clone()
+        };
+        format!(" {spinner} {action_display} [{elapsed}] ")
+    } else {
+        String::new()
     };
 
     // Right side: model · workspace · view mode · write mode
@@ -400,10 +421,20 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
     let left_widget = Paragraph::new(left_span);
     let right_widget = Paragraph::new(right.fg(dim_gray()));
 
-    // Fill middle with `─`
+    // Fill middle with active action or `─` separator
     let mid_w = status_chunks[1].width as usize;
-    let mid_fill = "─".repeat(mid_w);
-    let mid_widget = Paragraph::new(mid_fill.fg(Color::Indexed(236)));
+    let mid_widget = if !center.is_empty() && center.len() <= mid_w {
+        let pad_left = (mid_w.saturating_sub(center.len())) / 2;
+        let pad_right = mid_w.saturating_sub(center.len()).saturating_sub(pad_left);
+        Paragraph::new(Line::from(vec![
+            "─".repeat(pad_left).fg(Color::Indexed(236)),
+            center.fg(Color::Cyan),
+            "─".repeat(pad_right).fg(Color::Indexed(236)),
+        ]))
+    } else {
+        let mid_fill = "─".repeat(mid_w);
+        Paragraph::new(mid_fill.fg(Color::Indexed(236)))
+    };
 
     f.render_widget(left_widget, status_chunks[0]);
     f.render_widget(mid_widget, status_chunks[1]);

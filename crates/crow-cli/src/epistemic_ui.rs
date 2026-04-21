@@ -3,6 +3,7 @@
 //! Provides the `EpistemicObserver` trait to abstract progress reporting
 //! from the underlying MCTS and Serial engines.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 

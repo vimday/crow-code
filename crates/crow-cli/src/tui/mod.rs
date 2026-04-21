@@ -4,6 +4,7 @@ pub mod dashboard;
 pub mod markdown_stream;
 pub mod render;
 pub mod state;
+pub mod stream_controller;
 pub mod theme;
 
 pub use dashboard::run_dashboard;
@@ -307,6 +308,39 @@ async fn run_tui_loop(
                                 selected_idx = (selected_idx + 1).min(2);
                                 state.approval_state = crate::tui::state::ApprovalState::PendingCommand(cmd, selected_idx);
                             }
+                            // Single-key shortcuts: y=Allow Once, a=Allow Always, n=Reject
+                            KeyCode::Char('y') => {
+                                state.approval_state = crate::tui::state::ApprovalState::None;
+                                state.history.push(Cell {
+                                    kind: CellKind::User,
+                                    payload: format!("!{cmd}"),
+                                });
+                                state.active_action = Some(format!("$ {cmd}"));
+                                execute_shell_command(cmd, tx.clone());
+                            }
+                            KeyCode::Char('a') => {
+                                state.approval_state = crate::tui::state::ApprovalState::None;
+                                let prefix =
+                                    cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
+                                state.allowed_safe_patterns.insert(prefix.clone());
+                                state.history.push(Cell {
+                                    kind: CellKind::Log,
+                                    payload: format!("Whitelist updated: '{prefix}' will auto-execute for this session."),
+                                });
+                                state.history.push(Cell {
+                                    kind: CellKind::User,
+                                    payload: format!("!{cmd}"),
+                                });
+                                state.active_action = Some(format!("$ {cmd}"));
+                                execute_shell_command(cmd, tx.clone());
+                            }
+                            KeyCode::Char('n') | KeyCode::Esc => {
+                                state.approval_state = crate::tui::state::ApprovalState::None;
+                                state.history.push(Cell {
+                                    kind: CellKind::Log,
+                                    payload: format!("Command cancelled: {cmd}"),
+                                });
+                            }
                             KeyCode::Enter => {
                                 match selected_idx {
                                     0 => {
@@ -345,14 +379,6 @@ async fn run_tui_loop(
                                         });
                                     }
                                 }
-                            }
-                            KeyCode::Esc => {
-                                // Cancelled
-                                state.approval_state = crate::tui::state::ApprovalState::None;
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: format!("Command cancelled: {cmd}"),
-                                });
                             }
                             _ => {}
                         }
@@ -417,7 +443,12 @@ async fn run_tui_loop(
                     handle_agent_event(state, ev);
                 }
                 TuiMessage::TurnComplete(success) => {
-                    // Flush any remaining stream buffer (JSON filtering is built into flush())
+                    // Finish the stream controller and drain all remaining lines
+                    state.stream_controller.finish();
+                    let remaining = state.stream_controller.drain_all();
+                    state.history.extend(remaining);
+
+                    // Also flush legacy stream state as a safety net
                     let renderer = crate::render::TerminalRenderer::new();
                     if let Some(flushed) = state.stream_state.flush(&renderer) {
                         for line in flushed.lines() {
@@ -459,6 +490,11 @@ async fn run_tui_loop(
                     refresh_git_state(state, &cfg.workspace);
                 }
                 TuiMessage::SessionComplete => {
+                    // Drain any remaining stream content on session end
+                    state.stream_controller.finish();
+                    let remaining = state.stream_controller.drain_all();
+                    state.history.extend(remaining);
+
                     state.active_action = None;
                     state.task_start_time = None;
                     state.cancellation = None;
@@ -482,6 +518,15 @@ async fn run_tui_loop(
                 }
                 TuiMessage::Tick => {
                     state.spinner_idx = state.spinner_idx.wrapping_add(1);
+
+                    // ── CommitTick: drain buffered stream lines ──
+                    let drained = state.stream_controller.drain_tick();
+                    if !drained.is_empty() {
+                        state.history.extend(drained);
+                        // Auto-scroll to bottom when new streaming content arrives
+                        state.scroll_offset = 0;
+                    }
+
                     if let Some(start) = state.task_start_time {
                         if start.elapsed() > Duration::from_secs(180) {
                             state.history.push(Cell {
@@ -495,7 +540,7 @@ async fn run_tui_loop(
 
                     // Best-effort draft persistence
                     if state.spinner_idx.is_multiple_of(8) {
-                        // ~ once per second (120ms * 8)tick)
+                        // ~ once per second (120ms * 8 tick)
                         let draft_path =
                             std::path::Path::new(&cfg.workspace).join(".crow/logs/draft.txt");
                         if !state.composer.is_empty() {
@@ -822,42 +867,50 @@ fn execute_command_string(
 fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
     state.task_start_time = Some(Instant::now());
     match event {
+        AgentEvent::Turn(turn_ev) => {
+            use crate::event::TurnEvent;
+            match turn_ev {
+                TurnEvent::Started { turn_id } => {
+                    if state.view_mode == ViewMode::Audit {
+                        state.history.push(Cell {
+                            kind: CellKind::Log,
+                            payload: format!("Turn started: {turn_id}"),
+                        });
+                    }
+                }
+                TurnEvent::Completed { turn_id, success, .. } => {
+                    if state.view_mode == ViewMode::Audit {
+                        let status = if success { "✓" } else { "✘" };
+                        state.history.push(Cell {
+                            kind: CellKind::Log,
+                            payload: format!("{status} Turn completed: {turn_id}"),
+                        });
+                    }
+                }
+                TurnEvent::Aborted { turn_id, reason } => {
+                    state.history.push(Cell {
+                        kind: CellKind::Error,
+                        payload: format!("Turn aborted [{turn_id}]: {reason}"),
+                    });
+                }
+                TurnEvent::PhaseChanged { phase, .. } => {
+                    state.active_action = Some(format!("{phase}"));
+                }
+            }
+        }
         AgentEvent::Thinking(_, _) => {
             state.active_action = Some("Thinking...".into());
+            // Start a fresh streaming session for this turn
+            state.stream_controller.start();
         }
         AgentEvent::StreamChunk(chunk) => {
-            // Newline-gated markdown streaming (codex pattern).
-            // JSON plan filtering is built into push().
-            let renderer = crate::render::TerminalRenderer::new();
-            if let Some(rendered) = state.stream_state.push(&renderer, &chunk) {
-                for line in rendered.lines() {
-                    state.history.push(Cell {
-                        kind: CellKind::AgentMessage,
-                        payload: line.to_string(),
-                    });
-                }
-            }
+            // CommitTick pattern: buffer chunks into the stream controller.
+            // Lines are drained one-per-tick in the Tick handler for smooth animation.
+            state.stream_controller.push_chunk(&chunk);
         }
         AgentEvent::Markdown(md) => {
-            // Flush stream buffer, then render final markdown block.
-            // JSON filtering is built into flush().
-            let renderer = crate::render::TerminalRenderer::new();
-            if let Some(flushed) = state.stream_state.flush(&renderer) {
-                for line in flushed.lines() {
-                    state.history.push(Cell {
-                        kind: CellKind::AgentMessage,
-                        payload: line.to_string(),
-                    });
-                }
-            }
-            // Render the final markdown block
-            let rendered = renderer.render_markdown(&md);
-            for line in rendered.lines() {
-                state.history.push(Cell {
-                    kind: CellKind::AgentMessage,
-                    payload: line.to_string(),
-                });
-            }
+            // Final markdown block: route through controller for buffered drain.
+            state.stream_controller.push_markdown(&md);
         }
         AgentEvent::Log(msg) => {
             state.history.push(Cell {

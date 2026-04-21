@@ -411,6 +411,7 @@ fn cow_clone(_config: &MaterializeConfig) -> Result<SandboxHandle, String> {
 // ─── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::io::Write;

@@ -10,7 +10,6 @@ pub mod epistemic_ui;
 pub mod event;
 pub mod file_state;
 mod evidence_report;
-mod legacy_god;
 mod mcp;
 pub mod mcts;
 pub mod prompt;
@@ -42,7 +41,7 @@ async fn main() -> Result<()> {
         Some("dashboard") => tui::run_dashboard(std::env::current_dir()?).await,
         Some("dream") => run_autodream().await,
         Some("mcp") => handle_mcp_command(&args[2..]).await,
-        Some("legacy-god") => legacy_god::run_god_pipeline().await,
+
         Some("--help") | Some("-h") | Some("help") => {
             print_help();
             Ok(())
@@ -302,6 +301,7 @@ async fn run_autodream() -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;

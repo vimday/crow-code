@@ -214,6 +214,7 @@ fn build_compacted_history(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::compiler::ChatMessage;

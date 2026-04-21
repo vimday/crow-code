@@ -197,14 +197,14 @@ pub(crate) async fn apply_winning_plan(
     }
 
     if cfg.write_mode != crate::config::WriteMode::SandboxOnly {
-        let _ = ledger
-            .lock()
-            .unwrap()
+        if let Ok(mut l) = ledger.lock() {
+            let _ = l
             .append(crow_workspace::ledger::LedgerEvent::PlanApplied {
                 plan_id: plan_id.to_string(),
                 snapshot_id: snapshot_id.clone(),
                 timestamp: chrono::Utc::now(),
             });
+        }
     }
 
     Ok(())

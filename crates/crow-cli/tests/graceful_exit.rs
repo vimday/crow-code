@@ -1,16 +1,11 @@
+#![allow(clippy::unwrap_used)]
 use assert_cmd::Command;
-use tempfile::TempDir;
 
 #[test]
-fn empty_workspace_exits_gracefully() {
-    let dir = TempDir::new().unwrap();
-
+fn help_exits_gracefully() {
     Command::cargo_bin("crow")
         .unwrap()
-        .arg("legacy-god")
-        .current_dir(dir.path())
+        .arg("--help")
         .assert()
-        .success()
-        .stdout(predicates::str::contains("No verification candidates"))
-        .stdout(predicates::str::contains("NoVerifierAvailable"));
+        .success();
 }

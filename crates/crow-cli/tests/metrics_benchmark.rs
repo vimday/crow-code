@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
@@ -61,7 +62,6 @@ fn benchmark_zero_pollution_on_failed_apply() {
         }],
     };
 
-    // 3. Instead of using the `main.rs` loop directly which requires a full LLM and network stack,
     // we use the actual `applier` directly against a sandbox.
     use crow_materialize::{materialize, MaterializeConfig};
     use crow_workspace::applier::apply_plan_to_sandbox;

@@ -13,7 +13,7 @@ impl SubagentWorker {
     pub fn new(compiler: IntentCompiler) -> Self {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or(std::time::Duration::ZERO)
             .as_micros();
         let id = format!("sub-{:08x}", ts as u32);
         Self { id, compiler }
@@ -137,6 +137,8 @@ impl EventHandler for SubagentEventHandler<'_> {
                     message: format!("[{}] {}", self.id, message),
                 })
             }
+            // Forward structured turn lifecycle events to parent as-is
+            AgentEvent::Turn(ev) => self.parent.handle_event(AgentEvent::Turn(ev)),
         }
     }
 }

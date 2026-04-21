@@ -131,6 +131,7 @@ impl PlanHydrator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crow_patch::{Confidence, PreconditionState, SnapshotId, WorkspacePath};

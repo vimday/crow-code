@@ -211,6 +211,7 @@ fn manifest_hash(workspace_root: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tempfile::tempdir;

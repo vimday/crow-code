@@ -176,6 +176,7 @@ static THEME_CONFIG: LazyLock<RwLock<ThemeConfig>> =
     LazyLock::new(|| RwLock::new(ThemeConfig::default()));
 
 /// Get the current theme configuration.
+#[allow(clippy::expect_used)]
 pub fn current_theme() -> ThemeConfig {
     *THEME_CONFIG.read().expect("theme lock poisoned")
 }

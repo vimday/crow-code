@@ -145,6 +145,9 @@ pub struct AppState {
 
     // Incremental Markdown Streaming (Yomi-inspired)
     pub stream_state: crate::render::MarkdownStreamState,
+
+    // Smooth streaming animation controller (CommitTick pattern)
+    pub stream_controller: crate::tui::stream_controller::StreamController,
 }
 
 impl AppState {
@@ -175,6 +178,7 @@ impl AppState {
             is_dirty: false,
             focus: Focus::Composer,
             stream_state: crate::render::MarkdownStreamState::default(),
+            stream_controller: crate::tui::stream_controller::StreamController::new(),
         }
     }
 

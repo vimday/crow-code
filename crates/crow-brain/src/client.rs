@@ -19,6 +19,30 @@ pub enum BrainError {
     MissingField(String),
 }
 
+impl BrainError {
+    /// Returns true if this error is likely transient and the request should be retried.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transport(_) => true,
+            Self::ApiError { status, .. } => [429, 500, 502, 503, 529].contains(status),
+            Self::Config(_) | Self::ParseError { .. } | Self::MissingField(_) => false,
+        }
+    }
+
+    /// Returns true if this is an authentication/authorization error.
+    pub fn is_auth_error(&self) -> bool {
+        matches!(self, Self::ApiError { status, .. } if *status == 401 || *status == 403)
+    }
+
+    /// Returns the HTTP status code, if applicable.
+    pub fn status_code(&self) -> Option<u16> {
+        match self {
+            Self::ApiError { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
 // ─── Provider Capabilities & Configuration ─────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
