@@ -268,7 +268,7 @@ impl<'a> Component for ComposerComponent<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, (cmd, desc))| {
-                        let content = format!(" {cmd:15} |  {desc} ");
+                        let content = format!(" {cmd:18} {desc}");
                         if i == selected_idx {
                             ListItem::new(content)
                                 .style(Style::default().bg(Color::Cyan).fg(Color::Black).bold())
@@ -285,11 +285,14 @@ impl<'a> Component for ComposerComponent<'a> {
                         .title(" Commands "),
                 );
 
+                // Dynamic width: 55% of terminal width, clamped to [40, 60]
+                let popup_width = (area.width * 55 / 100).clamp(40, 60);
+
                 // Render List on the left side of the popup area
                 let popup_horiz = ratatui::layout::Layout::default()
                     .direction(ratatui::layout::Direction::Horizontal)
                     .constraints([
-                        ratatui::layout::Constraint::Length(30),
+                        ratatui::layout::Constraint::Length(popup_width),
                         ratatui::layout::Constraint::Min(0),
                     ])
                     .split(popup_area);
