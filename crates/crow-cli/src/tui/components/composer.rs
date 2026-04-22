@@ -168,7 +168,7 @@ impl<'a> Component for ComposerComponent<'a> {
             let lines = self.textarea.lines();
             if lines.len() == 1 && (lines[0].starts_with('/') || lines[0].starts_with('!')) {
                 let query = lines[0].to_string();
-                let options = crate::tui::state::get_palette_commands(&query);
+                let options = crow_commands::get_palette_commands(&query);
 
                 if !options.is_empty() {
                     self.active_popup = ActivePopup::CommandPalette {

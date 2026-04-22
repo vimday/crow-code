@@ -282,29 +282,3 @@ impl AppState {
         text.len() as f64 / 4.0
     }
 }
-
-pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
-    let all = vec![
-        ("/help", "Show manual"),
-        ("/status", "Print system status"),
-        ("/clear", "Clear history"),
-        ("/model", "Switch LLM Model"),
-        ("/view", "Swap Lens Mode (focus|evidence|audit)"),
-        ("/swarm", "Launch background sub-agent swarm"),
-        ("/compact", "Force context compaction"),
-        ("/session list", "List saved sessions"),
-        ("/session resume", "Resume a saved session"),
-        ("/exit", "Exit Crow"),
-    ];
-    let trimmed_query = query.trim_end();
-    if trimmed_query == "/" || trimmed_query.is_empty() {
-        all.into_iter()
-            .map(|(c, d)| (c.to_string(), d.to_string()))
-            .collect()
-    } else {
-        all.into_iter()
-            .filter(|(cmd, _)| cmd.starts_with(trimmed_query))
-            .map(|(c, d)| (c.to_string(), d.to_string()))
-            .collect()
-    }
-}

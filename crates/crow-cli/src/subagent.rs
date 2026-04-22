@@ -27,16 +27,17 @@ pub struct SubagentWorker {
     pub id: String,
     pub role: AgentRole,
     compiler: IntentCompiler,
+    task_registry: crow_runtime::registry::TaskRegistry,
 }
 
 impl SubagentWorker {
-    pub fn new(role: AgentRole, compiler: IntentCompiler) -> Self {
+    pub fn new(role: AgentRole, compiler: IntentCompiler, task_registry: crow_runtime::registry::TaskRegistry) -> Self {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::ZERO)
             .as_micros();
         let id = format!("sub-{:08x}", ts as u32);
-        Self { id, role, compiler }
+        Self { id, role, compiler, task_registry }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -81,7 +82,17 @@ impl SubagentWorker {
         // Enforce a hard timeout matching the AGENTS.md branch-level 120s limit.
         // Prevents stalled LLM calls or infinite recon loops from hanging forever.
         const SUBAGENT_TIMEOUT: Duration = Duration::from_secs(120);
-        tokio::time::timeout(
+
+        let task_def = crow_runtime::registry::AgentTask {
+            id: self.id.clone(),
+            name: format!("Subagent-{}", self.role),
+            description: task.to_string(),
+            status: crow_runtime::registry::TaskStatus::Running,
+            output: None,
+        };
+        self.task_registry.register(task_def);
+
+        let execution_result = tokio::time::timeout(
             SUBAGENT_TIMEOUT,
             crate::epistemic::run_epistemic_loop(
                 &self.compiler,
@@ -92,12 +103,23 @@ impl SubagentWorker {
                 file_state_store,
             ),
         )
-        .await
-        .map_err(|_| anyhow::anyhow!(
-            "Subagent [{id}] timed out after {timeout}s",
-            id = self.id,
-            timeout = SUBAGENT_TIMEOUT.as_secs()
-        ))?
+        .await;
+
+        match execution_result {
+            Ok(Ok(plan)) => {
+                self.task_registry.update_status(&self.id, crow_runtime::registry::TaskStatus::Completed);
+                Ok(plan)
+            }
+            Ok(Err(e)) => {
+                self.task_registry.update_status(&self.id, crow_runtime::registry::TaskStatus::Failed(e.to_string()));
+                Err(e)
+            }
+            Err(_) => {
+                let err_msg = format!("Subagent [{id}] timed out after {timeout}s", id = self.id, timeout = SUBAGENT_TIMEOUT.as_secs());
+                self.task_registry.update_status(&self.id, crow_runtime::registry::TaskStatus::Failed(err_msg.clone()));
+                Err(anyhow::anyhow!(err_msg))
+            }
+        }
     }
 }
 

@@ -15,6 +15,8 @@ pub struct SessionRuntime {
     pub ledger: Mutex<EventLedger>,
     pub cached_repo_map: Mutex<Option<(SnapshotId, Arc<RepoMap>)>>,
     pub workspace: PathBuf,
+    pub task_registry: crow_runtime::registry::TaskRegistry,
+    pub team_registry: crow_runtime::registry::TeamRegistry,
 }
 
 impl SessionRuntime {
@@ -48,6 +50,8 @@ impl SessionRuntime {
             ledger: Mutex::new(ledger),
             cached_repo_map: Mutex::new(None),
             workspace: cfg.workspace.clone(),
+            task_registry: crow_runtime::registry::TaskRegistry::new(),
+            team_registry: crow_runtime::registry::TeamRegistry::new(),
         })
     }
 

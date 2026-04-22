@@ -243,7 +243,7 @@ pub async fn run_epistemic_loop(
                     "Spawning isolated Subagent Worker runtime".into(),
                 ));
 
-                let subagent = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Explorer, compiler.clone());
+                let subagent = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Explorer, compiler.clone(), crow_runtime::registry::TaskRegistry::new());
 
                 let sys_msgs = messages
                     .as_messages()

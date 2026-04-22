@@ -272,7 +272,7 @@ impl ThreadManager {
 
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
-            let mut worker = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Generic, compiler_instance.clone());
+            let mut worker = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Generic, compiler_instance.clone(), crow_runtime::registry::TaskRegistry::new());
             // Replace worker id for consistency with the UI
             worker.id = id.clone();
 
