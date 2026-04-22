@@ -36,10 +36,14 @@ fn make_textarea<'a>() -> TextArea<'a> {
     let mut textarea = TextArea::default();
     textarea.set_block(Block::default().borders(Borders::NONE));
     textarea.set_cursor_line_style(Style::default());
+    // Hide the textarea's internal block cursor — we use frame.set_cursor()
+    // to place a single terminal blinking cursor (Codex/Claude Code pattern).
+    textarea.set_cursor_style(Style::default());
     let placeholder = Style::default().fg(ratatui::style::Color::DarkGray);
     textarea.set_placeholder_text("Ask Crow anything...");
     textarea.set_placeholder_style(placeholder);
-    textarea.set_line_number_style(Style::default().fg(ratatui::style::Color::DarkGray));
+    // NOTE: Do NOT call set_line_number_style() — it enables line numbers.
+    // A chat input box should never show line numbers.
     textarea
 }
 
