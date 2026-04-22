@@ -1,5 +1,6 @@
 use crate::event::{AgentEvent, ViewMode};
 use crow_patch::SnapshotId;
+pub use crow_runtime::cancel::CancellationToken;
 use std::time::Instant;
 
 // ── TUI Message Bus ──────────────────────────────────────────────────────────
@@ -41,72 +42,7 @@ pub struct Cell {
     pub payload: String,
 }
 
-// ── Cancellation Token ───────────────────────────────────────────────────────
 
-/// Resettable cancellation token using arc-swap + `CancellationToken`.
-///
-/// Design (aligned with yomi's `CancelToken`):
-/// - Clone shares the same `ArcSwap` (shared cancellation state)
-/// - `cancel()` / `reset_if_cancelled()` operate atomically via `ArcSwap`
-/// - `runtime_token()` snapshots the current token for `tokio::select!` use
-///
-/// This enables safe interruption of agent turns: the TUI cancels via
-/// `cancel()`, the epistemic loop checks via `is_cancelled()`, and after
-/// the turn completes, `reset_if_cancelled()` prepares for the next turn
-/// without affecting stale listeners on the old token.
-#[derive(Clone)]
-pub struct CancellationToken {
-    inner: std::sync::Arc<arc_swap::ArcSwap<tokio_util::sync::CancellationToken>>,
-}
-
-impl Default for CancellationToken {
-    fn default() -> Self {
-        Self {
-            inner: std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-                tokio_util::sync::CancellationToken::new(),
-            ))),
-        }
-    }
-}
-
-impl CancellationToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Request cancellation of the current turn.
-    pub fn cancel(&self) {
-        self.inner.load().cancel();
-    }
-
-    /// Check if cancellation has been requested.
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.load().is_cancelled()
-    }
-
-    /// Retrieve the underlying tokio cancellation token for native `select!` integration.
-    pub fn runtime_token(&self) -> tokio_util::sync::CancellationToken {
-        (**self.inner.load()).clone()
-    }
-
-    /// Atomically swap in a fresh token if the current one is cancelled.
-    /// Stale listeners on the old token gracefully fall off.
-    pub fn reset_if_cancelled(&self) {
-        if self.is_cancelled() {
-            self.inner.store(std::sync::Arc::new(
-                tokio_util::sync::CancellationToken::new(),
-            ));
-        }
-    }
-
-    /// Unconditionally replace the token. Use when you need a fresh state
-    /// regardless of whether the old token was cancelled.
-    pub fn force_reset(&self) {
-        self.inner.store(std::sync::Arc::new(
-            tokio_util::sync::CancellationToken::new(),
-        ));
-    }
-}
 
 // ── App State ────────────────────────────────────────────────────────────────
 

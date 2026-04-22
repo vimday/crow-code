@@ -2,8 +2,8 @@ use anyhow::Result;
 use crow_materialize::MaterializeConfig;
 
 use crate::config::CrowConfig;
-use crate::context;
-use crate::epistemic;
+use crow_runtime::context;
+use crow_runtime::epistemic;
 
 /// Pre-warm the Cargo build cache by running `cargo check` on the frozen
 /// sandbox. This populates the `CARGO_TARGET_DIR` (keyed to `frozen_root`)
@@ -219,14 +219,14 @@ pub(crate) async fn run_mcts_crucible(
     compiler: &crow_brain::IntentCompiler,
     messages: &mut context::ConversationManager,
     snapshot_id: &crow_patch::SnapshotId,
-    mcp_manager: Option<&crate::mcp::McpManager>,
+    mcp_manager: Option<&crow_runtime::mcp::McpManager>,
     observer: &mut dyn crate::event::EventHandler,
 ) -> Result<Option<crate::mcts::BranchOutcome>> {
     // 1. Initial Epistemic Loop (Serial Recon) — with hard timeout
     observer.handle_event(crate::event::AgentEvent::Log(
         "Entering Epistemic Recon Loop (MCTS Pre-exploration)...".into(),
     ));
-    let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
+    let file_state_store = std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
     let baseline_plan = match tokio::time::timeout(
         std::time::Duration::from_secs(180),
         epistemic::run_epistemic_loop(
@@ -236,6 +236,8 @@ pub(crate) async fn run_mcts_crucible(
             mcp_manager,
             observer,
             file_state_store,
+                std::sync::Arc::new(crow_tools::ToolRegistry::new()),
+                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
         ),
     )
     .await

@@ -412,6 +412,7 @@ dependencies = [
  "crow-patch",
  "crow-probe",
  "crow-runtime",
+ "crow-tools",
  "crow-verifier",
  "crow-workspace",
  "dirs",
@@ -513,11 +514,13 @@ dependencies = [
  "crow-mcp",
  "crow-patch",
  "crow-probe",
+ "crow-tools",
  "crow-verifier",
  "crow-workspace",
  "dirs",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "uuid",
@@ -528,6 +531,14 @@ name = "crow-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "crow-patch",
+ "crow-probe",
+ "crow-verifier",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

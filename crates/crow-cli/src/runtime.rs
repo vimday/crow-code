@@ -1,22 +1,23 @@
 use crate::config::CrowConfig;
-use crate::mcp::McpManager;
+use crow_runtime::mcp::McpManager;
 use anyhow::{Context, Result};
 use crow_brain::IntentCompiler;
 use crow_intel::RepoMap;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::SnapshotId;
 use crow_workspace::ledger::EventLedger;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub struct SessionRuntime {
     pub compiler: Arc<IntentCompiler>,
     pub mcp_manager: Arc<McpManager>,
     pub ledger: Mutex<EventLedger>,
-    pub cached_repo_map: Mutex<Option<(SnapshotId, Arc<RepoMap>)>>,
-    pub workspace: PathBuf,
+    pub cached_repo_map: Mutex<Option<(SnapshotId, std::sync::Arc<crow_intel::RepoMap>)>>,
+    pub workspace: std::path::PathBuf,
     pub task_registry: crow_runtime::registry::TaskRegistry,
     pub team_registry: crow_runtime::registry::TeamRegistry,
+    pub tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
+    pub permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
 }
 
 impl SessionRuntime {
@@ -24,7 +25,13 @@ impl SessionRuntime {
         let client = cfg.build_llm_client()?;
         let compiler =
             Arc::new(IntentCompiler::new(client).with_native_tool_calling(cfg.llm.json_mode));
-        let mcp_manager = Arc::new(McpManager::boot(&cfg.mcp_servers).await?);
+        let converted_mcp_servers: std::collections::HashMap<String, crow_runtime::mcp::ServerConfig> = cfg.mcp_servers.iter().map(|(k, v)| {
+            (k.clone(), crow_runtime::mcp::ServerConfig {
+                command: v.command.clone(),
+                args: v.args.clone(),
+            })
+        }).collect();
+        let mcp_manager = Arc::new(McpManager::boot(&converted_mcp_servers).await?);
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&cfg.workspace);
 
         let ledger = crate::open_ledger(&cfg.workspace).unwrap_or_else(|e| {
@@ -44,6 +51,15 @@ impl SessionRuntime {
             })
         });
 
+        let mut tool_registry = crow_tools::ToolRegistry::new();
+        tool_registry.register(Box::new(crow_tools::recon::ListDirTool));
+        tool_registry.register(Box::new(crow_tools::recon::SearchTool));
+        tool_registry.register(Box::new(crow_tools::recon::FetchUrlTool));
+        tool_registry.register(Box::new(crow_tools::recon::FileInfoTool));
+        tool_registry.register(Box::new(crow_tools::recon::WordCountTool));
+        tool_registry.register(Box::new(crow_tools::recon::DirTreeTool));
+        tool_registry.register(Box::new(crow_tools::recon::ReadFilesTool));
+
         Ok(Self {
             compiler,
             mcp_manager,
@@ -52,6 +68,8 @@ impl SessionRuntime {
             workspace: cfg.workspace.clone(),
             task_registry: crow_runtime::registry::TaskRegistry::new(),
             team_registry: crow_runtime::registry::TeamRegistry::new(),
+            tool_registry: std::sync::Arc::new(tool_registry),
+            permissions: std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
         })
     }
 
@@ -143,7 +161,7 @@ impl SessionRuntime {
         &self,
         cfg: &CrowConfig,
         prompt: &str,
-        messages: &mut crate::context::ConversationManager,
+        messages: &mut crow_runtime::context::ConversationManager,
         view_mode: crate::event::ViewMode,
     ) -> Result<SnapshotId> {
         let mut observer = crate::event::CliEventHandler::new(view_mode);
@@ -155,10 +173,10 @@ impl SessionRuntime {
         &self,
         cfg: &CrowConfig,
         prompt: &str,
-        messages: &mut crate::context::ConversationManager,
+        messages: &mut crow_runtime::context::ConversationManager,
         observer: &mut dyn crate::event::EventHandler,
     ) -> Result<SnapshotId> {
-        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
+        let file_state_store = std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
 
         let profile = crate::scan_workspace(&self.workspace).map_err(|e| anyhow::anyhow!(e))?;
@@ -245,13 +263,15 @@ impl SessionRuntime {
         }
 
         // ── Step 2: Epistemic loop against FROZEN baseline ──
-        let plan = crate::epistemic::run_epistemic_loop(
+        let plan = crow_runtime::epistemic::run_epistemic_loop(
             &self.compiler,
             messages,
             &frozen_root, // FROZEN SNAPSHOT — not live workspace
             Some(&self.mcp_manager),
             observer,
             std::sync::Arc::clone(&file_state_store),
+            std::sync::Arc::clone(&self.tool_registry),
+            std::sync::Arc::clone(&self.permissions),
         )
         .await?;
 
@@ -389,7 +409,7 @@ impl SessionRuntime {
             .with_contract(&snapshot_id)
             .build();
 
-        let mut messages = crate::context::ConversationManager::new(sys_msgs);
+        let mut messages = crow_runtime::context::ConversationManager::new(sys_msgs);
         messages.push_user(format!("Task:\n{prompt}"));
 
         match self.compiler.compile_action(&messages.as_messages()).await {
@@ -455,18 +475,20 @@ impl SessionRuntime {
             .with_contract(&snapshot_id)
             .build();
 
-        let mut messages = crate::context::ConversationManager::new(sys_msgs);
+        let mut messages = crow_runtime::context::ConversationManager::new(sys_msgs);
         messages.push_user(format!("Task:\n{prompt}"));
 
         let mut obs = crate::event::CliEventHandler::default();
-        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
-        let compiled_plan = crate::epistemic::run_epistemic_loop(
+        let file_state_store = std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
+        let compiled_plan = crow_runtime::epistemic::run_epistemic_loop(
             &self.compiler,
             &mut messages,
             &frozen_root,
             Some(&self.mcp_manager),
             &mut obs,
             std::sync::Arc::clone(&file_state_store),
+            std::sync::Arc::clone(&self.tool_registry),
+            std::sync::Arc::clone(&self.permissions),
         )
         .await?;
 
@@ -572,8 +594,8 @@ impl SessionRuntime {
         println!("\n─── Planned Changes ───");
         crate::diff::render_plan_diff(&frozen_root, sandbox.path(), &hydrated_plan);
 
-        if let Ok(store) = crate::session::SessionStore::open() {
-            let mut sess = crate::session::Session::new(&cfg.workspace, prompt);
+        if let Ok(store) = crow_runtime::session::SessionStore::open() {
+            let mut sess = crow_runtime::session::Session::new(&cfg.workspace, prompt);
             sess.save_messages(&messages.as_messages());
             sess.push_snapshot(snapshot_id);
             if store.save(&sess).is_ok() {
@@ -589,8 +611,8 @@ impl SessionRuntime {
             &session_id[..8.min(session_id.len())]
         );
 
-        let store = crate::session::SessionStore::open()?;
-        let mut loaded_session = store.load(&crate::session::SessionId(session_id.to_string()))?;
+        let store = crow_runtime::session::SessionStore::open()?;
+        let mut loaded_session = store.load(&crow_runtime::session::SessionId(session_id.to_string()))?;
 
         println!("  Workspace: {}", loaded_session.workspace_root.display());
         println!("  Task: {}", loaded_session.task);
@@ -651,7 +673,7 @@ impl SessionRuntime {
             .with_contract(&snapshot_id)
             .build();
 
-        let mut messages = crate::context::ConversationManager::new(sys_msgs);
+        let mut messages = crow_runtime::context::ConversationManager::new(sys_msgs);
 
         for msg in &restored_messages {
             match msg.role {
@@ -669,14 +691,16 @@ impl SessionRuntime {
         println!("  Entering crucible loop...\n");
 
         let mut obs = crate::event::CliEventHandler::default();
-        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
-        let compiled_plan = crate::epistemic::run_epistemic_loop(
+        let file_state_store = std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
+        let compiled_plan = crow_runtime::epistemic::run_epistemic_loop(
             &self.compiler,
             &mut messages,
             &frozen_root,
             Some(&self.mcp_manager),
             &mut obs,
             std::sync::Arc::clone(&file_state_store),
+            std::sync::Arc::clone(&self.tool_registry),
+            std::sync::Arc::clone(&self.permissions),
         )
         .await?;
 

@@ -10,10 +10,16 @@ pub struct McpManager {
     prompt_context: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub command: String,
+    pub args: Vec<String>,
+}
+
 impl McpManager {
     /// Boot configured MCP servers and build the prompt injection material.
     pub async fn boot(
-        config_servers: &HashMap<String, crate::config::McpServerConfig>,
+        config_servers: &HashMap<String, ServerConfig>,
     ) -> Result<Self> {
         let mut clients = HashMap::new();
         let mut lines = Vec::new();

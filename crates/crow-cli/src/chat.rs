@@ -1,6 +1,6 @@
 use crate::config::CrowConfig;
 use crate::render::{ColorTheme, TerminalRenderer};
-use crate::session::{Session, SessionStore};
+use crow_runtime::session::{Session, SessionStore};
 use anyhow::Result;
 use crossterm::style::{Color, Stylize};
 use rustyline::completion::{Completer, Pair};
@@ -181,7 +181,7 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
         println!();
     }
 
-    let mut messages = crate::context::ConversationManager::new(vec![]);
+    let mut messages = crow_runtime::context::ConversationManager::new(vec![]);
     let mut state = SessionState::new();
     let runtime = crate::runtime::SessionRuntime::boot(cfg).await?;
 
@@ -353,7 +353,7 @@ fn print_status(
     session: &Session,
     state: &SessionState,
     cfg: &CrowConfig,
-    messages: &crate::context::ConversationManager,
+    messages: &crow_runtime::context::ConversationManager,
     theme: &ColorTheme,
 ) {
     let ctx_bytes = messages.get_total_bytes();
@@ -443,7 +443,7 @@ fn print_repl_banner(_cfg: &CrowConfig, theme: &ColorTheme, _session: &Session) 
 fn build_prompt(
     _state: &SessionState,
     _cfg: &CrowConfig,
-    _messages: &crate::context::ConversationManager,
+    _messages: &crow_runtime::context::ConversationManager,
     theme: &ColorTheme,
 ) -> String {
     format!("{} ", "crow ›".bold().with(theme.heading))
@@ -475,7 +475,7 @@ struct ReplContext<'a> {
     pub session: &'a Session,
     pub state: &'a mut SessionState,
     pub cfg: &'a CrowConfig,
-    pub messages: &'a mut crate::context::ConversationManager,
+    pub messages: &'a mut crow_runtime::context::ConversationManager,
     pub theme: &'a ColorTheme,
 }
 
@@ -499,7 +499,7 @@ fn handle_slash_command(cmd: SlashCommand, ctx: &mut ReplContext) -> CommandOutc
             CommandOutcome::Continue
         }
         SlashCommand::Clear => {
-            *ctx.messages = crate::context::ConversationManager::new(vec![]);
+            *ctx.messages = crow_runtime::context::ConversationManager::new(vec![]);
             ctx.state.turns = 0;
             println!(
                 "  {}",

@@ -6,8 +6,8 @@
 //! All output goes through the `EventHandler` observer — no direct stdout/stderr.
 
 use crate::config::CrowConfig;
-use crate::context::ConversationManager;
-use crate::epistemic;
+use crow_runtime::context::ConversationManager;
+use crow_runtime::epistemic;
 use crate::event::{AgentEvent, EventHandler};
 use anyhow::{Context, Result};
 use crow_brain::IntentCompiler;
@@ -31,7 +31,7 @@ pub struct SerialCrucible<'a> {
     /// The orchestrating LLM toolchain.
     pub compiler: &'a IntentCompiler,
     /// Contextual state for MCP plugins and tools.
-    pub mcp_manager: Option<&'a crate::mcp::McpManager>,
+    pub mcp_manager: Option<&'a crow_runtime::mcp::McpManager>,
 }
 
 enum EpochOutcome {
@@ -195,7 +195,7 @@ impl SerialCrucible<'_> {
         let compiled_plan = if let Some(p) = precompiled_plan {
             p
         } else {
-            let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
+            let file_state_store = std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
             epistemic::run_epistemic_loop(
                 self.compiler,
                 messages,
@@ -203,6 +203,8 @@ impl SerialCrucible<'_> {
                 self.mcp_manager,
                 observer,
                 file_state_store,
+                std::sync::Arc::new(crow_tools::ToolRegistry::new()),
+                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
             )
             .await?
         };

@@ -44,7 +44,7 @@ impl PromptBuilder {
         self
     }
 
-    pub fn with_mcp(mut self, mcp_manager: Option<&crate::mcp::McpManager>) -> Self {
+    pub fn with_mcp(mut self, mcp_manager: Option<&crow_runtime::mcp::McpManager>) -> Self {
         if let Some(mgr) = mcp_manager {
             let mcp_ctx = mgr.prompt_context();
             if !mcp_ctx.is_empty() {

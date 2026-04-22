@@ -27,17 +27,25 @@ pub struct SubagentWorker {
     pub id: String,
     pub role: AgentRole,
     compiler: IntentCompiler,
-    task_registry: crow_runtime::registry::TaskRegistry,
+    task_registry: crate::registry::TaskRegistry,
+    tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
+    permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
 }
 
 impl SubagentWorker {
-    pub fn new(role: AgentRole, compiler: IntentCompiler, task_registry: crow_runtime::registry::TaskRegistry) -> Self {
+    pub fn new(
+        role: AgentRole, 
+        compiler: IntentCompiler, 
+        task_registry: crate::registry::TaskRegistry,
+        tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
+        permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
+    ) -> Self {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::ZERO)
             .as_micros();
         let id = format!("sub-{:08x}", ts as u32);
-        Self { id, role, compiler, task_registry }
+        Self { id, role, compiler, task_registry, tool_registry, permissions }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -83,11 +91,11 @@ impl SubagentWorker {
         // Prevents stalled LLM calls or infinite recon loops from hanging forever.
         const SUBAGENT_TIMEOUT: Duration = Duration::from_secs(120);
 
-        let task_def = crow_runtime::registry::AgentTask {
+        let task_def = crate::registry::AgentTask {
             id: self.id.clone(),
             name: format!("Subagent-{}", self.role),
             description: task.to_string(),
-            status: crow_runtime::registry::TaskStatus::Running,
+            status: crate::registry::TaskStatus::Running,
             output: None,
         };
         self.task_registry.register(task_def);
@@ -101,22 +109,24 @@ impl SubagentWorker {
                 mcp_manager,
                 &mut observer,
                 file_state_store,
+                std::sync::Arc::clone(&self.tool_registry),
+                std::sync::Arc::clone(&self.permissions),
             ),
         )
         .await;
 
         match execution_result {
             Ok(Ok(plan)) => {
-                self.task_registry.update_status(&self.id, crow_runtime::registry::TaskStatus::Completed);
+                self.task_registry.update_status(&self.id, crate::registry::TaskStatus::Completed);
                 Ok(plan)
             }
             Ok(Err(e)) => {
-                self.task_registry.update_status(&self.id, crow_runtime::registry::TaskStatus::Failed(e.to_string()));
+                self.task_registry.update_status(&self.id, crate::registry::TaskStatus::Failed(e.to_string()));
                 Err(e)
             }
             Err(_) => {
                 let err_msg = format!("Subagent [{id}] timed out after {timeout}s", id = self.id, timeout = SUBAGENT_TIMEOUT.as_secs());
-                self.task_registry.update_status(&self.id, crow_runtime::registry::TaskStatus::Failed(err_msg.clone()));
+                self.task_registry.update_status(&self.id, crate::registry::TaskStatus::Failed(err_msg.clone()));
                 Err(anyhow::anyhow!(err_msg))
             }
         }

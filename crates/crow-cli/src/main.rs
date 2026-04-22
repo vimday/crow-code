@@ -1,23 +1,17 @@
-mod budget;
 pub mod chat;
 mod config;
-mod context;
 pub mod crucible;
 pub mod crucible_runner;
 mod diff;
-mod epistemic;
 pub mod epistemic_ui;
 pub mod event;
 mod evidence_report;
-pub mod file_state;
-mod mcp;
 pub mod mcts;
 pub mod prompt;
 pub mod render;
 pub mod runtime;
-mod session;
+
 pub mod snapshot;
-pub mod subagent;
 pub mod thread_manager;
 pub mod tui;
 
@@ -49,7 +43,7 @@ async fn main() -> Result<()> {
         Some("chat") => chat::run_repl(&CrowConfig::load()?).await,
         Some(cmd) if cmd == "-r" || cmd == "--resume" => {
             // Drop into Console 4.0 Ratatui Workbench with resume flag
-            tui::run_workbench(&CrowConfig::load()?, true).await
+            tui::app::run_workbench(&CrowConfig::load()?, true).await
         }
         Some(unknown) => {
             eprintln!("Unknown command: {unknown}");
@@ -58,7 +52,7 @@ async fn main() -> Result<()> {
         }
         None => {
             // Drop into Console 4.0 Ratatui Workbench
-            tui::run_workbench(&CrowConfig::load()?, false).await
+            tui::app::run_workbench(&CrowConfig::load()?, false).await
         }
     }
 }
@@ -105,7 +99,7 @@ async fn handle_session_command(args: &[String]) -> Result<()> {
     let subcmd = args.first().map(std::string::String::as_str);
     match subcmd {
         Some("list") => {
-            let store = session::SessionStore::open()?;
+            let store = crow_runtime::session::SessionStore::open()?;
             let sessions = store.list()?;
             if sessions.is_empty() {
                 println!("No saved sessions.");
@@ -127,8 +121,8 @@ async fn handle_session_command(args: &[String]) -> Result<()> {
                 .get(1)
                 .ok_or_else(|| anyhow::anyhow!("Usage: crow session resume <session-id>"))?;
             println!("  (use `crow session resume-run <id>` to actually continue execution)");
-            let store = session::SessionStore::open()?;
-            let session = store.load(&session::SessionId(id.clone()))?;
+            let store = crow_runtime::session::SessionStore::open()?;
+            let session = store.load(&crow_runtime::session::SessionId(id.clone()))?;
             println!("Resuming session: {}", session.id.0);
             println!("  Workspace: {}", session.workspace_root.display());
             println!("  Task: {}", session.task);
@@ -179,7 +173,7 @@ async fn run_plan(args: &[String]) -> Result<()> {
 async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-    let mut messages = context::ConversationManager::new(vec![]);
+    let mut messages = crow_runtime::context::ConversationManager::new(vec![]);
     let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime
         .execute_turn(

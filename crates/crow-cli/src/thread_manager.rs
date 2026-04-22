@@ -1,9 +1,10 @@
 use crate::config::CrowConfig;
-use crate::context::ConversationManager;
+use crow_runtime::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler, TurnEvent, TurnPhase};
 use crate::runtime::SessionRuntime;
-use crate::session::{Session, SessionStore};
-use crate::tui::state::{CancellationToken, TuiMessage};
+use crow_runtime::session::{Session, SessionStore};
+use crow_runtime::cancel::CancellationToken;
+use crow_runtime::event::EngineEvent;
 use crow_patch::SnapshotId;
 use std::sync::Arc;
 use std::time::Instant;
@@ -42,7 +43,7 @@ pub struct ThreadManager {
     runtime: Arc<SessionRuntime>,
     messages: Arc<Mutex<ConversationManager>>,
     config: CrowConfig,
-    ui_tx: mpsc::UnboundedSender<TuiMessage>,
+    ui_tx: mpsc::UnboundedSender<EngineEvent>,
     thread_state: Arc<Mutex<TurnState>>,
     session_id: Arc<Mutex<Option<String>>>,
     swarm_state: Arc<Mutex<std::collections::HashMap<String, TurnState>>>,
@@ -53,7 +54,7 @@ impl ThreadManager {
         runtime: Arc<SessionRuntime>,
         messages: Arc<Mutex<ConversationManager>>,
         config: CrowConfig,
-        ui_tx: mpsc::UnboundedSender<TuiMessage>,
+        ui_tx: mpsc::UnboundedSender<EngineEvent>,
         initial_session_id: Option<String>,
     ) -> Self {
         Self {
@@ -98,7 +99,7 @@ impl ThreadManager {
                 state.started_at = Some(Instant::now());
 
                 // Emit structured turn started event
-                let _ = self.ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                let _ = self.ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Turn(
                     TurnEvent::Started { turn_id },
                 )));
 
@@ -111,7 +112,7 @@ impl ThreadManager {
                     if let Some(token) = &state.cancellation {
                         token.cancel();
                         state.status = TurnStatus::Aborted;
-                        let _ = self.ui_tx.send(TuiMessage::SessionComplete);
+                        let _ = self.ui_tx.send(EngineEvent::SessionComplete);
                     }
                 }
             }
@@ -137,7 +138,7 @@ impl ThreadManager {
 
         tokio::spawn(async move {
             let mut observer =
-                crate::event::TuiEventHandler::with_cancellation(ui_tx.clone(), token.clone());
+                crow_runtime::event::ChannelEventHandler::with_cancellation(ui_tx.clone(), token.clone());
 
             // Clone messages to prevent locking ConversationManager for the duration of the run
             let mut local_msgs = msgs_clone.lock().await.clone();
@@ -155,34 +156,34 @@ impl ThreadManager {
             if was_cancelled {
                 let turn_id = state.turn_id.clone().unwrap_or_default();
                 state.status = TurnStatus::Aborted;
-                let _ = ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Turn(
                     TurnEvent::Aborted {
                         turn_id,
                         reason: "Cancelled by user".into(),
                     },
                 )));
-                let _ = ui_tx.send(TuiMessage::TurnComplete(false));
+                let _ = ui_tx.send(EngineEvent::TurnComplete(false));
             } else {
                 // Safe to write back: turn completed normally
                 *msgs_clone.lock().await = local_msgs.clone();
                 match result {
                     Ok(snapshot_id) => {
                         state.status = TurnStatus::Completed(Some(snapshot_id.clone()));
-                        let _ = ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                        let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Turn(
                             TurnEvent::Completed {
                                 turn_id: state.turn_id.clone().unwrap_or_default(),
                                 success: true,
                                 token_usage: None,
                             },
                         )));
-                        let _ = ui_tx.send(TuiMessage::TurnComplete(true));
+                        let _ = ui_tx.send(EngineEvent::TurnComplete(true));
 
                         // Async persistence after turn completion
                         if let Ok(store) = SessionStore::open() {
                             let mut sid_guard = thread_state_sid.lock().await;
                             let mut current_session = if let Some(ref sid) = *sid_guard {
                                 store
-                                    .load(&crate::session::SessionId(sid.clone()))
+                                    .load(&crow_runtime::session::SessionId(sid.clone()))
                                     .unwrap_or_else(|_| {
                                         Session::new(
                                             std::path::Path::new(&cfg_clone.workspace),
@@ -208,14 +209,14 @@ impl ThreadManager {
                     Err(e) => {
                         let err_msg = e.to_string();
                         state.status = TurnStatus::Failed(err_msg);
-                        let _ = ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                        let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Turn(
                             TurnEvent::Completed {
                                 turn_id: state.turn_id.clone().unwrap_or_default(),
                                 success: false,
                                 token_usage: None,
                             },
                         )));
-                        let _ = ui_tx.send(TuiMessage::TurnComplete(false));
+                        let _ = ui_tx.send(EngineEvent::TurnComplete(false));
                     }
                 }
             }
@@ -254,11 +255,11 @@ impl ThreadManager {
             );
         }
 
-        let _ = ui_tx.send(TuiMessage::SwarmStarted(id.clone(), prompt_clone.clone()));
+        let _ = ui_tx.send(EngineEvent::SwarmStarted(id.clone(), prompt_clone.clone()));
 
         tokio::spawn(async move {
             let mut observer =
-                crate::event::TuiEventHandler::with_cancellation(ui_tx.clone(), token.clone());
+                crow_runtime::event::ChannelEventHandler::with_cancellation(ui_tx.clone(), token.clone());
 
             let (compiler, root, mcp, sys_msgs) = {
                 let msgs_guard = msgs_clone.lock().await;
@@ -272,7 +273,13 @@ impl ThreadManager {
 
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
-            let mut worker = crate::subagent::SubagentWorker::new(crate::subagent::AgentRole::Generic, compiler_instance.clone(), crow_runtime::registry::TaskRegistry::new());
+            let mut worker = crow_runtime::subagent::SubagentWorker::new(
+                crow_runtime::subagent::AgentRole::Generic, 
+                compiler_instance.clone(), 
+                crow_runtime::registry::TaskRegistry::new(),
+                std::sync::Arc::new(crow_tools::ToolRegistry::new()),
+                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox })
+            );
             // Replace worker id for consistency with the UI
             worker.id = id.clone();
 
@@ -295,7 +302,7 @@ impl ThreadManager {
                 if let Some(mut state) = s.remove(&id) {
                     if token.is_cancelled() {
                         state.status = TurnStatus::Aborted;
-                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                     } else {
                         match result {
                             Ok(plan) => {
@@ -303,7 +310,7 @@ impl ThreadManager {
                             }
                             Err(e) => {
                                 state.status = TurnStatus::Failed(e.to_string());
-                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                                let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                             }
                         }
                     }
@@ -318,7 +325,7 @@ impl ThreadManager {
                     )));
 
                     let Ok(cfg) = crate::config::CrowConfig::load() else {
-                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                         return;
                     };
 
@@ -326,17 +333,17 @@ impl ThreadManager {
                     let Ok(profile) =
                         crow_probe::scan_workspace(&frozen_root).map_err(|e| anyhow::anyhow!(e))
                     else {
-                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                         return;
                     };
 
                     let Some(candidate) = profile.verification_candidates.first().cloned() else {
-                        let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                        let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                         return;
                     };
 
                     let mcts_config = crate::mcts::MctsConfig::from_env();
-                    let mut messages_dup = crate::context::ConversationManager::new(sys_msgs);
+                    let mut messages_dup = crow_runtime::context::ConversationManager::new(sys_msgs);
                     messages_dup.push_user(prompt_clone.clone());
 
                     let snapshot_id = crate::snapshot::resolve_snapshot_id(&frozen_root);
@@ -375,16 +382,16 @@ impl ThreadManager {
                                 {
                                     Ok(_) => {
                                         let _ =
-                                            ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                                            ui_tx.send(EngineEvent::SwarmComplete(id.clone(), true));
                                     }
                                     Err(_) => {
                                         let _ = ui_tx
-                                            .send(TuiMessage::SwarmComplete(id.clone(), false));
+                                            .send(EngineEvent::SwarmComplete(id.clone(), false));
                                     }
                                 }
                             }
                             _ => {
-                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                                let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                             }
                         }
                     } else {
@@ -408,15 +415,15 @@ impl ThreadManager {
                             .await
                         {
                             Ok(_) => {
-                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                                let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), true));
                             }
                             Err(_) => {
-                                let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), false));
+                                let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), false));
                             }
                         }
                     }
                 } else {
-                    let _ = ui_tx.send(TuiMessage::SwarmComplete(id.clone(), true));
+                    let _ = ui_tx.send(EngineEvent::SwarmComplete(id.clone(), true));
                 }
             }
         });

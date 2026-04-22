@@ -394,7 +394,7 @@ impl CrowConfig {
             .and_then(|v| v.parse().ok())
             .or(file_ws.map_budget)
             .unwrap_or(64 * 1024)
-            .min(crate::budget::MAX_SYSTEM_BYTES);
+            .min(crow_runtime::budget::MAX_SYSTEM_BYTES);
 
         // ── Write Mode ──
         let write_mode = match env::var("CROW_WRITE_MODE") {

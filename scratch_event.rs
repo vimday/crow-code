@@ -1,11 +1,156 @@
 use crossterm::style::{Color, Stylize};
-// Intentionally left blank or removed unused imports
+use crow_patch::IntentPlan;
 
 // ── Structured Protocol Layer (SQ/EQ Pattern) ──────────────────────
 
-pub use crow_runtime::event::{
-    AgentEvent, EventHandler, TokenUsageSummary, TurnEvent, TurnPhase,
-};
+/// Turn lifecycle events — always delivered, represent major phase transitions.
+#[derive(Debug, Clone)]
+pub enum TurnEvent {
+    /// A new turn has begun.
+    Started { turn_id: String },
+    /// The turn completed (success or failure).
+    Completed {
+        turn_id: String,
+        success: bool,
+        token_usage: Option<TokenUsageSummary>,
+    },
+    /// The turn was aborted by the user.
+    Aborted { turn_id: String, reason: String },
+    /// The turn transitioned to a new phase.
+    PhaseChanged { turn_id: String, phase: TurnPhase },
+}
+
+/// Phases of a turn lifecycle — used for status bar and telemetry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnPhase {
+    Materializing,
+    BuildingRepoMap,
+    Compacting,
+    EpistemicLoop { step: u32, max_steps: u32 },
+    CruciblePreflight,
+    CrucibleVerification { attempt: u32 },
+    Applying,
+    Complete,
+}
+
+impl std::fmt::Display for TurnPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Materializing => write!(f, "Materializing"),
+            Self::BuildingRepoMap => write!(f, "Building Repo Map"),
+            Self::Compacting => write!(f, "Compacting"),
+            Self::EpistemicLoop { step, max_steps } => write!(f, "Epistemic [{step}/{max_steps}]"),
+            Self::CruciblePreflight => write!(f, "Preflight"),
+            Self::CrucibleVerification { attempt } => write!(f, "Crucible [attempt {attempt}]"),
+            Self::Applying => write!(f, "Applying"),
+            Self::Complete => write!(f, "Complete"),
+        }
+    }
+}
+
+/// Token usage summary attached to turn completion events.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsageSummary {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    pub context_window: u32,
+}
+
+// ── The Combined Agent Event ────────────────────────────────────────
+//
+// Event taxonomy (cf. yomi's modular Event::User/Agent/Model/Tool/System):
+//
+//   Turn lifecycle:   Turn(TurnEvent)                → InfoBar, History
+//   Streaming:        StreamChunk, Markdown           → StreamController, History
+//   Tool execution:   ActionStart/Complete, ReconStart,
+//                     ReadFiles, DelegateStart,
+//                     PlanSubmitted, CruciblePreflight → InfoBar (spinner), History
+//   Metrics:          TokenUsage, Compacting,
+//                     ToolProgress                    → InfoBar (gauge), StatusMessage
+//   Diagnostics:      StateChanged, Retrying,
+//                     Error, Log                      → History, StatusMessage
+
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    // ── Turn lifecycle (new structured protocol) ────────────────────
+    /// Structured turn lifecycle event.
+    Turn(TurnEvent),
+
+    // ── Core events (existing, kept for backward compat) ────────────
+    /// Agent is analyzing the codebase and thinking.
+    Thinking(u32, u32),
+
+    /// Agent emitted a piece of text (e.g. rationale).
+    StreamChunk(String),
+
+    /// Agent decided to start a specific action.
+    ActionStart(String),
+
+    /// Agent finished an action.
+    ActionComplete(String),
+
+    /// Agent successfully built a plan.
+    PlanSubmitted(IntentPlan),
+
+    /// The crucible sandbox has started to test the plan.
+    CruciblePreflight(String),
+
+    /// Agent is reading files from the workspace.
+    ReadFiles(Vec<String>),
+
+    /// Agent is performing reconnaissance.
+    ReconStart(String),
+
+    /// Agent delegated a task to a subagent.
+    DelegateStart(String),
+
+    /// A general informational log.
+    Log(String),
+
+    /// A final markdown block.
+    Markdown(String),
+
+    /// A fatal error occurred during the loop.
+    Error(String),
+
+    // ── High-granularity events (Yomi-inspired) ─────────────────────
+    /// Token usage update from provider API response.
+    TokenUsage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+        /// Model context window size (for usage bar calculation)
+        context_window: u32,
+    },
+
+    /// Agent state transition (for TUI state visualization).
+    StateChanged { from: String, to: String },
+
+    /// Agent is retrying after a transient error.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        reason: String,
+    },
+
+    /// Context compaction is starting or finishing.
+    Compacting { active: bool },
+
+    /// Progress update for long-running tool/subagent.
+    ToolProgress { tool_id: String, message: String },
+}
+
+/// A receiver trait for AgentEvents, separating the engine from TUI/CLI rendering.
+pub trait EventHandler: Send {
+    fn handle_event(&mut self, event: AgentEvent);
+
+    /// Returns true if the user has requested cancellation of the current turn.
+    /// The epistemic loop checks this at each iteration boundary.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
 
 /// The level of detail provided to the user during the autonomous loop.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
