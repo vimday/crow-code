@@ -1,5 +1,4 @@
-use crate::tui::components::Component;
-use crate::tui::state::TuiMessage;
+
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -28,10 +27,11 @@ impl CommandPalette {
     }
 }
 
-impl Component for CommandPalette {
-    fn handle_event(&mut self, event: &Event) -> Option<TuiMessage> {
+#[allow(dead_code)]
+impl CommandPalette {
+    pub fn handle_event_legacy(&mut self, event: &Event) {
         if !self.active {
-            return None;
+            return;
         }
 
         if let Event::Key(key) = event {
@@ -40,33 +40,27 @@ impl Component for CommandPalette {
                     KeyCode::Char(c) => {
                         self.composer.insert(self.cursor, c);
                         self.cursor += 1;
-                        return Some(TuiMessage::Tick);
                     }
                     KeyCode::Backspace if self.cursor > 0 => {
                         self.cursor -= 1;
                         self.composer.remove(self.cursor);
-                        return Some(TuiMessage::Tick);
                     }
                     KeyCode::Left => {
                         self.cursor = self.cursor.saturating_sub(1);
-                        return Some(TuiMessage::Tick);
                     }
                     KeyCode::Right if self.cursor < self.composer.len() => {
                         self.cursor += 1;
-                        return Some(TuiMessage::Tick);
                     }
                     KeyCode::Enter => {
-                        // Submit logic happens in the main event router currently,
-                        // but we could emit a custom command execution message.
+                        // Submit logic happens in the main event router currently.
                     }
                     _ => {}
                 }
             }
         }
-        None
     }
 
-    fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&self, f: &mut Frame, area: Rect) {
         let palette_block = Block::default()
             .borders(Borders::ALL)
             .border_style(ratatui::style::Style::default().dark_gray())

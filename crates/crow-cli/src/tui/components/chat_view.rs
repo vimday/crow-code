@@ -1,6 +1,4 @@
-use crate::tui::components::Component;
-use crate::tui::state::{Cell, CellKind, TuiMessage};
-use crossterm::event::Event;
+use crate::tui::state::{Cell, CellKind};
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -12,13 +10,14 @@ pub struct ChatView {
     pub scroll_offset: usize,
 }
 
-impl Component for ChatView {
-    fn handle_event(&mut self, _event: &Event) -> Option<TuiMessage> {
+impl ChatView {
+    #[allow(dead_code)]
+    pub fn handle_event(&mut self) {
         // Handle scrolling in the future
-        None
     }
 
-    fn render(&self, f: &mut Frame, area: Rect) {
+    #[allow(dead_code)]
+    pub fn render(&self, f: &mut Frame, area: Rect) {
         let mut list_items = Vec::new();
 
         for cell in &self.cells {

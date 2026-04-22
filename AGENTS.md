@@ -42,8 +42,32 @@ Our TUI is built on `ratatui` and relies on semantic, extension-driven styling t
 
 ## 4. Agent Architecture Patterns
 
+### CancellationToken (arc-swap rotation)
+The TUI uses `CancellationToken` (`state.rs`) for safe, resettable cancellation. The design is identical to yomi's `CancelToken`:
+- Wraps `Arc<ArcSwap<tokio_util::sync::CancellationToken>>`
+- `cancel()` cancels the current token via `ArcSwap::load().cancel()`
+- `reset_if_cancelled()` atomically swaps in a fresh token if the current one is cancelled
+- `force_reset()` unconditionally replaces the token (stale listeners fall off gracefully)
+- `runtime_token()` extracts the underlying tokio token for native `select!` integration
+
+This enables safe interruption of agent turns without deadlocking ongoing async tasks.
+
 ### StreamController / CommitTick
 The TUI uses a `StreamController` (`stream_controller.rs`) to buffer LLM streaming output and drain it at a controlled rate (1 line per 120ms tick). This prevents the UI from stuttering during intense token generation. The adaptive policy switches to batch draining (5 lines/tick) when the backlog exceeds 20 lines.
+
+### Streaming Metrics (InfoBar)
+During active streaming, the `InfoBar` component displays:
+- **Token estimate**: Approximate tokens generated (~4 chars/token heuristic)
+- **Elapsed time**: Compact formatting (e.g., `1m 30s`)
+- **Context usage gauge**: Color-coded bar (green < 50%, yellow 50-90%, red > 90%)
+
+Metrics are tracked via `AppState.is_streaming`, `streaming_token_estimate`, and `streaming_start_time` fields, reset on `TurnComplete`.
+
+### Timed Status Messages
+The `StatusMessage` system (inspired by yomi's `StatusBar`) provides auto-clearing transient messages:
+- `AppState::show_status(msg, timeout_ms)` displays a message with auto-clear
+- `check_status_timeout()` is called every tick to expire old messages
+- Levels: `Info`, `Warn`, `Error`, `Tip`
 
 ### Structured TurnEvent Protocol
 All agent turn lifecycle transitions emit structured `TurnEvent` variants (`event.rs`):
@@ -51,6 +75,17 @@ All agent turn lifecycle transitions emit structured `TurnEvent` variants (`even
 - `TurnEvent::PhaseChanged` — emitted during phase transitions (Materializing → EpistemicLoop → Crucible)
 - `TurnEvent::Completed` — emitted with success/failure and optional token usage
 - `TurnEvent::Aborted` — emitted on user cancellation with reason
+
+### AgentEvent Taxonomy
+The `AgentEvent` enum (`event.rs`) covers five conceptual domains:
+
+| Domain | Events | TUI Consumer |
+|---|---|---|
+| **Turn lifecycle** | `Turn(TurnEvent)` | InfoBar, History |
+| **Streaming** | `StreamChunk`, `Markdown` | StreamController, HistoryComponent |
+| **Tool execution** | `ActionStart/Complete`, `ReconStart`, `ReadFiles`, `DelegateStart` | InfoBar (spinner), History |
+| **Metrics** | `TokenUsage`, `Compacting`, `ToolProgress` | InfoBar (gauge), StatusBar |
+| **Diagnostics** | `StateChanged`, `Retrying`, `Error`, `Log` | History, StatusMessage |
 
 ### Subagent Delegation
 Subagent workers (`subagent.rs`) are bounded by:
@@ -71,10 +106,31 @@ The `ConversationManager` enforces strict User→Assistant→User role alternati
 ### Recon Output Capping
 Recon tool output is capped at 100KB before entering the conversation context (`MAX_RECON_CONTEXT_BYTES`), separate from the 512KB execution-level cap in the verifier. This prevents a single oversized tool result from consuming the entire context budget.
 
-## 5. MCP Integration
-MCP servers are configured via `CrowConfig.mcp_servers` and managed by `McpManager` (`mcp.rs`). MCP tool calls are intercepted in the epistemic loop and routed through the manager. Results are subject to the same 100KB context cap as other recon tools.
+## 5. TUI Component Architecture
 
-## 6. Workflows & Committing
+Crow's TUI uses an Elm-inspired component model defined in `crate::tui::component`:
+
+```rust
+pub trait Component {
+    fn handle_event(&mut self, event: &Event, state: &mut AppState) -> Result<Option<TuiAction>>;
+    fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState);
+}
+```
+
+**Active components** (used in the main render loop):
+- `ComposerComponent` — Multi-line input with cursor tracking, input history, paste support
+- `HistoryComponent` — Scrollable conversation pane with semantic cell rendering
+- `InfoBar` — Streaming metrics, model info, git branch, context usage gauge
+
+**TuiAction signals** bubble from components to the main loop:
+- `SubmitCommand(String)` — User submitted text
+- `FocusNext` — Tab to next component
+- `Dismiss` — Close an overlay
+
+## 6. MCP Integration
+MCP servers are configured via `CrowConfig.mcp_servers` and managed by the `crow-mcp` crate. The crate implements JSON-RPC 2.0 full-duplex protocol over `tokio::process::Command` stdio. MCP tool calls are intercepted in the epistemic loop and routed through `McpClient`. Results are subject to the same 100KB context cap as other recon tools.
+
+## 7. Workflows & Committing
 - When introducing cross-workspace UI changes, update `walkthrough.md` or similar documentation inside the artifact tracking directories.
 - Keep commits isolated to thematic tasks.
 - If dependencies change, ensure `cargo check --workspace` and `cargo test --workspace` pass synchronously.

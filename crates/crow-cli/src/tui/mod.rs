@@ -1,13 +1,13 @@
 pub mod component;
 pub mod components;
-pub mod dashboard;
+
 pub mod markdown_stream;
 pub mod render;
 pub mod state;
 pub mod stream_controller;
 pub mod theme;
 
-pub use dashboard::run_dashboard;
+
 
 use crate::config::CrowConfig;
 use crate::event::{AgentEvent, ViewMode};

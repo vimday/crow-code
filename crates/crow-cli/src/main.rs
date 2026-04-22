@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
         Some("compile") => run_compile_only(&args[2..]).await,
         Some("dry-run") => run_dry_run(&args[2..]).await,
         Some("session") => handle_session_command(&args[2..]).await,
-        Some("dashboard") => tui::run_dashboard(std::env::current_dir()?).await,
+
         Some("dream") => run_autodream().await,
         Some("mcp") => handle_mcp_command(&args[2..]).await,
 
@@ -78,7 +78,7 @@ COMMANDS:
     compile <prompt>          Compile-only: show the IntentPlan JSON
     session list              List saved sessions
     session resume <id>       Resume a saved session
-    dashboard                 Open the interactive EventLedger & Dream dashboard
+
     dream                     Run background AutoDream memory consolidation
     mcp                       Manage MCP tools
     dry-run <prompt>          Alias for 'run'

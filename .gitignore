@@ -21,3 +21,8 @@ target
 #.idea/
 
 .crow/
+
+# Development scratch files
+sandbox_*
+source_dump.*
+*.rs.bak

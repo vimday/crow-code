@@ -126,3 +126,6 @@ before moving on.
 - **Step 4: ACI Log Truncation** — Implement isolated execution constraint pipelines in `crow-verifier`. Verified by feeding 100K-line logs and asserting output ≤ 200 lines. ✅
 - **Step 5: Probe + Applier + God Pipeline** — Implement detection heuristics in `crow-probe`, physical patch applier in `crow-workspace`, end-to-end integration pipeline in `crow-cli`. ✅
 - **Step 6: MCTS Parallel Crucible & Cache Isolation** — Implement autonomous epistemic loops, prompt cache economic gates, and isolated branch-specific build cache clones to bypass file-lock serialization and maximize concurrent evaluation. ✅
+
+**Post-Sprint 0** phases (Steps 7–14) are tracked in [CLAUDE.md](./CLAUDE.md).
+

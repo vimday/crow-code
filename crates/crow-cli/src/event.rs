@@ -58,6 +58,18 @@ pub struct TokenUsageSummary {
 }
 
 // ── The Combined Agent Event ────────────────────────────────────────
+//
+// Event taxonomy (cf. yomi's modular Event::User/Agent/Model/Tool/System):
+//
+//   Turn lifecycle:   Turn(TurnEvent)                → InfoBar, History
+//   Streaming:        StreamChunk, Markdown           → StreamController, History
+//   Tool execution:   ActionStart/Complete, ReconStart,
+//                     ReadFiles, DelegateStart,
+//                     PlanSubmitted, CruciblePreflight → InfoBar (spinner), History
+//   Metrics:          TokenUsage, Compacting,
+//                     ToolProgress                    → InfoBar (gauge), StatusMessage
+//   Diagnostics:      StateChanged, Retrying,
+//                     Error, Log                      → History, StatusMessage
 
 #[derive(Debug, Clone)]
 pub enum AgentEvent {

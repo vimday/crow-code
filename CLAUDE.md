@@ -41,7 +41,8 @@ Layer 4 — Reasoning
 
 Layer 5 — Interface & Observability
   crow-cli         Ratatui TUI (the user-facing binary)
-  crow-replay      Behavioral regression & task replay harness
+  crow-mcp         MCP stdio transport (JSON-RPC 2.0 full-duplex)
+  crow-replay      Behavioral regression & task replay harness (stub)
 ```
 
 ### Dependency Convention
@@ -97,3 +98,5 @@ cargo build -p crow-cli
 - **Step 11** ✅ Phase 2 MCP Stdio Transport: New `crow-mcp` crate. JSON-RPC 2.0 full-duplex protocol over `tokio::process::Command` stdio. Ergonomic `McpClient` wrapper.
 - **Step 12** ✅ Architectural Fusion (Phase 1 & 2): Integrated `Codex` native TUI mechanics, `ThreadManager` non-blocking agent loop with TurnStatus isolation, `yomi` inspired Context Persistence & per-tool Memory Whitelist (`A` auto-approve security wall).
 - **Step 13** ✅ Phase 3 Sub-Agent Swarms & Non-Blocking TUI: Asynchronous Task Queuing, isolated `SubagentWorker` execution paths, interior mutability across `SessionRuntime` and `ConversationManager` for zero-lock ThreadManager scheduling.
+- **Step 14** ✅ Yomi Alignment & Codebase Hardening: CancellationToken docs (arc-swap rotation pattern), AgentEvent taxonomy documentation, dead code removal (dashboard.rs, duplicate Component trait, scratch files), AGENTS.md/README.md comprehensive sync with actual implementation state.
+
