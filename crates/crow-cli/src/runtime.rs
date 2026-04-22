@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crate::config::CrowConfig;
 use crate::mcp::McpManager;
 use anyhow::{Context, Result};
@@ -80,7 +79,7 @@ impl SessionRuntime {
         if let Some((cached_snap, map)) = self
             .cached_repo_map
             .lock()
-            .expect("Cache lock poisoned")
+            .map_err(|_| anyhow::anyhow!("Cache lock poisoned"))?
             .as_ref()
         {
             if cached_snap == snapshot_id {
@@ -96,7 +95,7 @@ impl SessionRuntime {
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
-                *self.cached_repo_map.lock().expect("Cache lock poisoned") =
+                *self.cached_repo_map.lock().map_err(|_| anyhow::anyhow!("Cache lock poisoned"))? =
                     Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 Ok(arc_map)
             }
@@ -169,14 +168,30 @@ impl SessionRuntime {
             }
         };
 
+        // Emit structured phase transition: Materializing
+        observer.handle_event(crate::event::AgentEvent::Turn(
+            crate::event::TurnEvent::PhaseChanged {
+                turn_id: String::new(),
+                phase: crate::event::TurnPhase::Materializing,
+            },
+        ));
+
         // ── Step 1: Freeze baseline BEFORE planning ──
         let frozen_sandbox = self.materialize_baseline(&profile).await?;
         let frozen_root = frozen_sandbox.path().to_path_buf();
 
+        // Emit structured phase transition: BuildingRepoMap
+        observer.handle_event(crate::event::AgentEvent::Turn(
+            crate::event::TurnEvent::PhaseChanged {
+                turn_id: String::new(),
+                phase: crate::event::TurnPhase::BuildingRepoMap,
+            },
+        ));
+
         // Build repo map from the FROZEN snapshot, not live workspace
         let repo_map = self.build_repo_map_with_cache(cfg, &snapshot_id, &frozen_root)?;
 
-        let _ = self.ledger.lock().expect("Ledger lock poisoned").append(
+        let _ = self.ledger.lock().map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?.append(
             crow_workspace::ledger::LedgerEvent::SnapshotCreated {
                 id: snapshot_id.clone(),
                 git_hash: snapshot_id.0.clone(),
@@ -201,7 +216,13 @@ impl SessionRuntime {
             messages.push_user(prompt);
         }
 
-        // ── Phase 2 Integration: Compactor ──
+        // Emit structured phase transition: Compacting
+        observer.handle_event(crate::event::AgentEvent::Turn(
+            crate::event::TurnEvent::PhaseChanged {
+                turn_id: String::new(),
+                phase: crate::event::TurnPhase::Compacting,
+            },
+        ));
         observer.handle_event(crate::event::AgentEvent::Compacting { active: true });
         match messages.compact_history(&self.compiler).await {
             Ok(true) => {

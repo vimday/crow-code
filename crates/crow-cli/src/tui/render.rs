@@ -432,10 +432,28 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         return;
     }
 
-    const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-    // Left side: mode hint + task/branch info
-    let left = if state.is_task_running() {
+    // ── LEFT: Mode + Git + Streaming indicator ──────────────────────
+    let left = if state.is_streaming {
+        let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
+        let elapsed = state
+            .streaming_start_time
+            .map(|t| {
+                let secs = t.elapsed().as_secs();
+                if secs < 60 {
+                    format!("{secs}s")
+                } else {
+                    format!("{}m{}s", secs / 60, secs % 60)
+                }
+            })
+            .unwrap_or_default();
+        let tokens = state.streaming_token_estimate;
+        let token_display = if tokens < 1000.0 {
+            format!("{tokens:.0}")
+        } else {
+            format!("{:.1}k", tokens / 1000.0)
+        };
+        format!(" {spinner} {token_display} tok · {elapsed} ")
+    } else if state.is_task_running() {
         " esc to interrupt ".to_string()
     } else {
         " ? for help ".to_string()
@@ -453,42 +471,51 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         dim_gray()
     };
 
-    // Center: active action + elapsed time with spinner
-    let center = if let Some(ref action) = state.active_action {
-        let spinner = SPINNER_FRAMES[state.spinner_idx % SPINNER_FRAMES.len()];
-        let elapsed = state
-            .task_start_time
-            .map(|t| {
-                let secs = t.elapsed().as_secs();
-                if secs < 60 {
-                    format!("{secs}s")
-                } else {
-                    format!("{}m{}s", secs / 60, secs % 60)
-                }
-            })
-            .unwrap_or_default();
+    // ── CENTER: Timed status messages or active action ──────────────
+    let center = if let Some(ref msg) = state.status_message {
+        let color = match msg.level {
+            crate::tui::state::StatusLevel::Info => accent_cyan(),
+            crate::tui::state::StatusLevel::Warn => colors::accent_warning(),
+            crate::tui::state::StatusLevel::Error => colors::accent_error(),
+            crate::tui::state::StatusLevel::Tip => dim_gray(),
+        };
+        (msg.content.clone(), color)
+    } else if let Some(ref action) = state.active_action {
         let action_display = if action.len() > 30 {
             format!("{}…", &action[..29])
         } else {
             action.clone()
         };
-        format!(" {spinner} {action_display} [{elapsed}] ")
+        (action_display, accent_cyan())
     } else {
-        String::new()
+        (String::new(), dim_gray())
     };
 
-    // Right side: model · workspace · view mode · write mode
+    // ── RIGHT: Model · Context usage (Yomi pattern) ────────────────
     let mut right_parts: Vec<String> = Vec::new();
     right_parts.push(state.model_info.clone());
-    if !state.workspace_name.is_empty() {
-        right_parts.push(state.workspace_name.clone());
-    }
-    right_parts.push(format!("{:?}", state.view_mode));
-    right_parts.push(state.write_mode.clone());
 
+    // Context window usage (color-coded like Yomi)
+    #[allow(clippy::cast_precision_loss)]
+    if let Some((tokens, context_window)) = state.ctx_usage {
+        if context_window > 0 {
+            let pct = tokens as f32 / context_window as f32;
+            let cw_k = context_window / 1000;
+            right_parts.push(format!("{:.1}% ({cw_k}K)", pct * 100.0));
+        }
+    }
+
+    right_parts.push(format!("{:?}", state.view_mode));
     let right = format!(" {} ", right_parts.join(" · "));
 
-    let left_span = Line::from(vec![left.fg(dim_gray()), git_info.fg(risk_color)]);
+    let left_span = Line::from(vec![
+        if state.is_streaming {
+            left.fg(accent_cyan())
+        } else {
+            left.fg(dim_gray())
+        },
+        git_info.fg(risk_color),
+    ]);
 
     let left_w = left_span.width().min(area.width as usize);
     let right_w = right.chars().count().min(area.width as usize);
@@ -496,23 +523,43 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
     let status_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(left_w as u16 + 2), // Buffer for branch
+            Constraint::Length(left_w as u16 + 2),
             Constraint::Min(0),
             Constraint::Length(right_w as u16),
         ])
         .split(area);
 
     let left_widget = Paragraph::new(left_span);
-    let right_widget = Paragraph::new(right.fg(dim_gray()));
 
-    // Fill middle with active action or `─` separator
+    // Context window usage color
+    #[allow(clippy::cast_precision_loss)]
+    let right_color = state
+        .ctx_usage
+        .map(|(tokens, cw)| {
+            if cw == 0 {
+                return dim_gray();
+            }
+            let pct = tokens as f32 / cw as f32;
+            if pct >= 0.9 {
+                accent_red()
+            } else if pct >= 0.7 {
+                colors::accent_warning()
+            } else {
+                dim_gray()
+            }
+        })
+        .unwrap_or(dim_gray());
+    let right_widget = Paragraph::new(right.fg(right_color));
+
+    // Center section: status message or divider fill
     let mid_w = status_chunks[1].width as usize;
-    let mid_widget = if !center.is_empty() && center.len() <= mid_w {
-        let pad_left = (mid_w.saturating_sub(center.len())) / 2;
-        let pad_right = mid_w.saturating_sub(center.len()).saturating_sub(pad_left);
+    let (center_text, center_color) = center;
+    let mid_widget = if !center_text.is_empty() && center_text.len() <= mid_w {
+        let pad_left = (mid_w.saturating_sub(center_text.len())) / 2;
+        let pad_right = mid_w.saturating_sub(center_text.len()).saturating_sub(pad_left);
         Paragraph::new(Line::from(vec![
             "─".repeat(pad_left).fg(colors::divider()),
-            center.fg(Color::Cyan),
+            center_text.fg(center_color),
             "─".repeat(pad_right).fg(colors::divider()),
         ]))
     } else {

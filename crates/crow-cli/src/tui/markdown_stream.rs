@@ -1,7 +1,8 @@
-//! Streaming markdown renderer with delta updates.
+//! Streaming markdown renderer with newline-gated commit pattern.
 //!
-//! Ported from yomi's `markdown_stream.rs` — optimized for streaming content,
-//! tracking state and only re-rendering when necessary.
+//! Inspired by Codex's `MarkdownStreamCollector::commit_complete_lines` —
+//! only re-parses content after the last committed newline, avoiding O(n²)
+//! re-rendering as content accumulates during streaming.
 
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -17,7 +18,11 @@ lazy_static::lazy_static! {
 }
 
 fn translate_syn_style(style: syntect::highlighting::Style) -> Style {
-    Style::default().fg(ratatui::style::Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b))
+    Style::default().fg(ratatui::style::Color::Rgb(
+        style.foreground.r,
+        style.foreground.g,
+        style.foreground.b,
+    ))
 }
 
 /// Tracks the state of markdown parsing for incremental rendering.
@@ -47,9 +52,19 @@ impl Default for ParseState {
 }
 
 /// Streaming markdown renderer that supports incremental updates.
+///
+/// Uses a newline-gated commit pattern (from Codex's `MarkdownStreamCollector`):
+/// complete lines are "committed" and cached, so only the trailing partial line
+/// needs re-rendering on each `append()` call. This reduces streaming overhead
+/// from O(n²) to O(n) over the total content length.
 #[derive(Debug, Default)]
 pub struct StreamingMarkdownRenderer {
     content: String,
+    /// Byte offset into `content` up to which lines have been committed.
+    committed_offset: usize,
+    /// Cached rendered lines from committed content.
+    committed_lines: Vec<Line<'static>>,
+    /// Full rendered output (committed + trailing partial).
     lines: Vec<Line<'static>>,
     state: ParseState,
     dirty: bool,
@@ -60,23 +75,61 @@ impl StreamingMarkdownRenderer {
         Self::default()
     }
 
-    /// Append new text and re-render.
+    /// Append new text and re-render only the uncommitted tail.
     pub fn append(&mut self, text: &str) -> &[Line<'static>] {
         if text.is_empty() {
             return &self.lines;
         }
         self.content.push_str(text);
         self.dirty = true;
-        self.render()
+
+        // Commit complete lines: find the last newline in content after committed_offset
+        let tail = &self.content[self.committed_offset..];
+        if let Some(last_nl) = tail.rfind('\n') {
+            let new_committed_end = self.committed_offset + last_nl + 1;
+            let chunk_to_commit = self.content[self.committed_offset..new_committed_end].to_string();
+
+            if !chunk_to_commit.is_empty() {
+                let new_lines = self.render_chunk(&chunk_to_commit);
+                self.committed_lines.extend(new_lines);
+                self.committed_offset = new_committed_end;
+            }
+        }
+
+        // Now render the trailing partial (uncommitted) content
+        let trailing = self.content[self.committed_offset..].to_string();
+        let trailing_lines = if trailing.is_empty() {
+            Vec::new()
+        } else {
+            self.render_chunk(&trailing)
+        };
+
+        // Combine committed + trailing
+        self.lines.clone_from(&self.committed_lines);
+        self.lines.extend(trailing_lines);
+
+        // Trim trailing empty lines
+        while self
+            .lines
+            .last()
+            .is_some_and(|l| l.to_string().trim().is_empty())
+        {
+            self.lines.pop();
+        }
+
+        self.dirty = false;
+        &self.lines
     }
 
     /// Set content and re-render from scratch.
     pub fn set_content(&mut self, content: String) -> &[Line<'static>] {
         self.content = content;
+        self.committed_offset = 0;
+        self.committed_lines.clear();
         self.lines.clear();
         self.state = ParseState::default();
         self.dirty = true;
-        self.render()
+        self.render_full()
     }
 
     /// Get current raw content.
@@ -88,19 +141,18 @@ impl StreamingMarkdownRenderer {
     /// Get rendered lines (re-render if dirty).
     pub fn lines(&mut self) -> &[Line<'static>] {
         if self.dirty {
-            self.render();
+            self.render_full();
         }
         &self.lines
     }
 
-    /// Force re-render.
-    fn render(&mut self) -> &[Line<'static>] {
-        self.lines.clear();
-
+    /// Render a chunk of markdown text into Lines.
+    fn render_chunk(&mut self, text: &str) -> Vec<Line<'static>> {
+        let mut result = Vec::new();
         let options =
             Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
 
-        let parser = Parser::new_ext(&self.content, options);
+        let parser = Parser::new_ext(text, options);
 
         let mut current_line: Vec<Span> = Vec::new();
         let mut in_code_block = self.state.in_code_block;
@@ -108,6 +160,16 @@ impl StreamingMarkdownRenderer {
         let mut list_stack: Vec<ListState> = self.state.list_stack.clone();
         let mut current_style = self.state.current_style;
         let mut highlighter: Option<syntect::easy::HighlightLines<'_>> = None;
+
+        // Re-init highlighter if we're already inside a code block
+        if in_code_block {
+            let lang = code_language.as_deref().unwrap_or("");
+            let syntax = SYNTAX_SET
+                .find_syntax_by_token(lang)
+                .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+            let theme = &THEME_SET.themes["base16-ocean.dark"];
+            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
+        }
 
         for event in parser {
             match event {
@@ -124,25 +186,29 @@ impl StreamingMarkdownRenderer {
                     Tag::CodeBlock(kind) => {
                         in_code_block = true;
                         if !current_line.is_empty() {
-                            self.lines.push(Line::from(current_line));
+                            result.push(Line::from(current_line));
                             current_line = Vec::new();
                         }
                         if let CodeBlockKind::Fenced(lang) = kind {
                             let lang_str = lang.to_string();
                             code_language = Some(lang_str.clone());
-                            let syntax = SYNTAX_SET.find_syntax_by_token(&lang_str)
+                            let syntax = SYNTAX_SET
+                                .find_syntax_by_token(&lang_str)
                                 .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
                             let theme = &THEME_SET.themes["base16-ocean.dark"];
-                            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
+                            highlighter =
+                                Some(syntect::easy::HighlightLines::new(syntax, theme));
                         } else {
                             let syntax = SYNTAX_SET.find_syntax_plain_text();
                             let theme = &THEME_SET.themes["base16-ocean.dark"];
-                            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
+                            highlighter =
+                                Some(syntect::easy::HighlightLines::new(syntax, theme));
                         }
                     }
                     Tag::List(start_num) => {
                         list_stack.push(
-                            start_num.map_or(ListState::Unordered, |n| ListState::Ordered(n, n)),
+                            start_num
+                                .map_or(ListState::Unordered, |n| ListState::Ordered(n, n)),
                         );
                     }
                     Tag::Item => {
@@ -165,10 +231,10 @@ impl StreamingMarkdownRenderer {
                     }
                     Tag::Heading { level, .. } => {
                         if !current_line.is_empty() {
-                            self.lines.push(Line::from(current_line));
+                            result.push(Line::from(current_line));
                             current_line = Vec::new();
                         }
-                        self.lines.push(Line::from(""));
+                        result.push(Line::from(""));
                         let prefix = match level {
                             pulldown_cmark::HeadingLevel::H1 => "# ",
                             pulldown_cmark::HeadingLevel::H2 => "## ",
@@ -208,7 +274,7 @@ impl StreamingMarkdownRenderer {
                     TagEnd::CodeBlock => {
                         in_code_block = false;
                         if !current_line.is_empty() {
-                            self.lines.push(Line::from(
+                            result.push(Line::from(
                                 current_line
                                     .into_iter()
                                     .map(|s| Span::styled(s.content, Styles::code_block()))
@@ -216,7 +282,7 @@ impl StreamingMarkdownRenderer {
                             ));
                             current_line = Vec::new();
                         }
-                        self.lines.push(Line::from(Span::styled(
+                        result.push(Line::from(Span::styled(
                             format!(
                                 "{}{}",
                                 chars::CODE_BOTTOM_LEFT,
@@ -227,29 +293,29 @@ impl StreamingMarkdownRenderer {
                         code_language = None;
                     }
                     TagEnd::Item if !current_line.is_empty() => {
-                        self.lines.push(Line::from(current_line));
+                        result.push(Line::from(current_line));
                         current_line = Vec::new();
                     }
                     TagEnd::List(_) => {
                         list_stack.pop();
-                        if !self.lines.is_empty() {
-                            self.lines.push(Line::from(""));
+                        if !result.is_empty() {
+                            result.push(Line::from(""));
                         }
                     }
                     TagEnd::Heading(_) => {
                         if !current_line.is_empty() {
-                            self.lines.push(Line::from(current_line));
+                            result.push(Line::from(current_line));
                             current_line = Vec::new();
                         }
-                        self.lines.push(Line::from(""));
+                        result.push(Line::from(""));
                         current_style = Style::default().fg(colors::text_primary());
                     }
                     TagEnd::Paragraph => {
                         if !current_line.is_empty() {
-                            self.lines.push(Line::from(current_line));
+                            result.push(Line::from(current_line));
                             current_line = Vec::new();
                         }
-                        self.lines.push(Line::from(""));
+                        result.push(Line::from(""));
                     }
                     _ => {}
                 },
@@ -258,7 +324,7 @@ impl StreamingMarkdownRenderer {
                         for line in text.lines() {
                             if current_line.is_empty() && code_language.is_some() {
                                 let lang = code_language.take().unwrap_or_default();
-                                self.lines.push(Line::from(vec![
+                                result.push(Line::from(vec![
                                     Span::styled(
                                         format!(
                                             "{}{} ",
@@ -271,10 +337,12 @@ impl StreamingMarkdownRenderer {
                                 ]));
                             }
                             if !current_line.is_empty() {
-                                self.lines.push(Line::from(
+                                result.push(Line::from(
                                     current_line
                                         .into_iter()
-                                        .map(|s| Span::styled(s.content, Styles::code_block()))
+                                        .map(|s| {
+                                            Span::styled(s.content, Styles::code_block())
+                                        })
                                         .collect::<Vec<_>>(),
                                 ));
                                 current_line = Vec::new();
@@ -284,24 +352,29 @@ impl StreamingMarkdownRenderer {
                                 format!("{} ", chars::CODE_VERTICAL),
                                 Style::default().fg(colors::code_border()),
                             )];
-                            
+
                             if let Some(hl) = highlighter.as_mut() {
-                                // We feed the line to the highlighter.
                                 match hl.highlight_line(&expanded, &SYNTAX_SET) {
                                     Ok(ranges) => {
                                         for (style, s) in ranges {
-                                            spans.push(Span::styled(s.to_string(), translate_syn_style(style)));
+                                            spans.push(Span::styled(
+                                                s.to_string(),
+                                                translate_syn_style(style),
+                                            ));
                                         }
                                     }
                                     Err(_) => {
-                                        spans.push(Span::styled(expanded, Styles::code_block()));
+                                        spans.push(Span::styled(
+                                            expanded,
+                                            Styles::code_block(),
+                                        ));
                                     }
                                 }
                             } else {
                                 spans.push(Span::styled(expanded, Styles::code_block()));
                             }
-                            
-                            self.lines.push(Line::from(spans));
+
+                            result.push(Line::from(spans));
                         }
                     } else {
                         current_line.push(Span::styled(text.to_string(), current_style));
@@ -325,7 +398,7 @@ impl StreamingMarkdownRenderer {
                 MdEvent::SoftBreak | MdEvent::HardBreak => {
                     if in_code_block {
                         if !current_line.is_empty() {
-                            self.lines.push(Line::from(
+                            result.push(Line::from(
                                 current_line
                                     .into_iter()
                                     .map(|s| Span::styled(s.content, Styles::code_block()))
@@ -334,12 +407,12 @@ impl StreamingMarkdownRenderer {
                             current_line = Vec::new();
                         }
                     } else if !current_line.is_empty() {
-                        self.lines.push(Line::from(current_line));
+                        result.push(Line::from(current_line));
                         current_line = Vec::new();
                     }
                 }
                 MdEvent::Rule => {
-                    self.lines.push(Line::from(Span::styled(
+                    result.push(Line::from(Span::styled(
                         "─".repeat(40),
                         Style::default().fg(colors::divider()),
                     )));
@@ -351,18 +424,43 @@ impl StreamingMarkdownRenderer {
         // Flush remaining content
         if !current_line.is_empty() {
             if in_code_block {
-                self.lines.push(Line::from(
+                result.push(Line::from(
                     current_line
                         .into_iter()
                         .map(|s| Span::styled(s.content, Styles::code_block()))
                         .collect::<Vec<_>>(),
                 ));
             } else {
-                self.lines.push(Line::from(current_line));
+                result.push(Line::from(current_line));
             }
         }
 
-        // Remove trailing empty lines
+        // Update state for next chunk
+        self.state = ParseState {
+            in_code_block,
+            code_language,
+            list_stack,
+            current_style,
+        };
+
+        result
+    }
+
+    /// Full re-render from scratch (used by set_content and initial load).
+    fn render_full(&mut self) -> &[Line<'static>] {
+        self.committed_offset = 0;
+        self.committed_lines.clear();
+        self.state = ParseState::default();
+
+        let content = self.content.clone();
+        let rendered = self.render_chunk(&content);
+        self.lines = rendered;
+
+        // Commit everything
+        self.committed_offset = self.content.len();
+        self.committed_lines.clone_from(&self.lines);
+
+        // Trim trailing empty lines
         while self
             .lines
             .last()
@@ -371,15 +469,7 @@ impl StreamingMarkdownRenderer {
             self.lines.pop();
         }
 
-        // Update state
-        self.state = ParseState {
-            in_code_block,
-            code_language,
-            list_stack,
-            current_style,
-        };
         self.dirty = false;
-
         &self.lines
     }
 }
@@ -432,5 +522,50 @@ mod tests {
         let mut r = StreamingMarkdownRenderer::new();
         let lines = r.set_content("- item 1\n- item 2\n- item 3".to_string());
         assert!(lines.len() >= 3);
+    }
+
+    #[test]
+    fn test_newline_gated_commit() {
+        let mut r = StreamingMarkdownRenderer::new();
+        // First append doesn't have a newline — no commit
+        r.append("line one");
+        assert_eq!(r.committed_offset, 0);
+        // Now append with newline — triggers commit
+        r.append("\nline two");
+        assert!(r.committed_offset > 0);
+    }
+
+    #[test]
+    fn test_incremental_contains_key_content() {
+        let full_content = "# Hello\n\nSome **bold** text.\n\n- item a\n- item b\n";
+
+        // Full render
+        let mut full = StreamingMarkdownRenderer::new();
+        let full_lines = full.set_content(full_content.to_string());
+        let full_output: String = full_lines
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Incremental render (line by line — the realistic streaming unit)
+        let mut inc = StreamingMarkdownRenderer::new();
+        let mut last_output = String::new();
+        for line in full_content.lines() {
+            let rendered = inc.append(&format!("{line}\n"));
+            last_output = rendered
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        // Both should contain the key content elements
+        assert!(full_output.contains("Hello"), "full missing Hello");
+        assert!(last_output.contains("Hello"), "inc missing Hello");
+        assert!(full_output.contains("bold"), "full missing bold");
+        assert!(last_output.contains("bold"), "inc missing bold");
+        assert!(full_output.contains("item a"), "full missing item a");
+        assert!(last_output.contains("item a"), "inc missing item a");
     }
 }

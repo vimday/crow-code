@@ -471,6 +471,10 @@ async fn run_tui_loop(
                     }
                     state.active_action = None;
                     state.task_start_time = None;
+                    // Reset streaming metrics (Yomi pattern)
+                    state.is_streaming = false;
+                    state.streaming_token_estimate = 0.0;
+                    state.streaming_start_time = None;
                     let was_cancelled = state
                         .cancellation
                         .as_ref()
@@ -508,6 +512,9 @@ async fn run_tui_loop(
 
                     state.active_action = None;
                     state.task_start_time = None;
+                    state.is_streaming = false;
+                    state.streaming_token_estimate = 0.0;
+                    state.streaming_start_time = None;
                     state.cancellation = None;
                     refresh_git_state(state, &cfg.workspace);
                 }
@@ -537,6 +544,9 @@ async fn run_tui_loop(
                         // Auto-scroll to bottom when new streaming content arrives
                         state.scroll_offset = 0;
                     }
+
+                    // Auto-clear expired status messages (Yomi pattern)
+                    state.check_status_timeout();
 
                     if let Some(start) = state.task_start_time {
                         if start.elapsed() > Duration::from_secs(180) {
@@ -909,11 +919,17 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_action = Some("Thinking...".into());
             // Start a fresh streaming session for this turn
             state.stream_controller.start();
+            // Start streaming metrics (Yomi InfoBar pattern)
+            state.is_streaming = true;
+            state.streaming_token_estimate = 0.0;
+            state.streaming_start_time = Some(Instant::now());
         }
         AgentEvent::StreamChunk(chunk) => {
             // CommitTick pattern: buffer chunks into the stream controller.
             // Lines are drained one-per-tick in the Tick handler for smooth animation.
             state.stream_controller.push_chunk(&chunk);
+            // Accumulate token estimate for InfoBar display
+            state.streaming_token_estimate += AppState::estimate_tokens(&chunk);
         }
         AgentEvent::Markdown(md) => {
             // Final markdown block: route through controller for buffered drain.
@@ -974,27 +990,12 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         }
         // ── High-granularity events (Yomi-inspired) ─────────────────────
         AgentEvent::TokenUsage {
-            prompt_tokens,
-            completion_tokens,
             total_tokens,
             context_window,
+            ..
         } => {
-            // Store on AppState for info bar rendering
-            let pct = (total_tokens * 100)
-                .checked_div(context_window)
-                .unwrap_or(0);
-            state.model_info = format!(
-                "{} | Tokens: {}+{}={} ({}%)",
-                state
-                    .model_info
-                    .split(" | Tokens:")
-                    .next()
-                    .unwrap_or(&state.model_info),
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                pct
-            );
+            // Update context window usage for status bar (Yomi pattern)
+            state.ctx_usage = Some((total_tokens, context_window));
         }
         AgentEvent::StateChanged { from, to } => {
             if state.view_mode == ViewMode::Audit {
@@ -1010,10 +1011,11 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             reason,
         } => {
             state.active_action = Some(format!("Retrying ({attempt}/{max_attempts})… {reason}"));
-            state.history.push(Cell {
-                kind: CellKind::Log,
-                payload: format!("⚠ Retrying ({attempt}/{max_attempts}): {reason}"),
-            });
+            // Show timed warning in status bar (Yomi pattern)
+            state.show_status(
+                state::StatusMessage::warn(format!("Retrying ({attempt}/{max_attempts}): {reason}")),
+                5000,
+            );
         }
         AgentEvent::Compacting { active } => {
             if active {

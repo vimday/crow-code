@@ -135,8 +135,6 @@ pub struct AppState {
     pub approval_state: ApprovalState,
     pub allowed_safe_patterns: std::collections::HashSet<String>,
 
-    // TUI Modal Overlay
-
     // Quit state (Codex-style: Ctrl+C twice to quit)
     pub last_ctrl_c: Option<Instant>,
 
@@ -153,6 +151,52 @@ pub struct AppState {
 
     // Smooth streaming animation controller (CommitTick pattern)
     pub stream_controller: crate::tui::stream_controller::StreamController,
+
+    // ── Streaming Metrics (Yomi InfoBar pattern) ─────────────────────
+    /// Whether the agent is actively streaming LLM output.
+    pub is_streaming: bool,
+    /// Approximate token count accumulated during the current streaming turn.
+    pub streaming_token_estimate: f64,
+    /// When the current streaming turn started (for elapsed time display).
+    pub streaming_start_time: Option<Instant>,
+
+    // ── Context Window Usage (Yomi StatusBar pattern) ────────────────
+    /// Last known total token usage and context window size.
+    pub ctx_usage: Option<(u32, u32)>,
+
+    // ── Timed Status Messages (Yomi StatusMessage pattern) ──────────
+    /// Transient message displayed in the status bar center section.
+    pub status_message: Option<StatusMessage>,
+    /// When the status message should auto-clear.
+    pub status_message_timeout: Option<Instant>,
+}
+
+/// Transient status bar message with severity level and optional auto-clear.
+#[derive(Clone, Debug)]
+pub struct StatusMessage {
+    pub content: String,
+    pub level: StatusLevel,
+}
+
+/// Severity level for timed status messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusLevel {
+    Info,
+    Warn,
+    Error,
+    Tip,
+}
+
+impl StatusMessage {
+    pub fn info(content: impl Into<String>) -> Self {
+        Self { content: content.into(), level: StatusLevel::Info }
+    }
+    pub fn warn(content: impl Into<String>) -> Self {
+        Self { content: content.into(), level: StatusLevel::Warn }
+    }
+    pub fn tip(content: impl Into<String>) -> Self {
+        Self { content: content.into(), level: StatusLevel::Tip }
+    }
 }
 
 impl AppState {
@@ -184,11 +228,45 @@ impl AppState {
             focus: Focus::Composer,
             stream_state: crate::render::MarkdownStreamState::default(),
             stream_controller: crate::tui::stream_controller::StreamController::new(),
+
+            is_streaming: false,
+            streaming_token_estimate: 0.0,
+            streaming_start_time: None,
+            ctx_usage: None,
+            status_message: None,
+            status_message_timeout: None,
         }
     }
 
     pub fn is_task_running(&self) -> bool {
         self.active_action.is_some()
+    }
+
+    /// Show a status message with an auto-clear timeout (in milliseconds).
+    /// Pass `0` for no timeout (persists until explicitly cleared).
+    pub fn show_status(&mut self, msg: StatusMessage, timeout_ms: u64) {
+        if timeout_ms == 0 {
+            self.status_message_timeout = None;
+        } else {
+            self.status_message_timeout =
+                Some(Instant::now() + std::time::Duration::from_millis(timeout_ms));
+        }
+        self.status_message = Some(msg);
+    }
+
+    /// Tick-driven: auto-clear expired status messages.
+    pub fn check_status_timeout(&mut self) {
+        if let Some(deadline) = self.status_message_timeout {
+            if Instant::now() > deadline {
+                self.status_message = None;
+                self.status_message_timeout = None;
+            }
+        }
+    }
+
+    /// Approximate token estimation (Yomi pattern: ~4 chars per token).
+    pub fn estimate_tokens(text: &str) -> f64 {
+        text.len() as f64 / 4.0
     }
 }
 

@@ -9,6 +9,45 @@ If you want an open-source, evidence-driven autonomous coding developer workstat
 - **Micro-Compaction Memory Pipeline**: Retains cognitive coherence over long sessions by asynchronously rewriting and pruning older conversation history to strictly abide by tokenizer limits.
 - **Implicit Skill Resolution**: Dynamically ingests `SKILL.md` configurations scoped to your workspace and resolves matching capabilities intelligently against unstructured prompts.
 - **AutoDream Consolidation**: Spawns isolated long-term structural processing daemons to compress temporal execution traces into rigid architectural invariants for downstream sessions.
+- **Structured Turn Lifecycle**: Every agent turn emits `TurnEvent` variants (`Started`, `PhaseChanged`, `Completed`, `Aborted`) enabling deterministic UI state tracking and telemetry.
+- **Newline-Gated Markdown Streaming**: Streaming markdown is rendered incrementally using a committed-lines cache (ported from Codex's `MarkdownStreamCollector`), reducing rendering overhead from O(n²) to O(n).
+- **Error Categorization & Retry**: `BrainError` classifies errors as transient (HTTP 429/500/502/503/529) or permanent (401/403, parse errors), with exponential backoff retry for transient failures.
+
+---
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────┐
+│  TUI Layer (ratatui)                           │
+│  ┌──────────┬──────────┬──────────┬──────────┐ │
+│  │ History  │ Composer │ InfoBar  │ Cmd      │ │
+│  │ Component│ Component│ (tokens, │ Palette  │ │
+│  │          │ (focus)  │ ctx %)   │          │ │
+│  └──────────┴──────────┴──────────┴──────────┘ │
+│  StreamController (tick-based line draining)    │
+│  StreamingMarkdownRenderer (newline-gated)      │
+├────────────────────────────────────────────────┤
+│  ThreadManager ←→ ConversationManager          │
+│  ┌──────────────────────────────────────────┐  │
+│  │ SessionRuntime                           │  │
+│  │  → Materialization (frozen snapshot)     │  │
+│  │  → Epistemic Loop (ReconAction cycle)    │  │
+│  │  → Crucible (MCTS verification)          │  │
+│  │  → Subagent Workers (bounded 120s)       │  │
+│  └──────────────────────────────────────────┘  │
+├────────────────────────────────────────────────┤
+│  crow-brain  │ crow-patch │ crow-verifier      │
+│  (LLM client)│ (IntentPlan│ (sandbox exec)     │
+│              │  EditOps)  │                    │
+└────────────────────────────────────────────────┘
+```
+
+### Key Patterns
+- **Snapshot Safety**: The workspace is frozen before planning. The epistemic loop and crucible both operate against the same immutable snapshot, preventing time-of-check/time-of-use divergence.
+- **Role Alternation**: `ConversationManager::fix_role_alternation()` ensures strict User→Assistant→User ordering after compaction, required by Anthropic-style providers.
+- **Hallucination Guard**: The epistemic loop rejects `Modify` operations on files the agent hasn't read during the current turn.
+- **Delegation Depth Limiting**: Subagent delegation is capped at 3 levels to prevent infinite recursion.
 
 ---
 
@@ -59,6 +98,16 @@ export LLM_PROVIDER="anthropic"
 | `crow plan <prompt>` | Fast evidence-first preview of MCTS generated plans. |
 
 When inside the TUI, orchestrate the session effortlessly using `/help`, `/swarm <task>`, `/clear`, and `/model <model>`.
+
+## TUI Components
+
+| Component | Description |
+|---|---|
+| **HistoryComponent** | Scrollable conversation pane with semantic cell rendering (user messages, agent markdown, tool results). |
+| **ComposerComponent** | Multi-line text input with cursor tracking, focus management, and explicit `set_cursor()` for terminal visibility. |
+| **InfoBar** | Streaming-aware status bar: model name, git branch, token gauge with color-coded context window usage. |
+| **CommandPalette** | Dynamic slash-command popup (`/help`, `/clear`, `/model`, `/swarm`). |
+| **StreamController** | Tick-based line draining (1 line/120ms, batch 5/tick when backlog > 20) to prevent UI stuttering during streaming. |
 
 ## License
 

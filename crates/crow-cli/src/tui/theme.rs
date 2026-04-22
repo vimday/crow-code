@@ -234,6 +234,9 @@ pub mod colors {
     pub fn code_fg() -> Color {
         current_theme().code_fg
     }
+    pub fn code_bg() -> Color {
+        current_theme().code_bg
+    }
     pub fn code_border() -> Color {
         current_theme().code_border
     }
@@ -241,8 +244,14 @@ pub mod colors {
     pub fn border() -> Color {
         current_theme().border
     }
+    pub fn border_active() -> Color {
+        current_theme().border_active
+    }
     pub fn divider() -> Color {
         current_theme().divider
+    }
+    pub fn user_msg_bg() -> Color {
+        current_theme().user_msg_bg
     }
 }
 
