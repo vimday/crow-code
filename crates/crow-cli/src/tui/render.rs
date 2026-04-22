@@ -419,7 +419,7 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
     }
 
     let p = Paragraph::new(Line::from(spans))
-        .style(ratatui::style::Style::default().bg(Color::Indexed(236)));
+        .style(ratatui::style::Style::default().bg(colors::border()));
     f.render_widget(p, area);
 }
 
@@ -511,13 +511,13 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
         let pad_left = (mid_w.saturating_sub(center.len())) / 2;
         let pad_right = mid_w.saturating_sub(center.len()).saturating_sub(pad_left);
         Paragraph::new(Line::from(vec![
-            "─".repeat(pad_left).fg(Color::Indexed(236)),
+            "─".repeat(pad_left).fg(colors::divider()),
             center.fg(Color::Cyan),
-            "─".repeat(pad_right).fg(Color::Indexed(236)),
+            "─".repeat(pad_right).fg(colors::divider()),
         ]))
     } else {
         let mid_fill = "─".repeat(mid_w);
-        Paragraph::new(mid_fill.fg(Color::Indexed(236)))
+        Paragraph::new(mid_fill.fg(colors::divider()))
     };
 
     f.render_widget(left_widget, status_chunks[0]);

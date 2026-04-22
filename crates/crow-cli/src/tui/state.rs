@@ -11,6 +11,8 @@ pub enum TuiMessage {
     SwarmStarted(String, String),
     SwarmComplete(String, bool),
     Tick,
+    /// Clean exit requested (e.g. via `/exit` or `/quit` command).
+    Quit,
 }
 
 // ── Typed History Cells (Codex-style) ────────────────────────────────────────
@@ -201,6 +203,7 @@ pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
         ("/compact", "Force context compaction"),
         ("/session list", "List saved sessions"),
         ("/session resume", "Resume a saved session"),
+        ("/exit", "Exit Crow"),
     ];
     let trimmed_query = query.trim_end();
     if trimmed_query == "/" || trimmed_query.is_empty() {

@@ -27,6 +27,11 @@ const MAX_FILE_BYTES: u64 = 50 * 1024; // 50 KB
 /// Maximum lines to read from a single file.
 const MAX_FILE_LINES: usize = 500;
 
+/// Maximum bytes from a recon result before truncation at context level.
+/// Separate from the execution-level cap (512KB) in the verifier — this
+/// prevents oversized tool output from blowing out the conversation window.
+const MAX_RECON_CONTEXT_BYTES: usize = 100 * 1024; // 100 KB
+
 /// Maximum epistemic steps before bailing out.
 const MAX_EPISTEMIC_STEPS: usize = 30;
 
@@ -97,9 +102,32 @@ pub async fn run_epistemic_loop(
         }
 
         let mut adapter = StreamAdapter(observer);
-        let action_result = compiler
-            .compile_action_streaming(&messages.as_messages(), &mut adapter)
-            .await;
+        let action_result = {
+            let mut retry_count = 0u32;
+            const MAX_LLM_RETRIES: u32 = 3;
+            loop {
+                match compiler
+                    .compile_action_streaming(&messages.as_messages(), &mut adapter)
+                    .await
+                {
+                    Ok(action) => break Ok(action),
+                    Err(crow_brain::compiler::CompilerError::PromptFailed(ref brain_err))
+                        if brain_err.is_retryable() && retry_count < MAX_LLM_RETRIES =>
+                    {
+                        retry_count += 1;
+                        let backoff_secs = 2u64.pow(retry_count);
+                        let obs = &mut *adapter.0;
+                        obs.handle_event(AgentEvent::Retrying {
+                            attempt: retry_count,
+                            max_attempts: MAX_LLM_RETRIES,
+                            reason: format!("Transient LLM error: {brain_err}"),
+                        });
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                    }
+                    Err(e) => break Err(e),
+                }
+            }
+        };
 
         let action = action_result.map_err(|e| anyhow::anyhow!("Compilation failed: {e:?}"))?;
 
@@ -366,6 +394,19 @@ async fn execute_recon(
     messages: &mut ConversationManager,
     mcp_manager: Option<&crate::mcp::McpManager>,
 ) {
+    // Helper: cap recon output at MAX_RECON_CONTEXT_BYTES before context ingestion
+    fn cap_output(output: &str) -> String {
+        if output.len() > MAX_RECON_CONTEXT_BYTES {
+            let truncated = crow_patch::safe_truncate(output, MAX_RECON_CONTEXT_BYTES);
+            format!(
+                "{truncated}\n\n[SYSTEM WARNING: Recon output truncated from {} to {}KB to preserve context budget]",
+                output.len() / 1024,
+                MAX_RECON_CONTEXT_BYTES / 1024
+            )
+        } else {
+            output.to_string()
+        }
+    }
     // Intercept MCP calls and execute via the manager.
     if let ReconAction::McpCall {
         server_name,
@@ -382,10 +423,11 @@ async fn execute_recon(
                         // Very naive formatter for now
                         format!("{:?}", res.content)
                     };
+                    let capped = cap_output(&formatted_res);
                     messages.push_recon_result(
                         "mcp_call",
                         &format!("{server_name} / {tool_name}"),
-                        &formatted_res,
+                        &capped,
                     );
                 }
                 Err(e) => {
@@ -484,7 +526,8 @@ async fn execute_recon(
     match result {
         Ok(res) => {
             let tool_name = recon_tool_name(tool);
-            messages.push_recon_result(tool_name, &description, &res.test_run.truncated_log);
+            let capped = cap_output(&res.test_run.truncated_log);
+            messages.push_recon_result(tool_name, &description, &capped);
         }
         Err(e) => {
             messages.push_user(format!(

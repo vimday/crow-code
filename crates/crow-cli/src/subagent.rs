@@ -4,6 +4,7 @@ use crow_brain::compiler::IntentCompiler;
 use crow_patch::IntentPlan;
 use std::path::Path;
 use std::fmt;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRole {
@@ -77,15 +78,26 @@ impl SubagentWorker {
         };
 
         let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
-        crate::epistemic::run_epistemic_loop(
-            &self.compiler,
-            &mut sub_messages,
-            frozen_root,
-            mcp_manager,
-            &mut observer,
-            file_state_store,
+        // Enforce a hard timeout matching the AGENTS.md branch-level 120s limit.
+        // Prevents stalled LLM calls or infinite recon loops from hanging forever.
+        const SUBAGENT_TIMEOUT: Duration = Duration::from_secs(120);
+        tokio::time::timeout(
+            SUBAGENT_TIMEOUT,
+            crate::epistemic::run_epistemic_loop(
+                &self.compiler,
+                &mut sub_messages,
+                frozen_root,
+                mcp_manager,
+                &mut observer,
+                file_state_store,
+            ),
         )
         .await
+        .map_err(|_| anyhow::anyhow!(
+            "Subagent [{id}] timed out after {timeout}s",
+            id = self.id,
+            timeout = SUBAGENT_TIMEOUT.as_secs()
+        ))?
     }
 }
 

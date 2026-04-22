@@ -478,7 +478,15 @@ impl ReqwestLlmClient {
                                     }
                                     if !chunk_str.is_empty() {
                                         full_text.push_str(chunk_str);
-                                        observer.on_chunk(chunk_str);
+                                        // Isolate observer from panics: a buggy
+                                        // TUI handler must not kill the LLM stream.
+                                        let chunk_owned = chunk_str.to_string();
+                                        let obs_ref = &mut *observer;
+                                        let _ = std::panic::catch_unwind(
+                                            std::panic::AssertUnwindSafe(|| {
+                                                obs_ref.on_chunk(&chunk_owned);
+                                            }),
+                                        );
                                     }
                                 }
                             }

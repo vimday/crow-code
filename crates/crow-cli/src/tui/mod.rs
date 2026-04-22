@@ -59,6 +59,16 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     // Must happen before entering alternate screen which may change terminal state.
     theme::init_theme();
 
+    // Install a panic hook BEFORE entering alternate screen so that if any
+    // code panics during the TUI loop the terminal is left in a sane state
+    // instead of raw mode with the alternate screen still active.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
+        original_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -551,6 +561,7 @@ async fn run_tui_loop(
                         }
                     }
                 }
+                TuiMessage::Quit => break,
             }
         }
     }
@@ -598,13 +609,8 @@ fn execute_command_string(
         match cmd {
             "exit" | "quit" | "q" => {
                 state.composer.clear();
-                // Signal quit by pushing a sentinel (handled in main loop)
-                // For now, we use a clean exit mechanism through the caller.
-                // The user can also use Ctrl+D to quit instantly.
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: "Use Ctrl+D to exit, or Ctrl+C twice.".into(),
-                });
+                state.composer_cursor = 0;
+                let _ = tx.send(TuiMessage::Quit);
             }
             "clear" | "c" => {
                 state.history.clear();
@@ -812,7 +818,7 @@ fn execute_command_string(
         // path. Execution goes through `sh -c`, so `!cargo test && curl ...`
         // would bypass the prefix allowlist without this check.
         const SHELL_METACHARACTERS: &[&str] = &[
-            "&&", "||", ";", "|", "$", "`", ">", "<", "(", ")", "{", "}", "\n", "\\",
+            "&&", "||", ";", "|", "$(", "${", "$", "`", ">", "<", "(", ")", "{", "}", "\n", "\\", "#",
         ];
         let has_metacharacters = SHELL_METACHARACTERS
             .iter()

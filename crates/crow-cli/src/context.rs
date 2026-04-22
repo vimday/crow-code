@@ -167,9 +167,44 @@ impl ConversationManager {
                     summary: Some("[SYSTEM: Previously compacted]".into()),
                 });
             }
+
+            // Post-compaction validation: ensure strict role alternation
+            // (User→Assistant→User). Providers like Anthropic reject requests
+            // with consecutive same-role messages (HTTP 400).
+            self.fix_role_alternation();
+
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Ensures strict User→Assistant→User role alternation in the conversation
+    /// deque. Inserts minimal placeholder messages where two consecutive
+    /// messages share the same role.
+    fn fix_role_alternation(&mut self) {
+        let mut i = 1;
+        while i < self.conversation.len() {
+            let prev_role = &self.conversation[i - 1].message.role;
+            let curr_role = &self.conversation[i].message.role;
+
+            if prev_role == curr_role {
+                // Insert a placeholder of the opposite role to restore alternation
+                let filler = if *curr_role == ChatRole::User {
+                    Memory {
+                        message: ChatMessage::assistant("[acknowledged]"),
+                        summary: None,
+                    }
+                } else {
+                    Memory {
+                        message: ChatMessage::user("[continue]"),
+                        summary: Some("[SYSTEM: Role alternation filler]".into()),
+                    }
+                };
+                self.conversation.insert(i, filler);
+                i += 1; // skip the just-inserted filler
+            }
+            i += 1;
         }
     }
 

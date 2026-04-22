@@ -3,7 +3,7 @@
 //! Inspired by yomi's runtime-configurable semantic color system.
 //! All colors use true-color hex RGB for modern terminal rendering.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style, Stylize};
 use std::sync::{LazyLock, RwLock};
 
 /// Semantic color configuration — modify these to customize the theme.
@@ -253,98 +253,82 @@ pub struct Styles;
 impl Styles {
     /// User message header style.
     pub fn user_header() -> Style {
-        Style::default()
-            .fg(colors::accent_user())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::accent_user()).bold()
     }
 
     /// User message content style.
     pub fn user_content() -> Style {
-        Style::default().fg(colors::text_primary())
+        Style::new().fg(colors::text_primary())
     }
 
     /// Assistant message content style.
     pub fn assistant_content() -> Style {
-        Style::default().fg(colors::text_primary())
+        Style::new().fg(colors::text_primary())
     }
 
     /// Evidence / recon line style.
     pub fn evidence() -> Style {
-        Style::default().fg(colors::text_secondary())
+        Style::new().fg(colors::text_secondary())
     }
 
     /// System / tool header style.
     pub fn tool_header() -> Style {
-        Style::default()
-            .fg(colors::accent_system())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::accent_system()).bold()
     }
 
     /// Tool content style.
     pub fn tool_content() -> Style {
-        Style::default().fg(colors::text_secondary())
+        Style::new().fg(colors::text_secondary())
     }
 
     /// Success style.
     pub fn success() -> Style {
-        Style::default().fg(colors::accent_success())
+        Style::new().fg(colors::accent_success())
     }
 
     /// Warning style.
     pub fn warning() -> Style {
-        Style::default().fg(colors::accent_warning())
+        Style::new().fg(colors::accent_warning())
     }
 
     /// Error style.
     pub fn error() -> Style {
-        Style::default()
-            .fg(colors::accent_error())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::accent_error()).bold()
     }
 
     /// Spinner style.
     pub fn spinner() -> Style {
-        Style::default()
-            .fg(colors::accent_system())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::accent_system()).bold()
     }
 
     /// Code block style.
     pub fn code_block() -> Style {
-        Style::default().fg(colors::code_fg())
+        Style::new().fg(colors::code_fg())
     }
 
     /// Code language tag.
     pub fn code_lang() -> Style {
-        Style::default()
-            .fg(colors::text_secondary())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::text_secondary()).bold()
     }
 
     /// Inline code.
     pub fn inline_code() -> Style {
-        Style::default()
-            .fg(colors::code_fg())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::code_fg()).bold()
     }
 
     /// Input prompt style.
     pub fn input_prompt() -> Style {
-        Style::default()
-            .fg(colors::accent_user())
-            .add_modifier(Modifier::BOLD)
+        Style::new().fg(colors::accent_user()).bold()
     }
 
     /// Placeholder style.
     pub fn placeholder() -> Style {
-        Style::default().fg(colors::text_muted())
+        Style::new().fg(colors::text_muted())
     }
 
     /// Thinking / reasoning header.
     pub fn thinking() -> Style {
-        Style::default()
-            .fg(colors::text_secondary())
-            .add_modifier(Modifier::ITALIC)
+        Style::new().fg(colors::text_secondary()).italic()
     }
 }
 

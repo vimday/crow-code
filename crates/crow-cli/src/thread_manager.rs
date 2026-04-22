@@ -153,7 +153,14 @@ impl ThreadManager {
 
             let mut state = thread_state.lock().await;
             if was_cancelled {
+                let turn_id = state.turn_id.clone().unwrap_or_default();
                 state.status = TurnStatus::Aborted;
+                let _ = ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                    TurnEvent::Aborted {
+                        turn_id,
+                        reason: "Cancelled by user".into(),
+                    },
+                )));
                 let _ = ui_tx.send(TuiMessage::TurnComplete(false));
             } else {
                 // Safe to write back: turn completed normally
@@ -161,6 +168,13 @@ impl ThreadManager {
                 match result {
                     Ok(snapshot_id) => {
                         state.status = TurnStatus::Completed(Some(snapshot_id.clone()));
+                        let _ = ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                            TurnEvent::Completed {
+                                turn_id: state.turn_id.clone().unwrap_or_default(),
+                                success: true,
+                                token_usage: None,
+                            },
+                        )));
                         let _ = ui_tx.send(TuiMessage::TurnComplete(true));
 
                         // Async persistence after turn completion
@@ -192,7 +206,15 @@ impl ThreadManager {
                         }
                     }
                     Err(e) => {
-                        state.status = TurnStatus::Failed(e.to_string());
+                        let err_msg = e.to_string();
+                        state.status = TurnStatus::Failed(err_msg);
+                        let _ = ui_tx.send(TuiMessage::AgentEvent(AgentEvent::Turn(
+                            TurnEvent::Completed {
+                                turn_id: state.turn_id.clone().unwrap_or_default(),
+                                success: false,
+                                token_usage: None,
+                            },
+                        )));
                         let _ = ui_tx.send(TuiMessage::TurnComplete(false));
                     }
                 }

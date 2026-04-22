@@ -234,6 +234,19 @@ impl<'a> Component for ComposerComponent<'a> {
         frame.render_widget(prompt_widget, composer_split[0]);
         frame.render_widget(self.textarea.widget(), composer_split[1]);
 
+        // Always set the terminal cursor at the text insertion point so the
+        // user can see where they are typing (Codex/Claude Code UX pattern).
+        // Without this, the cursor is invisible and users must "blind-type."
+        if state.focus == crate::tui::state::Focus::Composer {
+            let (cursor_row, cursor_col) = self.textarea.cursor();
+            let x = composer_split[1].x + cursor_col as u16;
+            let y = composer_split[1].y + cursor_row as u16;
+            // Clamp to the composer area to prevent cursor from escaping
+            let clamped_x = x.min(composer_split[1].right().saturating_sub(1));
+            let clamped_y = y.min(composer_split[1].bottom().saturating_sub(1));
+            frame.set_cursor(clamped_x, clamped_y);
+        }
+
         // Draw the floating popup if active
         if let ActivePopup::CommandPalette {
             query: _,
