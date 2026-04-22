@@ -4,7 +4,6 @@ use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::Style,
     widgets::{Block, Borders},
     Frame,
 };
@@ -35,11 +34,11 @@ impl<'a> Default for ComposerComponent<'a> {
 fn make_textarea<'a>() -> TextArea<'a> {
     let mut textarea = TextArea::default();
     textarea.set_block(Block::default().borders(Borders::NONE));
-    textarea.set_cursor_line_style(Style::default());
+    textarea.set_cursor_line_style(ratatui::style::Style::new());
     // Hide the textarea's internal block cursor — we use frame.set_cursor()
     // to place a single terminal blinking cursor (Codex/Claude Code pattern).
-    textarea.set_cursor_style(Style::default());
-    let placeholder = Style::default().fg(ratatui::style::Color::DarkGray);
+    textarea.set_cursor_style(ratatui::style::Style::new());
+    let placeholder = ratatui::style::Style::new().fg(ratatui::style::Color::DarkGray);
     textarea.set_placeholder_text("Ask Crow anything...");
     textarea.set_placeholder_style(placeholder);
     // NOTE: Do NOT call set_line_number_style() — it enables line numbers.
@@ -259,7 +258,7 @@ impl<'a> Component for ComposerComponent<'a> {
         } = self.active_popup
         {
             if popup_h > 0 {
-                use ratatui::style::{Color, Style, Stylize};
+                use ratatui::style::{Color, Stylize};
                 use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 
                 frame.render_widget(Clear, popup_area); // Erase underlying content
@@ -271,7 +270,7 @@ impl<'a> Component for ComposerComponent<'a> {
                         let content = format!(" {cmd:18} {desc}");
                         if i == selected_idx {
                             ListItem::new(content)
-                                .style(Style::default().bg(Color::Cyan).fg(Color::Black).bold())
+                                .style(ratatui::style::Style::new().bg(Color::Cyan).fg(Color::Black).bold())
                         } else {
                             ListItem::new(content)
                         }
@@ -281,7 +280,7 @@ impl<'a> Component for ComposerComponent<'a> {
                 let popup_list = List::new(list_items).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan))
+                        .border_style(ratatui::style::Style::new().fg(Color::Cyan))
                         .title(" Commands "),
                 );
 
@@ -309,16 +308,13 @@ impl<'a> Component for ComposerComponent<'a> {
 /// reduce complexity and enable dynamic sizing.
 fn render_approval_popup(frame: &mut Frame, area: Rect, cmd: &str, selected_idx: usize) {
     use ratatui::style::Stylize;
-    use ratatui::text::{Line, Span};
+    use ratatui::text::Line;
     use ratatui::widgets::{List, ListItem, Paragraph};
 
     let composer_lines = vec![
-        Line::from(vec![Span::styled(
-            "⚠️  Security Approval Required",
-            ratatui::style::Style::default()
-                .fg(ratatui::style::Color::Red)
-                .bold(),
-        )]),
+        Line::from(vec![
+            "⚠️  Security Approval Required".red().bold()
+        ]),
         Line::from(vec!["Command: ".dark_gray(), cmd.to_string().into()]),
         Line::from(vec![
             "  (y=Allow  a=Always  n=Reject  Esc=Cancel)".dark_gray()
@@ -341,7 +337,7 @@ fn render_approval_popup(frame: &mut Frame, area: Rect, cmd: &str, selected_idx:
         .map(|(i, &opt)| {
             if i == selected_idx {
                 ListItem::new(opt).style(
-                    Style::default()
+                    ratatui::style::Style::new()
                         .bg(ratatui::style::Color::LightRed)
                         .fg(ratatui::style::Color::Black)
                         .bold(),
@@ -355,7 +351,7 @@ fn render_approval_popup(frame: &mut Frame, area: Rect, cmd: &str, selected_idx:
     let popup_list = List::new(list_items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(ratatui::style::Color::LightRed))
+            .border_style(ratatui::style::Style::new().fg(ratatui::style::Color::LightRed))
             .title(" Action "),
     );
 

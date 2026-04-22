@@ -1,6 +1,8 @@
+pub mod app;
+pub mod commands;
 pub mod component;
 pub mod components;
-pub mod app;
+pub mod event_loop;
 pub mod markdown_stream;
 pub mod render;
 pub mod state;

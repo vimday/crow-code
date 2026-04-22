@@ -11,7 +11,8 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Style, Stylize};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
+use ratatui::style::Styled;
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use ratatui::Frame;
 
@@ -80,15 +81,9 @@ impl InfoBar {
         };
 
         let left = Line::from(vec![
-            Span::styled(
-                format!(" {model_display} "),
-                Style::new().fg(colors::accent_system()).bold(),
-            ),
-            Span::styled(" │ ", Style::new().fg(colors::divider())),
-            Span::styled(
-                format!(" {branch_display} "),
-                Style::new().fg(colors::accent_warning()),
-            ),
+            format!(" {model_display} ").fg(colors::accent_system()).bold(),
+            " │ ".fg(colors::divider()),
+            format!(" {branch_display} ").fg(colors::accent_warning()),
         ]);
 
         let left_widget = Paragraph::new(left).block(Block::default().borders(Borders::NONE));
@@ -110,12 +105,9 @@ impl InfoBar {
             };
 
             vec![
-                Span::styled(format!(" {spinner} "), Styles::spinner()),
-                Span::styled(token_display, Style::new().fg(colors::text_secondary())),
-                Span::styled(
-                    format!(" · {elapsed}"),
-                    Style::new().fg(colors::text_secondary()),
-                ),
+                format!(" {spinner} ").set_style(Styles::spinner()),
+                token_display.fg(colors::text_secondary()),
+                format!(" · {elapsed}").fg(colors::text_secondary()),
             ]
         } else if let Some(ref action) = state.active_action {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
@@ -130,15 +122,12 @@ impl InfoBar {
                 .unwrap_or_default();
 
             vec![
-                Span::styled(format!(" {spinner} "), Styles::spinner()),
-                Span::styled(action_display, Style::new().fg(colors::text_muted())),
-                Span::styled(elapsed, Style::new().fg(colors::text_muted())),
+                format!(" {spinner} ").set_style(Styles::spinner()),
+                action_display.fg(colors::text_muted()),
+                elapsed.fg(colors::text_muted()),
             ]
         } else {
-            vec![Span::styled(
-                " Ready",
-                Style::new().fg(colors::text_muted()),
-            )]
+            vec![" Ready".fg(colors::text_muted())]
         };
 
         let center_widget =
@@ -166,13 +155,11 @@ impl InfoBar {
                     .label(label);
                 f.render_widget(gauge, chunks[2]);
             } else {
-                let placeholder =
-                    Paragraph::new(Span::styled(" Tokens: —", Style::new().fg(colors::text_muted())));
+                let placeholder = Paragraph::new(" Tokens: —".fg(colors::text_muted()));
                 f.render_widget(placeholder, chunks[2]);
             }
         } else {
-            let placeholder =
-                Paragraph::new(Span::styled(" Tokens: —", Style::new().fg(colors::text_muted())));
+            let placeholder = Paragraph::new(" Tokens: —".fg(colors::text_muted()));
             f.render_widget(placeholder, chunks[2]);
         }
     }

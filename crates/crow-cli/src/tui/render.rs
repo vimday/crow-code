@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Stylize};
+use ratatui::style::{Color, Stylize, Styled};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -98,47 +98,47 @@ fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
     
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::new().fg(Color::DarkGray));
         
     let mut lines = Vec::new();
     lines.push(Line::from(""));
     
     lines.push(Line::from(vec![
-        Span::styled(format!(" {} ", chars::CODE_TOP_LEFT), Styles::user_header()),
-        Span::styled("ENVIRONMENT", Styles::evidence()),
+        format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
+        "ENVIRONMENT".set_style(Styles::evidence()),
     ]));
     
     let path = if state.workspace_name.is_empty() { "memfs" } else { &state.workspace_name };
     lines.push(Line::from(vec![
-        Span::styled("    Path:   ", Styles::evidence()),
-        Span::styled(path, Styles::code_block()),
+        "    Path:   ".set_style(Styles::evidence()),
+        path.set_style(Styles::code_block()),
     ]));
     
     lines.push(Line::from(vec![
-        Span::styled("    Branch: ", Styles::evidence()),
-        Span::styled(&state.git_branch, Styles::code_block()),
+        "    Branch: ".set_style(Styles::evidence()),
+        state.git_branch.as_str().set_style(Styles::code_block()),
         if state.is_dirty {
-            Span::styled(" *", Styles::error())
+            " *".set_style(Styles::error())
         } else {
-            Span::styled("", Styles::evidence())
+            "".set_style(Styles::evidence())
         }
     ]));
     
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled(format!(" {} ", chars::CODE_TOP_LEFT), Styles::user_header()),
-        Span::styled("AGENT CONTEXT", Styles::evidence()),
+        format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
+        "AGENT CONTEXT".set_style(Styles::evidence()),
     ]));
     
     let mode_str = format!("{:?}", state.view_mode);
     lines.push(Line::from(vec![
-        Span::styled("    Auth:   ", Styles::evidence()),
-        Span::styled(mode_str, Styles::success()),
+        "    Auth:   ".set_style(Styles::evidence()),
+        mode_str.set_style(Styles::success()),
     ]));
     
     lines.push(Line::from(vec![
-        Span::styled("    Write:  ", Styles::evidence()),
-        Span::styled(&state.write_mode, Styles::warning()),
+        "    Write:  ".set_style(Styles::evidence()),
+        state.write_mode.as_str().set_style(Styles::warning()),
     ]));
         
     let p = Paragraph::new(lines).block(block);
@@ -159,17 +159,17 @@ impl<'a> HistoryCell for UserCell<'a> {
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
             let prefix = if wrapped.len() == 1 {
-                Span::styled(format!("{} ", chars::USER_BAR), Styles::user_header())
+                format!("{} ", chars::USER_BAR).set_style(Styles::user_header())
             } else if i == 0 {
-                Span::styled(format!("{} ", chars::CODE_TOP_LEFT), Styles::user_header())
+                format!("{} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header())
             } else if i == wrapped.len() - 1 {
-                Span::styled(format!("{} ", chars::CODE_BOTTOM_LEFT), Styles::user_header())
+                format!("{} ", chars::CODE_BOTTOM_LEFT).set_style(Styles::user_header())
             } else {
-                Span::styled(format!("{} ", chars::USER_BAR), Styles::user_header())
+                format!("{} ", chars::USER_BAR).set_style(Styles::user_header())
             };
             lines.push(Line::from(vec![
                 prefix,
-                Span::styled(line.to_string(), Styles::user_content()),
+                line.to_string().set_style(Styles::user_content()),
             ]));
         }
         lines.push(Line::from(""));
@@ -186,13 +186,13 @@ impl<'a> HistoryCell for AgentMessageCell<'a> {
         let mut out = Vec::new();
         for (i, line) in md_lines.iter().enumerate() {
             let prefix = if md_lines.len() == 1 {
-                Span::styled(format!("{} ", chars::USER_BAR), Styles::assistant_content())
+                format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content())
             } else if i == 0 {
-                Span::styled(format!("{} ", chars::CODE_TOP_LEFT), Styles::assistant_content())
+                format!("{} ", chars::CODE_TOP_LEFT).set_style(Styles::assistant_content())
             } else if i == md_lines.len() - 1 {
-                Span::styled(format!("{} ", chars::CODE_BOTTOM_LEFT), Styles::assistant_content())
+                format!("{} ", chars::CODE_BOTTOM_LEFT).set_style(Styles::assistant_content())
             } else {
-                Span::styled(format!("{} ", chars::USER_BAR), Styles::assistant_content())
+                format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content())
             };
             
             let mut new_spans = vec![prefix];
@@ -204,8 +204,8 @@ impl<'a> HistoryCell for AgentMessageCell<'a> {
         if out.is_empty() {
             // Fallback for empty content
             out.push(Line::from(vec![
-                Span::styled(format!("{} ", chars::USER_BAR), Styles::assistant_content()),
-                Span::styled(self.0.to_string(), Styles::assistant_content()),
+                format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content()),
+                self.0.to_string().set_style(Styles::assistant_content()),
             ]));
         }
         out
@@ -225,8 +225,8 @@ impl<'a> HistoryCell for EvidenceCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                Span::styled(prefix, Styles::evidence()),
-                Span::styled(line.to_string(), Styles::evidence()),
+                prefix.set_style(Styles::evidence()),
+                line.to_string().set_style(Styles::evidence()),
             ]));
         }
         lines
@@ -246,8 +246,8 @@ impl<'a> HistoryCell for ActionCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                Span::styled(prefix, Styles::success()),
-                Span::styled(line.to_string(), Styles::success()),
+                prefix.set_style(Styles::success()),
+                line.to_string().set_style(Styles::success()),
             ]));
         }
         lines
@@ -267,8 +267,8 @@ impl<'a> HistoryCell for ResultCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                Span::styled(prefix, Styles::tool_header()),
-                Span::styled(line.to_string(), Styles::tool_header()),
+                prefix.set_style(Styles::tool_header()),
+                line.to_string().set_style(Styles::tool_header()),
             ]));
         }
         lines
@@ -288,8 +288,8 @@ impl<'a> HistoryCell for LogCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                Span::styled(prefix, Styles::evidence()),
-                Span::styled(line.to_string(), Styles::evidence()),
+                prefix.set_style(Styles::evidence()),
+                line.to_string().set_style(Styles::evidence()),
             ]));
         }
         lines
@@ -309,8 +309,8 @@ impl<'a> HistoryCell for ErrorCell<'a> {
                 format!("{GUTTER}  ")
             };
             lines.push(Line::from(vec![
-                Span::styled(prefix, Styles::error()),
-                Span::styled(line.to_string(), Styles::error()),
+                prefix.set_style(Styles::error()),
+                line.to_string().set_style(Styles::error()),
             ]));
         }
         lines
@@ -419,7 +419,7 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
     }
 
     let p = Paragraph::new(Line::from(spans))
-        .style(ratatui::style::Style::default().bg(colors::border()));
+        .style(ratatui::style::Style::new().bg(colors::border()));
     f.render_widget(p, area);
 }
 

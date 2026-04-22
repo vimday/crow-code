@@ -4,6 +4,8 @@
 //! only re-parses content after the last committed newline, avoiding O(n²)
 //! re-rendering as content accumulates during streaming.
 
+use ratatui::style::Styled;
+
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Modifier, Style},
@@ -18,7 +20,7 @@ lazy_static::lazy_static! {
 }
 
 fn translate_syn_style(style: syntect::highlighting::Style) -> Style {
-    Style::default().fg(ratatui::style::Color::Rgb(
+    ratatui::style::Style::new().fg(ratatui::style::Color::Rgb(
         style.foreground.r,
         style.foreground.g,
         style.foreground.b,
@@ -46,7 +48,7 @@ impl Default for ParseState {
             in_code_block: false,
             code_language: None,
             list_stack: Vec::new(),
-            current_style: Style::default().fg(colors::text_primary()),
+            current_style: ratatui::style::Style::new().fg(colors::text_primary()),
         }
     }
 }
@@ -224,10 +226,7 @@ impl StreamingMarkdownRenderer {
                             }
                             None => format!("{} ", chars::BULLET),
                         };
-                        current_line.push(Span::styled(
-                            prefix,
-                            Style::default().fg(colors::accent_user()),
-                        ));
+                        current_line.push((prefix).set_style(ratatui::style::Style::new().fg(colors::accent_user()),));
                     }
                     Tag::Heading { level, .. } => {
                         if !current_line.is_empty() {
@@ -243,21 +242,15 @@ impl StreamingMarkdownRenderer {
                             pulldown_cmark::HeadingLevel::H5 => "##### ",
                             pulldown_cmark::HeadingLevel::H6 => "###### ",
                         };
-                        current_line.push(Span::styled(
-                            prefix,
-                            Style::default()
+                        current_line.push((prefix).set_style(ratatui::style::Style::new()
                                 .fg(colors::text_primary())
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                        current_style = Style::default()
+                                .add_modifier(Modifier::BOLD),));
+                        current_style = ratatui::style::Style::new()
                             .fg(colors::text_primary())
                             .add_modifier(Modifier::BOLD);
                     }
                     Tag::BlockQuote(_) => {
-                        current_line.push(Span::styled(
-                            format!("{} ", chars::USER_BAR),
-                            Style::default().fg(colors::border()),
-                        ));
+                        current_line.push((format!("{} ", chars::USER_BAR)).set_style(ratatui::style::Style::new().fg(colors::border()),));
                     }
                     _ => {}
                 },
@@ -277,19 +270,16 @@ impl StreamingMarkdownRenderer {
                             result.push(Line::from(
                                 current_line
                                     .into_iter()
-                                    .map(|s| Span::styled(s.content, Styles::code_block()))
+                                    .map(|s| s.set_style(Styles::code_block()))
                                     .collect::<Vec<_>>(),
                             ));
                             current_line = Vec::new();
                         }
-                        result.push(Line::from(Span::styled(
-                            format!(
+                        result.push(Line::from((format!(
                                 "{}{}",
                                 chars::CODE_BOTTOM_LEFT,
                                 chars::CODE_HORIZONTAL.repeat(40),
-                            ),
-                            Style::default().fg(colors::code_border()),
-                        )));
+                            )).set_style(ratatui::style::Style::new().fg(colors::code_border()),)));
                         code_language = None;
                     }
                     TagEnd::Item if !current_line.is_empty() => {
@@ -308,7 +298,7 @@ impl StreamingMarkdownRenderer {
                             current_line = Vec::new();
                         }
                         result.push(Line::from(""));
-                        current_style = Style::default().fg(colors::text_primary());
+                        current_style = ratatui::style::Style::new().fg(colors::text_primary());
                     }
                     TagEnd::Paragraph => {
                         if !current_line.is_empty() {
@@ -325,15 +315,12 @@ impl StreamingMarkdownRenderer {
                             if current_line.is_empty() && code_language.is_some() {
                                 let lang = code_language.take().unwrap_or_default();
                                 result.push(Line::from(vec![
-                                    Span::styled(
-                                        format!(
+                                    (format!(
                                             "{}{} ",
                                             chars::CODE_TOP_LEFT,
                                             chars::CODE_HORIZONTAL.repeat(2),
-                                        ),
-                                        Style::default().fg(colors::code_border()),
-                                    ),
-                                    Span::styled(lang, Styles::code_lang()),
+                                        )).set_style(ratatui::style::Style::new().fg(colors::code_border()),),
+                                    (lang).set_style(Styles::code_lang()),
                                 ]));
                             }
                             if !current_line.is_empty() {
@@ -341,59 +328,47 @@ impl StreamingMarkdownRenderer {
                                     current_line
                                         .into_iter()
                                         .map(|s| {
-                                            Span::styled(s.content, Styles::code_block())
+                                            s.set_style(Styles::code_block())
                                         })
                                         .collect::<Vec<_>>(),
                                 ));
                                 current_line = Vec::new();
                             }
                             let expanded = line.replace('\t', "  ");
-                            let mut spans = vec![Span::styled(
-                                format!("{} ", chars::CODE_VERTICAL),
-                                Style::default().fg(colors::code_border()),
-                            )];
+                            let mut spans = vec![(format!("{} ", chars::CODE_VERTICAL)).set_style(ratatui::style::Style::new().fg(colors::code_border()),)];
 
                             if let Some(hl) = highlighter.as_mut() {
                                 match hl.highlight_line(&expanded, &SYNTAX_SET) {
                                     Ok(ranges) => {
                                         for (style, s) in ranges {
-                                            spans.push(Span::styled(
-                                                s.to_string(),
-                                                translate_syn_style(style),
-                                            ));
+                                            spans.push((s.to_string()).set_style(translate_syn_style(style),));
                                         }
                                     }
                                     Err(_) => {
-                                        spans.push(Span::styled(
-                                            expanded,
-                                            Styles::code_block(),
-                                        ));
+                                        spans.push((expanded).set_style(Styles::code_block(),));
                                     }
                                 }
                             } else {
-                                spans.push(Span::styled(expanded, Styles::code_block()));
+                                spans.push((expanded).set_style(Styles::code_block()));
                             }
 
                             result.push(Line::from(spans));
                         }
                     } else {
-                        current_line.push(Span::styled(text.to_string(), current_style));
+                        current_line.push((text.to_string()).set_style(current_style));
                     }
                 }
                 MdEvent::Code(code) => {
                     let style = Styles::inline_code().patch(current_style);
-                    current_line.push(Span::styled(format!("`{code}`"), style));
+                    current_line.push((format!("`{code}`")).set_style(style));
                 }
                 MdEvent::TaskListMarker(checked) => {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
-                    current_line.push(Span::styled(
-                        format!("{checkbox} "),
-                        Style::default().fg(if checked {
+                    current_line.push((format!("{checkbox} ")).set_style(ratatui::style::Style::new().fg(if checked {
                             colors::accent_success()
                         } else {
                             colors::text_secondary()
-                        }),
-                    ));
+                        }),));
                 }
                 MdEvent::SoftBreak | MdEvent::HardBreak => {
                     if in_code_block {
@@ -401,7 +376,7 @@ impl StreamingMarkdownRenderer {
                             result.push(Line::from(
                                 current_line
                                     .into_iter()
-                                    .map(|s| Span::styled(s.content, Styles::code_block()))
+                                    .map(|s| s.set_style(Styles::code_block()))
                                     .collect::<Vec<_>>(),
                             ));
                             current_line = Vec::new();
@@ -412,10 +387,7 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Rule => {
-                    result.push(Line::from(Span::styled(
-                        "─".repeat(40),
-                        Style::default().fg(colors::divider()),
-                    )));
+                    result.push(Line::from(("─".repeat(40)).set_style(ratatui::style::Style::new().fg(colors::divider()),)));
                 }
                 _ => {}
             }
@@ -427,7 +399,7 @@ impl StreamingMarkdownRenderer {
                 result.push(Line::from(
                     current_line
                         .into_iter()
-                        .map(|s| Span::styled(s.content, Styles::code_block()))
+                        .map(|s| s.set_style(Styles::code_block()))
                         .collect::<Vec<_>>(),
                 ));
             } else {

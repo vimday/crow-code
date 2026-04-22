@@ -63,7 +63,7 @@ impl CommandPalette {
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let palette_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(ratatui::style::Style::default().dark_gray())
+            .border_style(ratatui::style::Style::new().dark_gray())
             .title(" Command Palette ".bold());
 
         let input_text = format!("> {}", self.composer);
