@@ -1,4 +1,4 @@
-//! File tree walker and repository map generator.
+//! File tree walker and repository context map generator.
 //!
 //! Provides the `RepoWalker` tool for breadth-first searching of workspaces
 //! and concatenating file skeletons up to a configurable budget.
@@ -7,7 +7,7 @@ use crate::pagerank::{ContentMap, SymbolMap};
 use crate::skeleton::ASTProcessor;
 use std::path::Path;
 
-pub struct RepoMap {
+pub struct ContextMap {
     pub map_text: String,
 }
 
@@ -40,7 +40,7 @@ impl RepoWalker {
     /// At each directory level, files are emitted before subdirectories,
     /// ensuring shallow/important files (Cargo.toml, src/main.rs) are seen
     /// by the LLM before deep nested paths consume the budget.
-    pub fn build_repo_map(&self, root: &Path) -> Result<RepoMap, String> {
+    pub fn build_context_map(&self, root: &Path) -> Result<ContextMap, String> {
         let mut file_contents: ContentMap = std::collections::HashMap::new();
         let mut file_definitions: SymbolMap = std::collections::HashMap::new();
 
@@ -78,12 +78,12 @@ impl RepoWalker {
                     .unwrap_or(0);
                 out.push_str(&combined[..safe_end]);
                 Self::append_truncation(&mut out);
-                return Ok(RepoMap { map_text: out });
+                return Ok(ContextMap { map_text: out });
             }
             out.push_str(&combined);
         }
 
-        Ok(RepoMap { map_text: out })
+        Ok(ContextMap { map_text: out })
     }
 
     fn collect_all_files(
@@ -157,7 +157,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn build_repo_map_respects_hard_budget() {
+    fn build_context_map_respects_hard_budget() {
         let dir = tempdir().unwrap();
         let file1 = dir.path().join("a.rs");
         let file2 = dir.path().join("b.rs");
@@ -173,7 +173,7 @@ mod tests {
 
         // Very tight budget: 100 bytes
         let walker = RepoWalker::new().with_max_bytes(100);
-        let map = walker.build_repo_map(dir.path()).unwrap();
+        let map = walker.build_context_map(dir.path()).unwrap();
 
         // Assert length won't exceed budget + truncation message
         let truncate_msg_len = "\n\n... [REPO MAP TRUNCATED DUE TO BUDGET] ...\n".len();

@@ -218,11 +218,12 @@ impl EventHandler for CliEventHandler {
                     self.update_spinner(format!("Recon: {desc}"));
                 }
             }
-            AgentEvent::DelegateStart(task) => {
+            AgentEvent::DelegateStart(_, task) => {
                 if self.view_mode != ViewMode::Focus {
                     self.update_spinner(format!("Delegating: {task}"));
                 }
             }
+            AgentEvent::DelegateComplete(_, _) => {}
             AgentEvent::PlanSubmitted(plan) => {
                 if !plan.operations.is_empty() {
                     let summary = format!("{} operations generated", plan.operations.len());

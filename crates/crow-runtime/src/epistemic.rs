@@ -302,7 +302,6 @@ pub async fn run_epistemic_loop(
                 focus_paths,
                 rationale,
             } => {
-                observer.handle_event(AgentEvent::DelegateStart(task.clone()));
                 observer.handle_event(AgentEvent::Log(format!("       Rationale: {rationale}")));
 
                 if delegation_count >= 3 {

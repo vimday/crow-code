@@ -140,7 +140,7 @@ pub(crate) async fn apply_winning_plan(
                     .into(),
             ));
             if let Err(e) =
-                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan).await
             {
                 observer.handle_event(crate::event::AgentEvent::Log(format!(
                     "  ❌ Failed to apply to workspace: {e:?}"
@@ -172,7 +172,7 @@ pub(crate) async fn apply_winning_plan(
                     .into(),
             ));
             if let Err(e) =
-                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan).await
             {
                 observer.handle_event(crate::event::AgentEvent::Log(format!(
                     "  ❌ Failed to apply to workspace: {e:?}"
@@ -327,17 +327,55 @@ pub(crate) async fn run_mcts_crucible(
 
         if let Some(winner) = crate::mcts::select_winner(&mut outcomes) {
             observer.handle_event(crate::event::AgentEvent::Log(format!(
-                "MCTS Branch {} passed on round {}!",
+                "MCTS Branch {} passed verifier on round {}! 🕵️  Invoking Reviewer Agent...",
                 winner.branch_id, mcts_round
             )));
 
-            // Instead of printing diffuse directly to terminal over Ratatui, log it.
-            observer.handle_event(crate::event::AgentEvent::Log(format!(
-                "Winning Patch (Branch {}) passed verifier.\nEvidence:\n{}",
-                winner.branch_id, winner.log
-            )));
+            // ─── 3. Swarm Intelligence: Reviewer Agent ───────────────────
+            let reviewer = crow_runtime::subagent::SubagentWorker::new(
+                crow_runtime::subagent::AgentRole::Reviewer,
+                compiler.clone(),
+                crow_runtime::registry::TaskRegistry::new(),
+                std::sync::Arc::new(crow_tools::ToolRegistry::new()),
+                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
+            );
 
-            return Ok(Some(winner));
+            let review_task = format!(
+                "Review the following patch for logical errors, security issues, or architectural flaws:\n\n{:?}", 
+                winner.plan.operations
+            );
+            
+            let review_result = reviewer.execute(
+                &review_task,
+                &[], // no specific focus
+                "We need to ensure this code is production-ready.",
+                vec![], // no extra sys msgs
+                frozen_root,
+                mcp_manager,
+                observer
+            ).await;
+
+            match review_result {
+                Ok(review_plan) => {
+                    if review_plan.operations.is_empty() {
+                        observer.handle_event(crate::event::AgentEvent::Log(format!(
+                            "✅ Reviewer approved! Patch (Branch {}) is solid.",
+                            winner.branch_id
+                        )));
+                        return Ok(Some(winner));
+                    } else {
+                        observer.handle_event(crate::event::AgentEvent::Log("❌ Reviewer rejected the patch with new changes! Restarting convergence loop...".to_string()));
+                        messages.push_verifier_result("ReviewerFeedback", &review_plan.rationale);
+                        // Feed into next round
+                    }
+                }
+                Err(e) => {
+                    observer.handle_event(crate::event::AgentEvent::Log(format!(
+                        "⚠️ Reviewer agent failed/timed out: {e}. Accepting patch anyway."
+                    )));
+                    return Ok(Some(winner));
+                }
+            }
         }
 
         // All branches failed. Feed diagnostics back and re-derive baseline.

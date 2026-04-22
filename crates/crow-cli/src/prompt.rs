@@ -1,11 +1,11 @@
-use crow_intel::RepoMap;
+use crow_intel::ContextMap;
 use crow_patch::SnapshotId;
 
 pub struct PromptBuilder {
     identity: String,
     project_context: String,
     skills: String,
-    repo_map: String,
+    context_map: String,
     contract: String,
 }
 
@@ -21,7 +21,7 @@ impl PromptBuilder {
             identity: DEFAULT_IDENTITY.to_string(),
             project_context: String::new(),
             skills: String::new(),
-            repo_map: String::new(),
+            context_map: String::new(),
             contract: String::new(),
         }
     }
@@ -36,10 +36,10 @@ impl PromptBuilder {
         self
     }
 
-    pub fn with_repo_map(mut self, repo_map: &RepoMap, snapshot_id: &SnapshotId) -> Self {
-        self.repo_map = format!(
-            "Context (Repository Map):\n{}\n\nWorkspace Snapshot ID: {}",
-            repo_map.map_text, snapshot_id.0
+    pub fn with_context_map(mut self, context_map: &ContextMap, snapshot_id: &SnapshotId) -> Self {
+        self.context_map = format!(
+            "Context (AST Map):\n{}\n\nWorkspace Snapshot ID: {}",
+            context_map.map_text, snapshot_id.0
         );
         self
     }
@@ -91,7 +91,7 @@ impl PromptBuilder {
             sys_prompt.push_str("\n\n");
         }
 
-        sys_prompt.push_str(&self.repo_map);
+        sys_prompt.push_str(&self.context_map);
         sys_prompt.push_str("\n\n");
 
         if !self.skills.is_empty() {
@@ -110,10 +110,11 @@ impl PromptBuilder {
 
 /// Rich, behaviorally-tuned identity prompt inspired by yomi's architecture.
 /// Clear sections for identity, task execution, safety, and tone.
-const DEFAULT_IDENTITY: &str = r"You are Crow, an autonomous evidence-driven coding agent.
+const DEFAULT_IDENTITY: &str = r"You are Crow, an autonomous evidence-driven Swarm Architect agent.
 
 # System
 - You communicate with the user through your plan rationale. Keep responses concise and technical.
+- You orchestrate Subagent Workers to perform delegated tasks or you act as the Executor to write patches yourself.
 - You have access to tools for reading files, searching code, listing directories, and executing bounded commands.
 
 # Doing Tasks

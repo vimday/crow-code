@@ -11,6 +11,9 @@ pub enum AgentRole {
     Explorer,
     Coder,
     Generic,
+    Architect,
+    Executor,
+    Reviewer,
 }
 
 impl fmt::Display for AgentRole {
@@ -19,6 +22,9 @@ impl fmt::Display for AgentRole {
             Self::Explorer => write!(f, "Explorer"),
             Self::Coder => write!(f, "Coder"),
             Self::Generic => write!(f, "Generic"),
+            Self::Architect => write!(f, "Architect"),
+            Self::Executor => write!(f, "Executor"),
+            Self::Reviewer => write!(f, "Reviewer"),
         }
     }
 }
@@ -80,6 +86,9 @@ impl SubagentWorker {
 
         let mut sub_messages = ConversationManager::new(msgs);
 
+        let task_desc = format!("[{}] {}", self.role, task);
+        parent_observer.handle_event(crate::event::AgentEvent::DelegateStart(self.id.clone(), task_desc.clone()));
+
         let mut observer = SubagentEventHandler {
             id: self.id.clone(),
             role: self.role,
@@ -99,7 +108,7 @@ impl SubagentWorker {
             output: None,
         };
         self.task_registry.register(task_def);
-
+        
         let execution_result = tokio::time::timeout(
             SUBAGENT_TIMEOUT,
             crate::epistemic::run_epistemic_loop(
@@ -114,6 +123,9 @@ impl SubagentWorker {
             ),
         )
         .await;
+        
+        let success = matches!(&execution_result, Ok(Ok(_)));
+        observer.parent.handle_event(crate::event::AgentEvent::DelegateComplete(self.id.clone(), success));
 
         match execution_result {
             Ok(Ok(plan)) => {
@@ -165,10 +177,11 @@ impl EventHandler for SubagentEventHandler<'_> {
                 "  [{}:{}] 🔍 Recon: {}",
                 self.role, self.id, msg
             ))),
-            AgentEvent::DelegateStart(msg) => self.parent.handle_event(AgentEvent::Log(format!(
-                "  [{}:{}] 🤖 Delegating: {}",
+            AgentEvent::DelegateStart(id, msg) => self.parent.handle_event(AgentEvent::DelegateStart(id, format!(
+                "[{}:{}] {}",
                 self.role, self.id, msg
             ))),
+            AgentEvent::DelegateComplete(id, success) => self.parent.handle_event(AgentEvent::DelegateComplete(id, success)),
             AgentEvent::PlanSubmitted(_) => self.parent.handle_event(AgentEvent::Log(format!(
                 "  [{}:{}] 📋 Plan Submitted",
                 self.role, self.id

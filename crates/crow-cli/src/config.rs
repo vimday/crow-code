@@ -431,14 +431,13 @@ impl CrowConfig {
     }
 
     /// Build a repo map from the workspace using the configured budget.
-    pub fn build_repo_map(&self) -> Result<crow_intel::RepoMap, String> {
-        self.build_repo_map_for(&self.workspace)
+    pub fn build_context_map(&self) -> Result<crow_intel::ContextMap, String> {
+        self.build_context_map_for(&self.workspace)
     }
 
-    /// Build a repo map against an arbitrary root (e.g. a frozen sandbox).
-    pub fn build_repo_map_for(&self, root: &Path) -> Result<crow_intel::RepoMap, String> {
+    pub fn build_context_map_for(&self, root: &Path) -> Result<crow_intel::ContextMap, String> {
         let walker = crow_intel::RepoWalker::new().with_max_bytes(self.map_budget);
-        walker.build_repo_map(root)
+        walker.build_context_map(root)
     }
 }
 

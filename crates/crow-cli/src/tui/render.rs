@@ -317,6 +317,27 @@ impl<'a> HistoryCell for ErrorCell<'a> {
     }
 }
 
+struct DebateCell<'a>(&'a str);
+impl<'a> HistoryCell for DebateCell<'a> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrapped = textwrap::wrap(self.0, wrap_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let prefix = if i == 0 {
+                format!("{GUTTER}⚖ ")
+            } else {
+                format!("{GUTTER}  ")
+            };
+            lines.push(Line::from(vec![
+                prefix.fg(Color::Magenta),
+                line.to_string().fg(Color::Magenta),
+            ]));
+        }
+        lines
+    }
+}
+
 pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
     let viewport = area.height as usize;
     if viewport == 0 {
@@ -374,6 +395,7 @@ pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
             CellKind::Result => Box::new(ResultCell(&cell.payload)),
             CellKind::Log => Box::new(LogCell(&cell.payload)),
             CellKind::Error => Box::new(ErrorCell(&cell.payload)),
+            CellKind::Debate => Box::new(DebateCell(&cell.payload)),
         };
 
         let lines = history_cell.display_lines(area.width);

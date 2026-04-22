@@ -34,6 +34,8 @@ pub enum CellKind {
     Log,
     /// Error.
     Error,
+    /// Multi-agent debate convergence trace.
+    Debate,
 }
 
 #[derive(Debug, Clone)]

@@ -457,8 +457,12 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         AgentEvent::ReconStart(desc) => {
             state.active_action = Some(format!("Recon: {desc}"));
         }
-        AgentEvent::DelegateStart(task) => {
+        AgentEvent::DelegateStart(id, task) => {
             state.active_action = Some(format!("Delegating: {task}"));
+            state.active_swarms.push((id, task));
+        }
+        AgentEvent::DelegateComplete(id, _success) => {
+            state.active_swarms.retain(|(active_id, _)| active_id != &id);
         }
         AgentEvent::PlanSubmitted(plan) => {
             if !plan.operations.is_empty() {

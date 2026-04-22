@@ -255,7 +255,8 @@ impl ThreadManager {
             );
         }
 
-        let _ = ui_tx.send(EngineEvent::SwarmStarted(id.clone(), prompt_clone.clone()));
+        let task_desc = format!("[Architect] {prompt_clone}");
+        let _ = ui_tx.send(EngineEvent::SwarmStarted(id.clone(), task_desc));
 
         tokio::spawn(async move {
             let mut observer =

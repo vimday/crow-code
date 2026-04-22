@@ -74,6 +74,12 @@ impl ChatView {
                         cell.payload.clone().dark_gray(),
                     ])));
                 }
+                CellKind::Debate => {
+                    list_items.push(ListItem::new(Line::from(vec![
+                        "  ⚖ ".magenta(),
+                        cell.payload.clone().magenta(),
+                    ])));
+                }
             }
         }
 

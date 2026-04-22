@@ -2,7 +2,6 @@ use crate::config::CrowConfig;
 use crow_runtime::mcp::McpManager;
 use anyhow::{Context, Result};
 use crow_brain::IntentCompiler;
-use crow_intel::RepoMap;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::SnapshotId;
 use crow_workspace::ledger::EventLedger;
@@ -12,7 +11,7 @@ pub struct SessionRuntime {
     pub compiler: Arc<IntentCompiler>,
     pub mcp_manager: Arc<McpManager>,
     pub ledger: Mutex<EventLedger>,
-    pub cached_repo_map: Mutex<Option<(SnapshotId, std::sync::Arc<crow_intel::RepoMap>)>>,
+    pub cached_repo_map: Mutex<Option<(SnapshotId, std::sync::Arc<crow_intel::ContextMap>)>>,
     pub workspace: std::path::PathBuf,
     pub task_registry: crow_runtime::registry::TaskRegistry,
     pub team_registry: crow_runtime::registry::TeamRegistry,
@@ -91,12 +90,12 @@ impl SessionRuntime {
     }
 
     /// Builds a semantic map of the codebase, hitting memory cache if the snapshot hash hasn't mutated.
-    fn build_repo_map_with_cache(
+    fn build_context_map_with_cache(
         &self,
         cfg: &CrowConfig,
         snapshot_id: &SnapshotId,
         frozen_root: &std::path::Path,
-    ) -> Result<Arc<RepoMap>> {
+    ) -> Result<Arc<crow_intel::ContextMap>> {
         let mut repo_map_cloned = None;
         if let Some((cached_snap, map)) = self
             .cached_repo_map
@@ -113,7 +112,7 @@ impl SessionRuntime {
             Some(map) => Ok(map),
             None => {
                 let map = cfg
-                    .build_repo_map_for(frozen_root)
+                    .build_context_map_for(frozen_root)
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
@@ -211,7 +210,7 @@ impl SessionRuntime {
         ));
 
         // Build repo map from the FROZEN snapshot, not live workspace
-        let repo_map = self.build_repo_map_with_cache(cfg, &snapshot_id, &frozen_root)?;
+        let repo_map = self.build_context_map_with_cache(cfg, &snapshot_id, &frozen_root)?;
 
         let _ = self.ledger.lock().map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?.append(
             crow_workspace::ledger::LedgerEvent::SnapshotCreated {
@@ -224,7 +223,7 @@ impl SessionRuntime {
         let available_skills = self.load_and_resolve_skills(prompt, observer);
 
         let sys_msgs = crate::prompt::PromptBuilder::new()
-            .with_repo_map(&repo_map, &snapshot_id)
+            .with_context_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
             .with_dynamic_skills(&available_skills)
             .with_contract(&snapshot_id)
@@ -367,7 +366,7 @@ impl SessionRuntime {
 
     // ─── Unified Entry Points ────────────────────────────────────────────────
 
-    fn get_or_build_repo_map(&self, cfg: &CrowConfig) -> Result<Arc<RepoMap>> {
+    fn get_or_build_context_map(&self, cfg: &CrowConfig) -> Result<Arc<crow_intel::ContextMap>> {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
         if let Ok(guard) = self.cached_repo_map.lock() {
             if let Some((cached_snap, map)) = guard.as_ref() {
@@ -377,7 +376,7 @@ impl SessionRuntime {
             }
         }
         let map = cfg
-            .build_repo_map_for(&self.workspace)
+            .build_context_map_for(&self.workspace)
             .map_err(|e| anyhow::anyhow!(e))
             .context("Failed to build repo map")?;
         let arc_map = Arc::new(map);
@@ -391,7 +390,7 @@ impl SessionRuntime {
         println!("🦅 crow-code Compile-Only mode initializing...\n");
 
         println!("[1/3] Gathering Repomap Context via tree-sitter...");
-        let repo_map = self.get_or_build_repo_map(cfg)?;
+        let repo_map = self.get_or_build_context_map(cfg)?;
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
         println!(
             "    🎯 Compressed map length: {} bytes",
@@ -404,7 +403,7 @@ impl SessionRuntime {
         );
 
         let sys_msgs = crate::prompt::PromptBuilder::default()
-            .with_repo_map(&repo_map, &snapshot_id)
+            .with_context_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
             .with_contract(&snapshot_id)
             .build();
@@ -466,11 +465,11 @@ impl SessionRuntime {
         let frozen_root = sandbox.path().to_path_buf();
 
         let repo_map = cfg
-            .build_repo_map_for(&frozen_root)
+            .build_context_map_for(&frozen_root)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let sys_msgs = crate::prompt::PromptBuilder::default()
-            .with_repo_map(&repo_map, &snapshot_id)
+            .with_context_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
             .with_contract(&snapshot_id)
             .build();
@@ -664,11 +663,11 @@ impl SessionRuntime {
         let frozen_root = sandbox.path().to_path_buf();
 
         let repo_map = cfg
-            .build_repo_map_for(&frozen_root)
+            .build_context_map_for(&frozen_root)
             .map_err(|e| anyhow::anyhow!(e))?;
 
         let sys_msgs = crate::prompt::PromptBuilder::default()
-            .with_repo_map(&repo_map, &snapshot_id)
+            .with_context_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
             .with_contract(&snapshot_id)
             .build();
@@ -786,7 +785,7 @@ impl SessionRuntime {
         ) {
             println!("\n[4] Writing verified changes to workspace...");
             if let Err(e) =
-                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan)
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan).await
             {
                 eprintln!("  ❌ Failed to apply to workspace: {e:?}");
                 anyhow::bail!("Workspace mutation failed during resume.");
