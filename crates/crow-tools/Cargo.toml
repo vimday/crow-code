@@ -15,6 +15,7 @@ similar = "2.6"
 crow-patch = { version = "0.1.0", path = "../crow-patch" }
 crow-verifier = { version = "0.1.0", path = "../crow-verifier" }
 crow-probe = { version = "0.1.0", path = "../crow-probe" }
+tempfile = "3.15"
 [lints]
 workspace = true
 

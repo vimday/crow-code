@@ -201,6 +201,8 @@ pub async fn run_epistemic_loop(
                     frozen_root,
                     permissions: &permissions,
                     file_state: None,
+                    background_manager: None,
+                    subagent_delegator: None,
                 };
                 
                 // Read each file and concatenate results
@@ -280,6 +282,8 @@ pub async fn run_epistemic_loop(
                     frozen_root,
                     permissions: &permissions,
                     file_state: None,
+                    background_manager: None,
+                    subagent_delegator: None,
                 };
 
                 let args = match tool {

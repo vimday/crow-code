@@ -15,6 +15,7 @@
 //! The `ToolRegistry` manages tool registration and provides OpenAI-compatible
 //! function definitions for the native tool-calling protocol.
 
+pub mod background;
 pub mod bash;
 pub mod diff_utils;
 pub mod file_edit;
@@ -24,7 +25,9 @@ pub mod glob;
 pub mod grep;
 pub mod permission;
 pub mod recon;
+pub mod subagent;
 
+pub use background::BackgroundProcessManager;
 pub use file_state::FileStateStore;
 pub use permission::{PermissionEnforcer, WriteMode};
 
@@ -41,6 +44,21 @@ pub struct ToolContext<'a> {
     /// When set, tools will record file reads and check for external modifications
     /// before edits/writes.
     pub file_state: Option<Arc<FileStateStore>>,
+    /// Optional background process manager for async bash commands.
+    pub background_manager: Option<Arc<BackgroundProcessManager>>,
+    /// Optional delegator for spawning subagents.
+    pub subagent_delegator: Option<Arc<dyn SubagentDelegator>>,
+}
+
+/// Interface for delegating tasks to a subagent from within a tool.
+#[async_trait::async_trait]
+pub trait SubagentDelegator: Send + Sync {
+    async fn delegate(
+        &self,
+        task: String,
+        role: String,
+        focus_paths: Vec<String>,
+    ) -> Result<String>;
 }
 
 /// Structured output from a tool execution.

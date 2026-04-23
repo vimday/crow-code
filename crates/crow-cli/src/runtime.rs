@@ -7,6 +7,77 @@ use crow_patch::SnapshotId;
 use crow_workspace::ledger::EventLedger;
 use std::sync::{Arc, Mutex};
 
+struct NullEventHandler;
+impl crow_runtime::event::EventHandler for NullEventHandler {
+    fn handle_event(&mut self, _event: crow_runtime::event::AgentEvent) {}
+}
+
+struct NativeSubagentDelegator {
+    compiler: Arc<IntentCompiler>,
+    workspace: std::path::PathBuf,
+    tool_registry: Arc<crow_tools::ToolRegistry>,
+    permissions: Arc<crow_tools::PermissionEnforcer>,
+    task_registry: crow_runtime::registry::TaskRegistry,
+}
+
+#[async_trait::async_trait]
+impl crow_tools::SubagentDelegator for NativeSubagentDelegator {
+    async fn delegate(
+        &self,
+        task: String,
+        role_str: String,
+        focus_paths_str: Vec<String>,
+    ) -> anyhow::Result<String> {
+        let role = match role_str.to_lowercase().as_str() {
+            "explorer" => crow_runtime::subagent::AgentRole::Explorer,
+            "coder" => crow_runtime::subagent::AgentRole::Coder,
+            "reviewer" => crow_runtime::subagent::AgentRole::Reviewer,
+            "architect" => crow_runtime::subagent::AgentRole::Architect,
+            "executor" => crow_runtime::subagent::AgentRole::Executor,
+            _ => crow_runtime::subagent::AgentRole::Generic,
+        };
+
+        let focus_paths: Vec<crow_patch::WorkspacePath> = focus_paths_str
+            .into_iter()
+            .filter_map(|p| crow_patch::WorkspacePath::new(p).ok())
+            .collect();
+
+        let subagent = crow_runtime::subagent::SubagentWorker::new(
+            role,
+            (*self.compiler).clone(),
+            self.task_registry.clone(),
+            self.tool_registry.clone(),
+            self.permissions.clone(),
+        );
+
+        let mut observer = NullEventHandler;
+        let frozen_root = self.workspace.clone(); // In native mode, we don't freeze, we just pass the workspace
+
+        match subagent.execute(
+            &task,
+            &focus_paths,
+            "Delegated via Native Tool",
+            vec![], // No special inherited sys_msgs for now
+            &frozen_root,
+            None,
+            &mut observer,
+        ).await {
+            Ok(plan) => {
+                let mut output = String::new();
+                for op in plan.operations {
+                    output.push_str(&format!("- {op:?}\n"));
+                }
+                if output.is_empty() {
+                    Ok("Subagent explored the repository but did not generate any actions.".to_string())
+                } else {
+                    Ok(format!("Subagent proposed the following operations:\n{output}"))
+                }
+            }
+            Err(e) => anyhow::bail!("Subagent failed: {e}"),
+        }
+    }
+}
+
 pub struct SessionRuntime {
     pub compiler: Arc<IntentCompiler>,
     pub mcp_manager: Arc<McpManager>,
@@ -17,6 +88,7 @@ pub struct SessionRuntime {
     pub team_registry: crow_runtime::registry::TeamRegistry,
     pub tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
     pub permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
+    pub background_manager: std::sync::Arc<crow_tools::BackgroundProcessManager>,
 }
 
 impl SessionRuntime {
@@ -62,7 +134,10 @@ impl SessionRuntime {
         tool_registry.register(Box::new(crow_tools::grep::GrepTool));
         tool_registry.register(Box::new(crow_tools::glob::GlobTool));
         // Action tools (write/execute)
+        tool_registry.register(Box::new(crow_tools::subagent::SubagentTool));
         tool_registry.register(Box::new(crow_tools::bash::BashTool));
+        tool_registry.register(Box::new(crow_tools::background::BashStatusTool));
+        tool_registry.register(Box::new(crow_tools::background::BashKillTool));
         tool_registry.register(Box::new(crow_tools::file_edit::FileEditTool));
         tool_registry.register(Box::new(crow_tools::file_write::FileWriteTool));
 
@@ -76,6 +151,7 @@ impl SessionRuntime {
             team_registry: crow_runtime::registry::TeamRegistry::new(),
             tool_registry: std::sync::Arc::new(tool_registry),
             permissions: std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
+            background_manager: std::sync::Arc::new(crow_tools::BackgroundProcessManager::new()),
         })
     }
 
@@ -437,6 +513,14 @@ impl SessionRuntime {
         // Create a fresh file state tracker for this turn
         let file_state = std::sync::Arc::new(crow_tools::FileStateStore::new());
 
+        let subagent_delegator = std::sync::Arc::new(NativeSubagentDelegator {
+            compiler: std::sync::Arc::clone(&self.compiler),
+            workspace: self.workspace.clone(),
+            tool_registry: std::sync::Arc::clone(&self.tool_registry),
+            permissions: std::sync::Arc::clone(&self.permissions),
+            task_registry: self.task_registry.clone(),
+        });
+
         let result = crow_runtime::agent_loop::run_agent_loop(
             &self.compiler,
             messages,
@@ -444,6 +528,8 @@ impl SessionRuntime {
             std::sync::Arc::clone(&self.tool_registry),
             std::sync::Arc::clone(&self.permissions),
             file_state,
+            std::sync::Arc::clone(&self.background_manager),
+            Some(subagent_delegator),
             observer,
         )
         .await?;

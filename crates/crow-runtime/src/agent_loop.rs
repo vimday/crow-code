@@ -67,6 +67,8 @@ pub async fn run_agent_loop(
     tool_registry: Arc<crow_tools::ToolRegistry>,
     permissions: Arc<crow_tools::PermissionEnforcer>,
     file_state: Arc<crow_tools::FileStateStore>,
+    background_manager: Arc<crow_tools::BackgroundProcessManager>,
+    subagent_delegator: Option<Arc<dyn crow_tools::SubagentDelegator>>,
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
     let mut step = 0;
@@ -210,11 +212,15 @@ pub async fn run_agent_loop(
             let perms = Arc::clone(&permissions);
 
             let fs = Arc::clone(&file_state);
+            let bgm = Arc::clone(&background_manager);
+            let delegator = subagent_delegator.clone();
             tasks.push(tokio::spawn(async move {
                 let ctx = crow_tools::ToolContext {
                     frozen_root: &root,
                     permissions: &perms,
                     file_state: Some(fs),
+                    background_manager: Some(bgm),
+                    subagent_delegator: delegator,
                 };
 
                 let timeout = std::time::Duration::from_secs(120);

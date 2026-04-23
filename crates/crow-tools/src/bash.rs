@@ -33,7 +33,8 @@ impl Tool for BashTool {
          projects, git operations, installing dependencies, and system commands. Output is \
          captured from both stdout and stderr. Commands that produce no output within the \
          timeout will be killed. Prefer dedicated tools (grep, file_edit, read_file) when \
-         available — use bash only for operations without a dedicated tool."
+         available — use bash only for operations without a dedicated tool. Supports background=true \
+         for async execution of long-running tasks like dev servers."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -46,7 +47,11 @@ impl Tool for BashTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Timeout in seconds (default: 120, max: 300). The command is killed if it exceeds this limit."
+                    "description": "Timeout in seconds (default: 120, max: 300). Ignored if background is true."
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run command in background. Returns task_id immediately. Use bash_status to check output."
                 }
             },
             "required": ["command"]
@@ -58,6 +63,7 @@ impl Tool for BashTool {
         struct Args {
             command: String,
             timeout_secs: Option<u64>,
+            background: Option<bool>,
         }
         let parsed: Args = serde_json::from_value(args)?;
 
@@ -67,6 +73,15 @@ impl Tool for BashTool {
 
         // Permission check
         ctx.permissions.check_bash(&parsed.command)?;
+
+        if parsed.background.unwrap_or(false) {
+            if let Some(bg_mgr) = &ctx.background_manager {
+                let task_id = bg_mgr.spawn(parsed.command.clone(), ctx.frozen_root).await?;
+                return Ok(ToolOutput::success(format!("Background task spawned successfully.\nTask ID: {task_id}\nUse 'bash_status' to check its output and status.")));
+            } else {
+                return Ok(ToolOutput::error("Background execution is not available in this context."));
+            }
+        }
 
         let timeout_secs = parsed.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS).min(MAX_TIMEOUT_SECS);
         let timeout = std::time::Duration::from_secs(timeout_secs);

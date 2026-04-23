@@ -42,6 +42,7 @@ lazy_static = "1.5.0"
 crow-commands = { version = "0.1.0", path = "../crow-commands" }
 crow-runtime = { version = "0.1.0", path = "../crow-runtime" }
 crow-tools = { version = "0.1.0", path = "../crow-tools" }
+async-trait = "0.1"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
