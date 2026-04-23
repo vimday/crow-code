@@ -8,11 +8,12 @@ pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
     let all = vec![
         ("/help", "Show manual"),
         ("/status", "Print system status"),
-        ("/clear", "Clear history"),
+        ("/clear", "Clear conversation and start fresh session"),
         ("/model", "Switch LLM Model"),
         ("/view", "Swap Lens Mode (focus|evidence|audit)"),
         ("/swarm", "Launch background sub-agent swarm"),
         ("/compact", "Force context compaction"),
+        ("/memory", "Manage persistent workspace memory"),
         ("/session list", "List saved sessions"),
         ("/session resume", "Resume a saved session"),
         ("/exit", "Exit Crow"),
