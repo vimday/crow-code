@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
             print_help();
             Ok(())
         }
+        Some("yolo") => run_yolo(&args[2..]).await,
         Some("chat") => chat::run_repl(&CrowConfig::load()?).await,
         Some(cmd) if cmd == "-r" || cmd == "--resume" => {
             // Drop into Console 4.0 Ratatui Workbench with resume flag
@@ -72,6 +73,7 @@ COMMANDS:
     compile <prompt>          Compile-only: show the IntentPlan JSON
     session list              List saved sessions
     session resume <id>       Resume a saved session
+    yolo <prompt>             Fast-path native tool-calling mode (Codex style)
 
     dream                     Run background AutoDream memory consolidation
     mcp                       Manage MCP tools
@@ -181,6 +183,23 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
             &prompt,
             &mut messages,
             crate::event::ViewMode::default(),
+        )
+        .await
+        .map(|_| ())
+}
+
+async fn run_yolo(args: &[String]) -> Result<()> {
+    let cfg = CrowConfig::load()?;
+    let prompt = args.join(" ");
+    let mut messages = crow_runtime::context::ConversationManager::new(vec![]);
+    let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
+    let mut observer = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
+    runtime
+        .execute_native_turn(
+            &cfg,
+            &prompt,
+            &mut messages,
+            &mut observer,
         )
         .await
         .map(|_| ())

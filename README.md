@@ -89,7 +89,8 @@ After launching `crow`, type a natural language task and press Enter. The agent 
 |---|---|
 | `crow` | Open the interactive TUI workbench |
 | `crow -r` \| `--resume` | Resume the most recent session |
-| `crow run <prompt>` | Run the full autonomous pipeline |
+| `crow run <prompt>` | Run the full autonomous pipeline with MCTS Verification |
+| `crow yolo <prompt>` | Run the fast-path native tool-calling mode (Codex style) |
 | `crow plan <prompt>` | Preview a verified plan without applying |
 | `crow compile <prompt>` | Output raw IntentPlan JSON |
 | `crow session list` | List saved sessions |

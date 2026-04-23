@@ -232,8 +232,9 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                 // Print a visual spacer inside the frame
                 println!("  {}", "│".with(Color::DarkGrey));
 
+                let mut observer = crate::event::CliEventHandler::new(state.view_mode);
                 match runtime
-                    .execute_turn(cfg, input, &mut messages, state.view_mode)
+                    .execute_native_turn(cfg, input, &mut messages, &mut observer)
                     .await
                 {
                     Ok(snapshot_id) => {
