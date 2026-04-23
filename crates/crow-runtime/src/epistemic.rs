@@ -200,6 +200,7 @@ pub async fn run_epistemic_loop(
                 let ctx = crow_tools::ToolContext {
                     frozen_root,
                     permissions: &permissions,
+                    file_state: None,
                 };
                 
                 // Read each file and concatenate results
@@ -278,6 +279,7 @@ pub async fn run_epistemic_loop(
                 let ctx = crow_tools::ToolContext {
                     frozen_root,
                     permissions: &permissions,
+                    file_state: None,
                 };
 
                 let args = match tool {

@@ -1,25 +1,46 @@
 //! Tool Registry and Permission Enforcement.
 //!
 //! This crate provides the unified execution layer for all Agent tools (bash, files,
-//! subagents, MCP). It enforces permissions via `PermissionEnforcer` before any action
-//! reaches the workspace verifier.
+//! grep, glob, subagents, MCP). It enforces permissions via `PermissionEnforcer`
+//! before any action reaches the workspace verifier.
+//!
+//! ## Architecture
+//!
+//! All tools implement the `Tool` trait which provides:
+//! - `name()` — unique identifier
+//! - `description()` — LLM-facing documentation
+//! - `parameters()` — JSON Schema for function calling
+//! - `execute()` — async execution with workspace context
+//!
+//! The `ToolRegistry` manages tool registration and provides OpenAI-compatible
+//! function definitions for the native tool-calling protocol.
 
 pub mod bash;
+pub mod diff_utils;
 pub mod file_edit;
+pub mod file_state;
 pub mod file_write;
+pub mod glob;
+pub mod grep;
 pub mod permission;
 pub mod recon;
 
+pub use file_state::FileStateStore;
 pub use permission::{PermissionEnforcer, WriteMode};
 
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Context provided to every tool during execution.
 pub struct ToolContext<'a> {
     pub frozen_root: &'a Path,
     pub permissions: &'a PermissionEnforcer,
+    /// Optional file state tracker for staleness detection.
+    /// When set, tools will record file reads and check for external modifications
+    /// before edits/writes.
+    pub file_state: Option<Arc<FileStateStore>>,
 }
 
 /// Structured output from a tool execution.
@@ -73,8 +94,9 @@ impl ToolRegistry {
     }
 
     /// Return OpenAI-compatible tool definitions for all registered tools.
+    /// Sorted by name for deterministic output.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
-        self.tools.values().map(|tool| {
+        let mut defs: Vec<_> = self.tools.values().map(|tool| {
             serde_json::json!({
                 "type": "function",
                 "function": {
@@ -84,12 +106,20 @@ impl ToolRegistry {
                     "strict": false
                 }
             })
-        }).collect()
+        }).collect();
+        defs.sort_by(|a, b| {
+            let name_a = a["function"]["name"].as_str().unwrap_or("");
+            let name_b = b["function"]["name"].as_str().unwrap_or("");
+            name_a.cmp(name_b)
+        });
+        defs
     }
 
-    /// List all registered tool names.
+    /// List all registered tool names (sorted).
     pub fn list(&self) -> Vec<&str> {
-        self.tools.keys().map(String::as_str).collect()
+        let mut names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
+        names.sort();
+        names
     }
 
     pub fn has(&self, name: &str) -> bool {

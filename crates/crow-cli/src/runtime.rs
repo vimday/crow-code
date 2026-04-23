@@ -63,6 +63,8 @@ impl SessionRuntime {
         tool_registry.register(Box::new(crow_tools::bash::BashTool));
         tool_registry.register(Box::new(crow_tools::file_edit::FileEditTool));
         tool_registry.register(Box::new(crow_tools::file_write::FileWriteTool));
+        tool_registry.register(Box::new(crow_tools::grep::GrepTool));
+        tool_registry.register(Box::new(crow_tools::glob::GlobTool));
 
         Ok(Self {
             compiler,

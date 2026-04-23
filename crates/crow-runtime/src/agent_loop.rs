@@ -212,6 +212,7 @@ pub async fn run_agent_loop(
                 let ctx = crow_tools::ToolContext {
                     frozen_root: &root,
                     permissions: &perms,
+                    file_state: None,
                 };
 
                 let timeout = std::time::Duration::from_secs(120);
