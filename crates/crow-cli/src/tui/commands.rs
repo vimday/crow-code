@@ -120,11 +120,12 @@ pub fn execute_command_string(
                         "Commands:",
                         "  /help          Show this message",
                         "  /status        Workspace health",
-                        "  /clear         Clear conversation",
+                        "  /clear         Clear conversation and start fresh session",
                         "  /view <mode>   Set view (focus|evidence|audit)",
                         "  /model         Show current model",
                         "  /swarm <task>  Launch background sub-agent",
                         "  /compact       Force context compaction",
+                        "  /memory        Manage persistent workspace memory",
                         "",
                         "Shortcuts:",
                         "  Ctrl+C         Interrupt / quit (press twice)",
@@ -182,6 +183,70 @@ pub fn execute_command_string(
                     kind: CellKind::Log,
                     payload: "Context compaction will run before the next turn.".into(),
                 });
+            }
+            "memory" => {
+                let memory_file = std::path::Path::new(".crow").join("memory.md");
+                let rest_args: Vec<_> = parts.collect();
+                let display_payload = if rest_args.is_empty() {
+                    "/memory".to_string()
+                } else {
+                    format!("/memory {}", rest_args.join(" "))
+                };
+                
+                state.history.push(Cell {
+                    kind: CellKind::User,
+                    payload: display_payload,
+                });
+
+                let action = rest_args.first().copied().unwrap_or("show");
+
+                match action {
+                    "add" => {
+                        let text = rest_args[1..].join(" ");
+                        if text.is_empty() {
+                            state.history.push(Cell {
+                                kind: CellKind::Error,
+                                payload: "Usage: /memory add <text>".into(),
+                            });
+                        } else if let Err(e) = std::fs::create_dir_all(".crow") {
+                            state.history.push(Cell { kind: CellKind::Error, payload: format!("Failed to create .crow directory: {e}") });
+                        } else {
+                            use std::io::Write;
+                            match std::fs::OpenOptions::new().create(true).append(true).open(&memory_file) {
+                                Ok(mut f) => {
+                                    if let Err(e) = writeln!(f, "- {text}") {
+                                        state.history.push(Cell { kind: CellKind::Error, payload: format!("Failed to write to memory: {e}") });
+                                    } else {
+                                        state.history.push(Cell { kind: CellKind::Log, payload: "Memory added successfully.".into() });
+                                    }
+                                }
+                                Err(e) => {
+                                    state.history.push(Cell { kind: CellKind::Error, payload: format!("Failed to open memory file: {e}") });
+                                }
+                            }
+                        }
+                    }
+                    "clear" => {
+                        let _ = std::fs::remove_file(&memory_file);
+                        state.history.push(Cell { kind: CellKind::Log, payload: "Persistent memory cleared.".into() });
+                    }
+                    _ => {
+                        match std::fs::read_to_string(&memory_file) {
+                            Ok(content) if !content.trim().is_empty() => {
+                                state.history.push(Cell {
+                                    kind: CellKind::Log,
+                                    payload: format!("Persistent Memory:\n{content}"),
+                                });
+                            }
+                            _ => {
+                                state.history.push(Cell {
+                                    kind: CellKind::Log,
+                                    payload: "Memory is empty. Use '/memory add <text>' to store persistent context.".into(),
+                                });
+                            }
+                        }
+                    }
+                }
             }
             "session" => {
                 let action = parts.next().unwrap_or("list");

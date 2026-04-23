@@ -119,6 +119,8 @@ impl ThreadManager {
             Op::Clear => {
                 let mut msgs = self.messages.lock().await;
                 msgs.clear_all();
+                let mut sid = self.session_id.lock().await;
+                *sid = None;
             }
             Op::SwarmRun(prompt) => {
                 let token = CancellationToken::new();

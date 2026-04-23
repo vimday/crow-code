@@ -482,12 +482,22 @@ impl SessionRuntime {
 
         let available_skills = self.load_and_resolve_skills(prompt, observer);
 
-        let sys_msgs = crate::prompt::PromptBuilder::new()
+        let mut prompt_builder = crate::prompt::PromptBuilder::new()
             .with_context_map(&repo_map, &snapshot_id)
             .with_mcp(Some(&self.mcp_manager))
             .with_dynamic_skills(&available_skills)
-            .with_contract(&snapshot_id)
-            .build();
+            .with_contract(&snapshot_id);
+
+        let memory_file = self.workspace.join(".crow").join("memory.md");
+        if let Ok(memory_content) = std::fs::read_to_string(&memory_file) {
+            if !memory_content.trim().is_empty() {
+                prompt_builder = prompt_builder.with_project_context(&format!(
+                    "## Persistent Workspace Memory\nThe following rules/context apply to this project:\n{memory_content}"
+                ));
+            }
+        }
+
+        let sys_msgs = prompt_builder.build();
 
         messages.set_system(sys_msgs);
 
