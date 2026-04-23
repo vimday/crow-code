@@ -395,13 +395,13 @@ impl Tool for ReadFilesTool {
                 }
 
                 if was_truncated {
-                    format!("{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing {} lines.]\n\nIf you need to see more, use start_line/end_line to read specific ranges.", text.trim_end(), file_size, lines_count)
+                    format!("{trimmed}\n\n[SYSTEM WARNING: File truncated. Original size: {file_size} bytes, showing {lines_count} lines.]\n\nIf you need to see more, use start_line/end_line to read specific ranges.", trimmed = text.trim_end())
                 } else {
                     text.trim_end().to_string()
                 }
             }
             Err(e) => {
-                return Ok(ToolOutput::error(format!("Could not read file '{}': {e}", parsed.path.as_str())));
+                return Ok(ToolOutput::error(format!("Could not read file '{path}': {e}", path = parsed.path.as_str())));
             }
         };
         

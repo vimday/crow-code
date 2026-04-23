@@ -116,7 +116,7 @@ impl Tool for FileEditTool {
 
         // Write back
         if let Err(e) = std::fs::write(&abs_path, &new_content) {
-            return Ok(ToolOutput::error(format!("Failed to write file '{}': {e}", parsed.path)));
+            return Ok(ToolOutput::error(format!("Failed to write file '{path}': {e}", path = parsed.path)));
         }
 
         let old_lines = parsed.old_text.lines().count();
