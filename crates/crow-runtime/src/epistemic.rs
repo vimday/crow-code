@@ -239,7 +239,7 @@ pub async fn run_epistemic_loop(
 
                 let tool_name = match tool {
                     ReconAction::ListDir { .. } => "list_dir",
-                    ReconAction::Search { .. } => "search",
+                    ReconAction::Search { .. } => "grep",
                     ReconAction::FileInfo { .. } => "file_info",
                     ReconAction::WordCount { .. } => "word_count",
                     ReconAction::DirTree { .. } => "dir_tree",

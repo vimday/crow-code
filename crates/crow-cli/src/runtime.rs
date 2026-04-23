@@ -51,20 +51,20 @@ impl SessionRuntime {
         });
 
         let mut tool_registry = crow_tools::ToolRegistry::new();
-        // Recon tools
+        // Recon tools (read-only workspace exploration)
         tool_registry.register(Box::new(crow_tools::recon::ListDirTool));
-        tool_registry.register(Box::new(crow_tools::recon::SearchTool));
         tool_registry.register(Box::new(crow_tools::recon::FetchUrlTool));
         tool_registry.register(Box::new(crow_tools::recon::FileInfoTool));
         tool_registry.register(Box::new(crow_tools::recon::WordCountTool));
         tool_registry.register(Box::new(crow_tools::recon::DirTreeTool));
         tool_registry.register(Box::new(crow_tools::recon::ReadFilesTool));
-        // Action tools
+        // Intelligence tools (smart search & discovery)
+        tool_registry.register(Box::new(crow_tools::grep::GrepTool));
+        tool_registry.register(Box::new(crow_tools::glob::GlobTool));
+        // Action tools (write/execute)
         tool_registry.register(Box::new(crow_tools::bash::BashTool));
         tool_registry.register(Box::new(crow_tools::file_edit::FileEditTool));
         tool_registry.register(Box::new(crow_tools::file_write::FileWriteTool));
-        tool_registry.register(Box::new(crow_tools::grep::GrepTool));
-        tool_registry.register(Box::new(crow_tools::glob::GlobTool));
 
         Ok(Self {
             compiler,
