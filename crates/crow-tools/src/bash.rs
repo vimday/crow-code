@@ -76,7 +76,7 @@ impl Tool for BashTool {
 
         if parsed.background.unwrap_or(false) {
             if let Some(bg_mgr) = &ctx.background_manager {
-                let task_id = bg_mgr.spawn(parsed.command.clone(), ctx.frozen_root).await?;
+                let task_id = bg_mgr.spawn(parsed.command.clone(), ctx.workspace_root).await?;
                 return Ok(ToolOutput::success(format!("Background task spawned successfully.\nTask ID: {task_id}\nUse 'bash_status' to check its output and status.")));
             } else {
                 return Ok(ToolOutput::error("Background execution is not available in this context."));
@@ -90,7 +90,7 @@ impl Tool for BashTool {
             tokio::process::Command::new("bash")
                 .arg("-c")
                 .arg(&parsed.command)
-                .current_dir(ctx.frozen_root)
+                .current_dir(ctx.workspace_root)
                 .env("PAGER", "cat")       // Prevent paging in interactive commands
                 .env("GIT_PAGER", "cat")   // Same for git
                 .env("TERM", "dumb")       // Disable color codes in some tools

@@ -43,7 +43,7 @@ use crate::event::{AgentEvent, EventHandler};
 pub async fn run_epistemic_loop(
     compiler: &IntentCompiler,
     messages: &mut ConversationManager,
-    frozen_root: &Path,
+    workspace_root: &Path,
     mcp_manager: Option<&crate::mcp::McpManager>,
     observer: &mut dyn EventHandler,
     file_state_store: std::sync::Arc<crate::file_state::FileStateStore>,
@@ -198,7 +198,7 @@ pub async fn run_epistemic_loop(
                 observer.handle_event(AgentEvent::Log(format!("       Rationale: {rationale}")));
 
                 let ctx = crow_tools::ToolContext {
-                    frozen_root,
+                    workspace_root,
                     permissions: &permissions,
                     file_state: None,
                     background_manager: None,
@@ -279,7 +279,7 @@ pub async fn run_epistemic_loop(
                 }
 
                 let ctx = crow_tools::ToolContext {
-                    frozen_root,
+                    workspace_root,
                     permissions: &permissions,
                     file_state: None,
                     background_manager: None,
@@ -356,7 +356,7 @@ pub async fn run_epistemic_loop(
                     &focus_paths,
                     &rationale,
                     sys_msgs,
-                    frozen_root,
+                    workspace_root,
                     mcp_manager,
                     observer,
                 ))

@@ -281,7 +281,7 @@ impl ThreadManager {
                 compiler_instance.clone(), 
                 crow_runtime::registry::TaskRegistry::new(),
                 std::sync::Arc::new(crow_tools::ToolRegistry::new()),
-                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox })
+                std::sync::Arc::clone(&rt_clone.permissions),
             );
             // Replace worker id for consistency with the UI
             worker.id = id.clone();

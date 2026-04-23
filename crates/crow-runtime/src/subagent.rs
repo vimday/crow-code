@@ -61,7 +61,7 @@ impl SubagentWorker {
         focus_paths: &[crow_patch::WorkspacePath],
         rationale: &str,
         sys_msgs: Vec<crow_brain::ChatMessage>,
-        frozen_root: &Path,
+        workspace_root: &Path,
         mcp_manager: Option<&crate::mcp::McpManager>,
         parent_observer: &mut dyn EventHandler,
     ) -> anyhow::Result<IntentPlan> {
@@ -114,7 +114,7 @@ impl SubagentWorker {
             crate::epistemic::run_epistemic_loop(
                 &self.compiler,
                 &mut sub_messages,
-                frozen_root,
+                workspace_root,
                 mcp_manager,
                 &mut observer,
                 file_state_store,

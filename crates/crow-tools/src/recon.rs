@@ -43,7 +43,7 @@ impl Tool for ListDirTool {
             max_output_bytes: 512 * 1024,
         };
         let result = crow_verifier::executor::execute(
-            ctx.frozen_root,
+            ctx.workspace_root,
             &v_cmd,
             &exec_config,
             &crow_verifier::types::AciConfig::compact(),
@@ -121,7 +121,7 @@ impl Tool for SearchTool {
             max_output_bytes: 512 * 1024,
         };
         let result = crow_verifier::executor::execute(
-            ctx.frozen_root,
+            ctx.workspace_root,
             &v_cmd,
             &exec_config,
             &crow_verifier::types::AciConfig::compact(),
@@ -222,7 +222,7 @@ impl Tool for FileInfoTool {
             cwd: None,
         };
         let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
-        let result = crow_verifier::executor::execute(ctx.frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
+        let result = crow_verifier::executor::execute(ctx.workspace_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -258,7 +258,7 @@ impl Tool for WordCountTool {
             cwd: None,
         };
         let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
-        let result = crow_verifier::executor::execute(ctx.frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
+        let result = crow_verifier::executor::execute(ctx.workspace_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -296,7 +296,7 @@ impl Tool for DirTreeTool {
             cwd: None,
         };
         let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
-        let result = crow_verifier::executor::execute(ctx.frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
+        let result = crow_verifier::executor::execute(ctx.workspace_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -346,7 +346,7 @@ impl Tool for ReadFilesTool {
         const MAX_FILE_BYTES: usize = 50 * 1024;
         const MAX_FILE_LINES: usize = 500;
 
-        let abs_path = parsed.path.to_absolute(ctx.frozen_root);
+        let abs_path = parsed.path.to_absolute(ctx.workspace_root);
         let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
         
         let content = match std::fs::File::open(&abs_path) {

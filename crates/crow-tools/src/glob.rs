@@ -53,8 +53,8 @@ impl Tool for GlobTool {
         let limit = args["limit"].as_u64().map(|n| n as usize).unwrap_or(DEFAULT_LIMIT);
 
         let search_root: PathBuf = match path_str {
-            Some(p) => ctx.frozen_root.join(p),
-            None => ctx.frozen_root.to_path_buf(),
+            Some(p) => ctx.workspace_root.join(p),
+            None => ctx.workspace_root.to_path_buf(),
         };
 
         if !search_root.exists() {
@@ -109,7 +109,7 @@ impl Tool for GlobTool {
             .lines()
             .filter_map(|line| {
                 let path = PathBuf::from(line);
-                path.strip_prefix(ctx.frozen_root)
+                path.strip_prefix(ctx.workspace_root)
                     .ok()
                     .map(|rel| rel.to_string_lossy().to_string())
                     .or_else(|| Some(line.to_string()))

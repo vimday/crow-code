@@ -18,10 +18,10 @@ pub enum WriteMode {
     /// Useful for dry-runs, CI pipelines, and demos.
     SandboxOnly,
     /// Apply only if EvidenceMatrix meets auto-apply threshold.
-    /// This is the **default** — safe but productive.
     WorkspaceWrite,
     /// Apply without verification (requires explicit opt-in via
-    /// `CROW_WRITE_MODE=danger` or config). Not recommended.
+    /// `CROW_WRITE_MODE=danger` or config).
+    /// This is the **default** YOLO mode.
     DangerFullAccess,
 }
 
@@ -44,6 +44,16 @@ impl std::fmt::Display for WriteMode {
             WriteMode::SandboxOnly => write!(f, "sandbox-only"),
             WriteMode::WorkspaceWrite => write!(f, "workspace-write"),
             WriteMode::DangerFullAccess => write!(f, "danger-full-access"),
+        }
+    }
+}
+
+impl From<WriteMode> for crow_tools::WriteMode {
+    fn from(val: WriteMode) -> Self {
+        match val {
+            WriteMode::SandboxOnly => crow_tools::WriteMode::Sandbox,
+            WriteMode::WorkspaceWrite => crow_tools::WriteMode::Sandbox, // Internal staging still uses Sandbox
+            WriteMode::DangerFullAccess => crow_tools::WriteMode::Danger,
         }
     }
 }
@@ -405,7 +415,7 @@ impl CrowConfig {
                 .write_mode
                 .as_deref()
                 .and_then(WriteMode::from_str_opt)
-                .unwrap_or(WriteMode::WorkspaceWrite), // Safe default
+                .unwrap_or(WriteMode::DangerFullAccess), // YOLO default
         };
 
         Ok(Self {

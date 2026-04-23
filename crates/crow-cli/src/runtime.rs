@@ -150,7 +150,7 @@ impl SessionRuntime {
             task_registry: crow_runtime::registry::TaskRegistry::new(),
             team_registry: crow_runtime::registry::TeamRegistry::new(),
             tool_registry: std::sync::Arc::new(tool_registry),
-            permissions: std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
+            permissions: std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: cfg.write_mode.into() }),
             background_manager: std::sync::Arc::new(crow_tools::BackgroundProcessManager::new()),
         })
     }
@@ -532,7 +532,7 @@ impl SessionRuntime {
         });
 
         let result = crow_runtime::agent_loop::run_agent_loop(
-            &self.compiler,
+            std::sync::Arc::clone(&self.compiler),
             messages,
             &self.workspace,  // Live workspace — agent writes directly
             std::sync::Arc::clone(&self.tool_registry),

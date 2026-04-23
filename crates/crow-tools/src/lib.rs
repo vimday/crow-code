@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 /// Context provided to every tool during execution.
 pub struct ToolContext<'a> {
-    pub frozen_root: &'a Path,
+    pub workspace_root: &'a Path,
     pub permissions: &'a PermissionEnforcer,
     /// Optional file state tracker for staleness detection.
     /// When set, tools will record file reads and check for external modifications

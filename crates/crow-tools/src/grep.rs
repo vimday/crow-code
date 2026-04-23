@@ -230,8 +230,8 @@ impl Tool for GrepTool {
 
         // Resolve search path
         let search_path: PathBuf = match path_str {
-            Some(p) => ctx.frozen_root.join(p),
-            None => ctx.frozen_root.to_path_buf(),
+            Some(p) => ctx.workspace_root.join(p),
+            None => ctx.workspace_root.to_path_buf(),
         };
 
         if !search_path.exists() {

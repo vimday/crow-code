@@ -61,7 +61,7 @@ pub struct AgentLoopResult {
 /// Returns when the LLM responds with text only (no tool calls).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
-    compiler: &crow_brain::IntentCompiler,
+    compiler: Arc<crow_brain::IntentCompiler>,
     messages: &mut ConversationManager,
     workspace_root: &Path,
     tool_registry: Arc<crow_tools::ToolRegistry>,
@@ -216,7 +216,7 @@ pub async fn run_agent_loop(
             let delegator = subagent_delegator.clone();
             tasks.push(tokio::spawn(async move {
                 let ctx = crow_tools::ToolContext {
-                    frozen_root: &root,
+                    workspace_root: &root,
                     permissions: &perms,
                     file_state: Some(fs),
                     background_manager: Some(bgm),
@@ -275,6 +275,18 @@ pub async fn run_agent_loop(
                     ));
                 }
             }
+        }
+
+        // ── Proactive Mid-turn Compaction ───────────────────────────
+        // Mirroring Codex's proactive `run_auto_compact` mid-turn to prevent 
+        // runaway tool outputs from blowing out the context window.
+        if messages.needs_compaction() {
+            observer.handle_event(AgentEvent::Log("    🔄 Context window nearing limit, running mid-turn compaction...".into()));
+            observer.handle_event(AgentEvent::Compacting { active: true });
+            if let Err(e) = messages.compact_history(&compiler).await {
+                observer.handle_event(AgentEvent::Log(format!("    ⚠️ Compaction failed: {e}")));
+            }
+            observer.handle_event(AgentEvent::Compacting { active: false });
         }
     }
 }

@@ -49,7 +49,7 @@ impl Tool for FileWriteTool {
         let parsed: Args = serde_json::from_value(args)?;
 
         // Path traversal guard
-        let abs_path = match crate::file_edit::validate_workspace_path(ctx.frozen_root, &parsed.path) {
+        let abs_path = match crate::file_edit::validate_workspace_path(ctx.workspace_root, &parsed.path) {
             Ok(p) => p,
             Err(e) => return Ok(e),
         };
