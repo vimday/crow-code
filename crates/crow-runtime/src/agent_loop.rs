@@ -66,6 +66,7 @@ pub async fn run_agent_loop(
     workspace_root: &Path,
     tool_registry: Arc<crow_tools::ToolRegistry>,
     permissions: Arc<crow_tools::PermissionEnforcer>,
+    file_state: Arc<crow_tools::FileStateStore>,
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
     let mut step = 0;
@@ -208,11 +209,12 @@ pub async fn run_agent_loop(
             let root = workspace_root.to_path_buf();
             let perms = Arc::clone(&permissions);
 
+            let fs = Arc::clone(&file_state);
             tasks.push(tokio::spawn(async move {
                 let ctx = crow_tools::ToolContext {
                     frozen_root: &root,
                     permissions: &perms,
-                    file_state: None,
+                    file_state: Some(fs),
                 };
 
                 let timeout = std::time::Duration::from_secs(120);

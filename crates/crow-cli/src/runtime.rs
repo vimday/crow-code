@@ -434,12 +434,16 @@ impl SessionRuntime {
             },
         ));
 
+        // Create a fresh file state tracker for this turn
+        let file_state = std::sync::Arc::new(crow_tools::FileStateStore::new());
+
         let result = crow_runtime::agent_loop::run_agent_loop(
             &self.compiler,
             messages,
             &self.workspace,  // Live workspace — agent writes directly
             std::sync::Arc::clone(&self.tool_registry),
             std::sync::Arc::clone(&self.permissions),
+            file_state,
             observer,
         )
         .await?;
