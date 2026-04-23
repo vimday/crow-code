@@ -405,6 +405,12 @@ impl Tool for ReadFilesTool {
             }
         };
         
+        // Record file state for staleness tracking
+        if let Some(ref store) = ctx.file_state {
+            let mtime = crate::file_state::get_file_mtime(&abs_path).await;
+            store.record(abs_path, mtime);
+        }
+
         Ok(ToolOutput::success(content))
     }
 }
