@@ -10,6 +10,7 @@ pub enum ChatRole {
     System,
     User,
     Assistant,
+    Tool,
 }
 
 /// A structured chat message with role-content separation.
@@ -18,6 +19,12 @@ pub enum ChatRole {
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
+    /// Tool call ID for tool result messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool calls requested by the assistant (populated on assistant messages).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallRequest>>,
 }
 
 impl ChatMessage {
@@ -25,6 +32,8 @@ impl ChatMessage {
         Self {
             role: ChatRole::System,
             content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
         }
     }
 
@@ -32,6 +41,8 @@ impl ChatMessage {
         Self {
             role: ChatRole::User,
             content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
         }
     }
 
@@ -39,7 +50,75 @@ impl ChatMessage {
         Self {
             role: ChatRole::Assistant,
             content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
         }
+    }
+
+    /// Create an assistant message that includes tool call requests.
+    pub fn assistant_with_tool_calls(content: impl Into<String>, tool_calls: Vec<ToolCallRequest>) -> Self {
+        Self {
+            role: ChatRole::Assistant,
+            content: content.into(),
+            tool_call_id: None,
+            tool_calls: Some(tool_calls),
+        }
+    }
+
+    /// Create a tool result message.
+    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::Tool,
+            content: content.into(),
+            tool_call_id: Some(tool_call_id.into()),
+            tool_calls: None,
+        }
+    }
+}
+
+// ─── Native Tool Calling Types ──────────────────────────────────────
+
+/// A tool call request from the LLM.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct ToolCallRequest {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// A single block of the LLM response (either text or a tool call).
+#[derive(Debug, Clone)]
+pub enum AgentResponseBlock {
+    Text(String),
+    ToolCall(ToolCallRequest),
+}
+
+/// Complete response from the LLM, potentially containing interleaved text and tool calls.
+#[derive(Debug, Clone)]
+pub struct AgentResponse {
+    pub blocks: Vec<AgentResponseBlock>,
+}
+
+impl AgentResponse {
+    /// Extract all text blocks concatenated.
+    pub fn text(&self) -> String {
+        self.blocks.iter().filter_map(|b| match b {
+            AgentResponseBlock::Text(t) => Some(t.as_str()),
+            AgentResponseBlock::ToolCall(_) => None,
+        }).collect::<Vec<_>>().join("")
+    }
+
+    /// Extract all tool calls.
+    pub fn tool_calls(&self) -> Vec<&ToolCallRequest> {
+        self.blocks.iter().filter_map(|b| match b {
+            AgentResponseBlock::ToolCall(tc) => Some(tc),
+            AgentResponseBlock::Text(_) => None,
+        }).collect()
+    }
+
+    /// Whether this response requests any tool calls.
+    pub fn has_tool_calls(&self) -> bool {
+        self.blocks.iter().any(|b| matches!(b, AgentResponseBlock::ToolCall(_)))
     }
 }
 
@@ -56,6 +135,16 @@ pub enum CompilerError {
 /// Allows intercepting SSE chunk tokens during LLM generation.
 pub trait StreamObserver: Send {
     fn on_chunk(&mut self, chunk: &str);
+}
+
+/// Allows observing structured streaming events (text chunks + tool call assembly).
+pub trait ToolStreamObserver: Send {
+    /// Called when a text delta arrives from the LLM.
+    fn on_text_chunk(&mut self, chunk: &str);
+    /// Called when a tool call starts being assembled.
+    fn on_tool_call_start(&mut self, id: &str, name: &str);
+    /// Called when tool call argument delta arrives.
+    fn on_tool_call_args_chunk(&mut self, id: &str, chunk: &str);
 }
 
 /// A generic LLM driver interface to allow substituting e.g. OpenAI vs Claude vs Mock.
@@ -95,6 +184,22 @@ pub trait LlmClient: Send + Sync {
         }
         Ok(text)
     }
+
+    /// Stream a response with native tool calling support.
+    /// Returns the structured AgentResponse with interleaved text and tool calls.
+    /// Default implementation falls back to non-tool calling.
+    async fn generate_streaming_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        observer: Option<&mut dyn ToolStreamObserver>,
+    ) -> Result<AgentResponse, crate::client::BrainError> {
+        let _ = (tools, observer);
+        let text = self.generate(messages).await?;
+        Ok(AgentResponse {
+            blocks: vec![AgentResponseBlock::Text(text)],
+        })
+    }
 }
 
 /// The Intelligence Compiler.
@@ -126,6 +231,11 @@ impl IntentCompiler {
     pub fn with_native_tool_calling(mut self, enabled: bool) -> Self {
         self.native_tool_calling = enabled;
         self
+    }
+
+    /// Access the underlying LLM client for direct tool-calling generation.
+    pub fn client(&self) -> &dyn LlmClient {
+        &*self.client
     }
 
     /// Generates an auto-compaction summary of the given messages history

@@ -1,4 +1,4 @@
-use crate::{Tool, ToolContext};
+use crate::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 
 pub struct ListDirTool;
@@ -10,10 +10,23 @@ impl Tool for ListDirTool {
     }
 
     fn description(&self) -> &'static str {
-        "List directory contents"
+        "List directory contents with detailed file information"
     }
 
-    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<String> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Directory path to list (relative to workspace root)"
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
         struct Args {
             path: crow_patch::WorkspacePath,
@@ -36,7 +49,7 @@ impl Tool for ListDirTool {
             &crow_verifier::types::AciConfig::compact(),
             None,
         ).await?;
-        Ok(result.test_run.truncated_log)
+        Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
 
@@ -45,14 +58,35 @@ pub struct SearchTool;
 #[async_trait::async_trait]
 impl Tool for SearchTool {
     fn name(&self) -> &'static str {
-        "search"
+        "grep"
     }
 
     fn description(&self) -> &'static str {
-        "Search for a pattern across files"
+        "Search for a regex pattern across files using ripgrep. Returns matching lines with file paths and line numbers."
     }
 
-    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<String> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern to search for"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory or file path to search within (default: workspace root)"
+                },
+                "glob": {
+                    "type": "string",
+                    "description": "Glob filter for file types (e.g. '*.rs', '*.py')"
+                }
+            },
+            "required": ["pattern"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
         struct Args {
             pattern: String,
@@ -93,7 +127,7 @@ impl Tool for SearchTool {
             &crow_verifier::types::AciConfig::compact(),
             None,
         ).await?;
-        Ok(result.test_run.truncated_log)
+        Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
 
@@ -106,10 +140,23 @@ impl Tool for FetchUrlTool {
     }
 
     fn description(&self) -> &'static str {
-        "Fetch and process the content of a public URL"
+        "Fetch and process the text content of a public URL"
     }
 
-    async fn execute(&self, args: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<String> {
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch"
+                }
+            },
+            "required": ["url"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
         struct Args {
             url: String,
@@ -126,12 +173,12 @@ impl Tool for FetchUrlTool {
         let res = client.get(&parsed.url).send().await?;
         let status = res.status();
         if !status.is_success() {
-            anyhow::bail!("{url} returned HTTP {status}", url = parsed.url);
+            return Ok(ToolOutput::error(format!("{url} returned HTTP {status}", url = parsed.url)));
         }
         if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE) {
             let ct_str = ct.to_str().unwrap_or("");
             if !ct_str.contains("text/") && !ct_str.contains("application/json") {
-                anyhow::bail!("Unsupported Content-Type '{ct_str}'. Only text or json supported.");
+                return Ok(ToolOutput::error(format!("Unsupported Content-Type '{ct_str}'. Only text or json supported.")));
             }
         }
 
@@ -140,7 +187,7 @@ impl Tool for FetchUrlTool {
             text.truncate(max_fetch_bytes);
             text.push_str("...\n\n[SYSTEM WARNING: Response truncated to 50KB]");
         }
-        Ok(text)
+        Ok(ToolOutput::success(text))
     }
 }
 
@@ -154,7 +201,18 @@ impl Tool for FileInfoTool {
     fn description(&self) -> &'static str {
         "Show file metadata (size, type, permissions)"
     }
-    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<String> {
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "File path" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
         struct Args { path: crow_patch::WorkspacePath }
         let parsed: Args = serde_json::from_value(args)?;
@@ -165,7 +223,7 @@ impl Tool for FileInfoTool {
         };
         let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
         let result = crow_verifier::executor::execute(ctx.frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
-        Ok(result.test_run.truncated_log)
+        Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
 
@@ -179,7 +237,18 @@ impl Tool for WordCountTool {
     fn description(&self) -> &'static str {
         "Count lines, words, and bytes in a file"
     }
-    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<String> {
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "File path" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
         struct Args { path: crow_patch::WorkspacePath }
         let parsed: Args = serde_json::from_value(args)?;
@@ -190,7 +259,7 @@ impl Tool for WordCountTool {
         };
         let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
         let result = crow_verifier::executor::execute(ctx.frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
-        Ok(result.test_run.truncated_log)
+        Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
 
@@ -204,7 +273,19 @@ impl Tool for DirTreeTool {
     fn description(&self) -> &'static str {
         "Show directory tree structure with a depth limit"
     }
-    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<String> {
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Root directory path" },
+                "max_depth": { "type": "integer", "description": "Max tree depth (default: 3, max: 10)" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
         struct Args { path: crow_patch::WorkspacePath, max_depth: Option<u32> }
         let parsed: Args = serde_json::from_value(args)?;
@@ -216,7 +297,7 @@ impl Tool for DirTreeTool {
         };
         let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
         let result = crow_verifier::executor::execute(ctx.frozen_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
-        Ok(result.test_run.truncated_log)
+        Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
 
@@ -225,71 +306,105 @@ pub struct ReadFilesTool;
 #[async_trait::async_trait]
 impl Tool for ReadFilesTool {
     fn name(&self) -> &'static str {
-        "read_files"
+        "read_file"
     }
     fn description(&self) -> &'static str {
-        "Read multiple files from the workspace"
+        "Read the contents of a file from the workspace. Supports optional line-range selection."
     }
-    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<String> {
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path relative to workspace root"
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional 1-indexed start line for partial reads"
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional 1-indexed end line (inclusive) for partial reads"
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
-        struct Args { paths: Vec<crow_patch::WorkspacePath> }
+        struct Args {
+            path: crow_patch::WorkspacePath,
+            start_line: Option<usize>,
+            end_line: Option<usize>,
+        }
         let parsed: Args = serde_json::from_value(args)?;
         
         use std::io::{BufRead, BufReader};
-        const MAX_FILE_BYTES: u64 = 50 * 1024;
+        const MAX_FILE_BYTES: usize = 50 * 1024;
         const MAX_FILE_LINES: usize = 500;
 
-        let mut file_contents = String::from("[READ FILES RESULT]\n");
-        for path in parsed.paths {
-            let abs_path = path.to_absolute(ctx.frozen_root);
-            let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
-            
-            let content = match std::fs::File::open(&abs_path) {
-                Ok(file) => {
-                    let reader = BufReader::new(file);
-                    let mut text = String::new();
-                    let mut lines_count = 0;
-                    let mut bytes_read = 0;
-                    let mut was_truncated = false;
+        let abs_path = parsed.path.to_absolute(ctx.frozen_root);
+        let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+        
+        let content = match std::fs::File::open(&abs_path) {
+            Ok(file) => {
+                let reader = BufReader::new(file);
+                let mut text = String::new();
+                let mut lines_count = 0usize;
+                let mut bytes_read = 0usize;
+                let mut was_truncated = false;
 
-                    for line_res in reader.lines() {
-                        match line_res {
-                            Ok(line) => {
-                                if bytes_read + line.len() > MAX_FILE_BYTES as usize {
-                                    let allowed = (MAX_FILE_BYTES as usize).saturating_sub(bytes_read);
-                                    text.push_str(crow_patch::util::safe_truncate(&line, allowed));
-                                    was_truncated = true;
-                                    lines_count += 1;
-                                    break;
-                                }
-                                text.push_str(&line);
-                                text.push('\n');
-                                bytes_read += line.len() + 1;
-                                lines_count += 1;
+                let start = parsed.start_line.unwrap_or(1).max(1);
+                let end = parsed.end_line.unwrap_or(usize::MAX);
 
-                                if lines_count >= MAX_FILE_LINES {
-                                    if file_size > bytes_read as u64 {
-                                        was_truncated = true;
-                                    }
-                                    break;
-                                }
+                for (idx, line_res) in reader.lines().enumerate() {
+                    let line_num = idx + 1;
+                    match line_res {
+                        Ok(line) => {
+                            if line_num < start {
+                                continue;
                             }
-                            Err(_) => break,
-                        }
-                    }
+                            if line_num > end {
+                                break;
+                            }
+                            // Format with line number for reference
+                            let formatted = format!("{line_num}: {line}\n");
+                            if bytes_read + formatted.len() > MAX_FILE_BYTES {
+                                let allowed = MAX_FILE_BYTES.saturating_sub(bytes_read);
+                                text.push_str(crow_patch::util::safe_truncate(&formatted, allowed));
+                                was_truncated = true;
+                                lines_count += 1;
+                                break;
+                            }
+                            text.push_str(&formatted);
+                            bytes_read += formatted.len();
+                            lines_count += 1;
 
-                    if was_truncated {
-                        format!("{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing first {} lines only.]", text.trim_end(), file_size, lines_count)
-                    } else {
-                        text.trim_end().to_string()
+                            if lines_count >= MAX_FILE_LINES {
+                                if file_size > bytes_read as u64 {
+                                    was_truncated = true;
+                                }
+                                break;
+                            }
+                        }
+                        Err(_) => break,
                     }
                 }
-                Err(_) => "<file not found or unreadable>".into(),
-            };
-            file_contents.push_str(&format!("--- {} ---\n{}\n\n", path.as_str(), content));
-        }
+
+                if was_truncated {
+                    format!("{}\n\n[SYSTEM WARNING: File truncated. Original size: {} bytes, showing {} lines.]\n\nIf you need to see more, use start_line/end_line to read specific ranges.", text.trim_end(), file_size, lines_count)
+                } else {
+                    text.trim_end().to_string()
+                }
+            }
+            Err(e) => {
+                return Ok(ToolOutput::error(format!("Could not read file '{}': {e}", parsed.path.as_str())));
+            }
+        };
         
-        file_contents.push_str("Please proceed with your task, or read more files if necessary.");
-        Ok(file_contents)
+        Ok(ToolOutput::success(content))
     }
 }

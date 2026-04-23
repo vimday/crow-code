@@ -533,6 +533,212 @@ impl LlmClient for ReqwestLlmClient {
             self._generate(messages, temperature).await
         }
     }
+
+    async fn generate_streaming_with_tools(
+        &self,
+        messages: &[crate::ChatMessage],
+        tools: &[serde_json::Value],
+        mut observer: Option<&mut dyn crate::compiler::ToolStreamObserver>,
+    ) -> Result<crate::AgentResponse, BrainError> {
+        use eventsource_stream::Eventsource;
+        use futures_util::StreamExt;
+
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{base}/chat/completions");
+
+        // Build message array with proper tool message support
+        let api_messages: Vec<serde_json::Value> = messages.iter().map(|m| {
+            let mut msg = if self.prompt_caching && m.role == crate::ChatRole::System {
+                let block = json!({"type": "text", "text": m.content});
+                json!({"role": "system", "content": [block]})
+            } else {
+                json!({"role": m.role, "content": m.content})
+            };
+
+            // Add tool_call_id for tool result messages
+            if let Some(ref tc_id) = m.tool_call_id {
+                msg["tool_call_id"] = json!(tc_id);
+            }
+
+            // Add tool_calls for assistant messages that requested them
+            if let Some(ref tcs) = m.tool_calls {
+                let tc_array: Vec<serde_json::Value> = tcs.iter().map(|tc| {
+                    json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments.to_string()
+                        }
+                    })
+                }).collect();
+                msg["tool_calls"] = json!(tc_array);
+            }
+
+            msg
+        }).collect();
+
+        let mut body = json!({
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": api_messages,
+            "stream": true
+        });
+
+        // Include tool definitions
+        if !tools.is_empty() {
+            body["tools"] = json!(tools);
+            body["tool_choice"] = json!("auto");
+        }
+
+        if let Some(effort) = &self.reasoning_effort {
+            let model_lower = self.model.to_lowercase();
+            let supports_reasoning = model_lower.starts_with("o1")
+                || model_lower.starts_with("o3")
+                || model_lower.starts_with("o4")
+                || model_lower.starts_with("gpt-5");
+            if supports_reasoning {
+                body["reasoning_effort"] = json!(effort);
+            }
+        }
+
+        // Retry loop
+        let mut retries = 0;
+        let max_retries = 3;
+        let mut delay_ms: u64 = 1000;
+
+        let resp = loop {
+            match self.client.post(&url).json(&body).send().await {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        break r;
+                    }
+                    let code = status.as_u16();
+                    if [429, 500, 502, 503, 529].contains(&code) && retries < max_retries {
+                        retries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                        continue;
+                    }
+                    let raw_text = r.text().await.unwrap_or_default();
+                    return Err(BrainError::ApiError { status: code, body: raw_text });
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        retries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                        continue;
+                    }
+                    return Err(BrainError::Transport(e));
+                }
+            }
+        };
+
+        let mut stream = resp.bytes_stream().eventsource();
+        let mut full_text = String::new();
+
+        // Tool call accumulation state
+        // Map from index to (id, name, arguments_buffer)
+        let mut tool_calls: std::collections::HashMap<u32, (String, String, String)> =
+            std::collections::HashMap::new();
+
+        while let Some(event_res) = stream.next().await {
+            match event_res {
+                Ok(event) => {
+                    let data_str = event.data;
+                    if data_str == "[DONE]" {
+                        break;
+                    }
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                        if let Some(choices) = data.get("choices").and_then(|c| c.as_array()) {
+                            if let Some(choice) = choices.first() {
+                                if let Some(delta) = choice.get("delta") {
+                                    // Handle text content deltas
+                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                        if !content.is_empty() {
+                                            full_text.push_str(content);
+                                            if let Some(ref mut obs) = observer {
+                                                obs.on_text_chunk(content);
+                                            }
+                                        }
+                                    }
+
+                                    // Handle tool call deltas
+                                    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                        for tc in tcs {
+                                            let index = tc.get("index")
+                                                .and_then(serde_json::Value::as_u64)
+                                                .unwrap_or(0) as u32;
+
+                                            // New tool call start
+                                            if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                                                let name = tc.get("function")
+                                                    .and_then(|f| f.get("name"))
+                                                    .and_then(|n| n.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                tool_calls.insert(
+                                                    index,
+                                                    (id.to_string(), name.clone(), String::new()),
+                                                );
+                                                if let Some(ref mut obs) = observer {
+                                                    obs.on_tool_call_start(id, &name);
+                                                }
+                                            }
+
+                                            // Tool call arguments delta
+                                            if let Some(args_chunk) = tc.get("function")
+                                                .and_then(|f| f.get("arguments"))
+                                                .and_then(|a| a.as_str())
+                                            {
+                                                if let Some(entry) = tool_calls.get_mut(&index) {
+                                                    entry.2.push_str(args_chunk);
+                                                    if let Some(ref mut obs) = observer {
+                                                        obs.on_tool_call_args_chunk(&entry.0, args_chunk);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(BrainError::Config(format!("Stream error: {e}")));
+                }
+            }
+        }
+
+        // Build the response
+        let mut blocks = Vec::new();
+        if !full_text.is_empty() {
+            blocks.push(crate::AgentResponseBlock::Text(full_text));
+        }
+
+        // Sort tool calls by index and add to response
+        let mut sorted_calls: Vec<(u32, (String, String, String))> = tool_calls.into_iter().collect();
+        sorted_calls.sort_by_key(|(idx, _)| *idx);
+
+        for (_, (id, name, args_str)) in sorted_calls {
+            let arguments: serde_json::Value = serde_json::from_str(&args_str)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+            blocks.push(crate::AgentResponseBlock::ToolCall(crate::ToolCallRequest {
+                id,
+                name,
+                arguments,
+            }));
+        }
+
+        if blocks.is_empty() {
+            return Err(BrainError::MissingField("Empty stream response with no tool calls".into()));
+        }
+
+        Ok(crate::AgentResponse { blocks })
+    }
 }
 
 /// Build an OpenAI-compatible function parameter schema for AgentAction.

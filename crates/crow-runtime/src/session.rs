@@ -29,6 +29,7 @@ impl From<&ChatMessage> for StoredMessage {
             ChatRole::System => "system",
             ChatRole::User => "user",
             ChatRole::Assistant => "assistant",
+            ChatRole::Tool => "tool",
         };
         Self {
             role: role.to_string(),

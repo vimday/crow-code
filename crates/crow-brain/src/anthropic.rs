@@ -111,22 +111,33 @@ impl AnthropicClient {
             }
 
             let role = match msg.role {
-                ChatRole::User => "user",
+                ChatRole::User | ChatRole::Tool => "user",
                 ChatRole::Assistant => "assistant",
                 ChatRole::System => unreachable!(),
+            };
+
+            // For tool results, format with the tool call ID
+            let content = if msg.role == ChatRole::Tool {
+                if let Some(ref tc_id) = msg.tool_call_id {
+                    format!("[Tool Result ({tc_id})]\n{}", msg.content)
+                } else {
+                    msg.content.clone()
+                }
+            } else {
+                msg.content.clone()
             };
 
             if last_role == Some(role) {
                 // Merge with previous message
                 if let Some(last) = conversation.last_mut() {
-                    if let Some(content) = last["content"].as_str() {
-                        last["content"] = json!(format!("{}\n\n{}", content, msg.content));
+                    if let Some(prev_content) = last["content"].as_str() {
+                        last["content"] = json!(format!("{}\n\n{}", prev_content, content));
                     }
                 }
             } else {
                 conversation.push(json!({
                     "role": role,
-                    "content": msg.content
+                    "content": content
                 }));
                 last_role = Some(role);
             }
@@ -228,7 +239,7 @@ impl AnthropicClient {
             }
 
             let role = match msg.role {
-                ChatRole::User => "user",
+                ChatRole::User | ChatRole::Tool => "user",
                 ChatRole::Assistant => "assistant",
                 ChatRole::System => unreachable!(),
             };

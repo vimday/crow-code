@@ -144,7 +144,7 @@ impl ThreadManager {
             let mut local_msgs = msgs_clone.lock().await.clone();
 
             let result = rt_clone
-                .execute_turn_with_observer(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
+                .execute_native_turn(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
                 .await;
 
             // Only sync mutated messages back if the turn was NOT cancelled.

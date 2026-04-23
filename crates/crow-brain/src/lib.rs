@@ -16,6 +16,9 @@ pub mod skill;
 pub mod usage;
 
 pub use client::{BrainError, LlmProviderConfig, ProviderKind, ReqwestLlmClient};
-pub use compiler::{ChatMessage, ChatRole, CompilerError, IntentCompiler, LlmClient};
+pub use compiler::{
+    AgentResponse, AgentResponseBlock, ChatMessage, ChatRole, CompilerError,
+    IntentCompiler, LlmClient, ToolCallRequest, ToolStreamObserver,
+};
 pub use router::{build_client, describe_provider};
 pub use usage::TokenUsage;

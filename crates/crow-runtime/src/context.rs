@@ -87,6 +87,30 @@ impl ConversationManager {
         self.enforce_budget();
     }
 
+    /// Push an assistant message that includes tool call requests.
+    /// Used in the native tool calling flow.
+    pub fn push_assistant_with_tool_calls(
+        &mut self,
+        content: impl Into<String>,
+        tool_calls: Vec<crow_brain::ToolCallRequest>,
+    ) {
+        self.conversation.push_back(Memory {
+            message: ChatMessage::assistant_with_tool_calls(content, tool_calls),
+            summary: None,
+        });
+        self.enforce_budget();
+    }
+
+    /// Push a tool result message for the native tool calling flow.
+    pub fn push_tool_result(&mut self, tool_call_id: impl Into<String>, content: impl Into<String>) {
+        self.conversation.push_back(Memory {
+            message: ChatMessage::tool_result(tool_call_id, content),
+            summary: Some("[SYSTEM: Tool result pruned from history]".into()),
+        });
+        self.enforce_budget();
+    }
+
+
     /// Adds the result of a file read to the context.
     /// Truncates the text if the file is massive, and provides a semantic summary for pruning.
     pub fn push_file_read(&mut self, paths: &[String], content: String) {

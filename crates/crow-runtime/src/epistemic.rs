@@ -202,14 +202,25 @@ pub async fn run_epistemic_loop(
                     permissions: &permissions,
                 };
                 
-                let file_contents = match tool_registry.execute(
-                    "read_files",
-                    serde_json::json!({ "paths": paths }),
-                    &ctx,
-                ).await {
-                    Ok(res) => res,
-                    Err(e) => format!("[READ FILES ERROR]\nFailed to read files: {e:?}"),
-                };
+                // Read each file and concatenate results
+                let mut file_contents = String::new();
+                for p in &paths {
+                    match tool_registry.execute(
+                        "read_file",
+                        serde_json::json!({ "path": p.as_str() }),
+                        &ctx,
+                    ).await {
+                        Ok(res) => {
+                            if !file_contents.is_empty() {
+                                file_contents.push_str("\n\n---\n\n");
+                            }
+                            file_contents.push_str(&res.content);
+                        }
+                        Err(e) => {
+                            file_contents.push_str(&format!("[READ ERROR for {}]: {e:?}\n", p.as_str()));
+                        }
+                    }
+                }
 
                 let path_strings: Vec<String> =
                     paths.iter().map(|s| s.as_str().to_string()).collect();
@@ -280,7 +291,8 @@ pub async fn run_epistemic_loop(
                 };
 
                 match tool_registry.execute(tool_name, args, &ctx).await {
-                    Ok(mut res) => {
+                    Ok(output) => {
+                        let mut res = output.content;
                         if res.len() > MAX_RECON_CONTEXT_BYTES {
                             res.truncate(MAX_RECON_CONTEXT_BYTES);
                             res.push_str("\n\n[SYSTEM WARNING: Recon output truncated to 100KB]");

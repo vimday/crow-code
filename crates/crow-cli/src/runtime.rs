@@ -51,6 +51,7 @@ impl SessionRuntime {
         });
 
         let mut tool_registry = crow_tools::ToolRegistry::new();
+        // Recon tools
         tool_registry.register(Box::new(crow_tools::recon::ListDirTool));
         tool_registry.register(Box::new(crow_tools::recon::SearchTool));
         tool_registry.register(Box::new(crow_tools::recon::FetchUrlTool));
@@ -58,6 +59,10 @@ impl SessionRuntime {
         tool_registry.register(Box::new(crow_tools::recon::WordCountTool));
         tool_registry.register(Box::new(crow_tools::recon::DirTreeTool));
         tool_registry.register(Box::new(crow_tools::recon::ReadFilesTool));
+        // Action tools
+        tool_registry.register(Box::new(crow_tools::bash::BashTool));
+        tool_registry.register(Box::new(crow_tools::file_edit::FileEditTool));
+        tool_registry.register(Box::new(crow_tools::file_write::FileWriteTool));
 
         Ok(Self {
             compiler,
@@ -362,6 +367,94 @@ impl SessionRuntime {
         }
 
         Ok(target_snap)
+    }
+
+    /// Execute a turn using the native tool-calling agent loop.
+    ///
+    /// Unlike `execute_turn_with_observer` which uses the legacy epistemic
+    /// loop + crucible verification pipeline, this method uses the new
+    /// streaming tool-call state machine where the LLM directly invokes
+    /// tools (bash, file_edit, file_write, grep, etc.) and writes to the
+    /// workspace in real-time.
+    ///
+    /// The agent is responsible for its own verification (e.g., running
+    /// `cargo check` via the bash tool) rather than relying on the
+    /// automated crucible.
+    pub async fn execute_native_turn(
+        &self,
+        cfg: &CrowConfig,
+        prompt: &str,
+        messages: &mut crow_runtime::context::ConversationManager,
+        observer: &mut dyn crate::event::EventHandler,
+    ) -> Result<SnapshotId> {
+        let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
+
+        let _profile = crate::scan_workspace(&self.workspace).map_err(|e| anyhow::anyhow!(e))?;
+
+        // Emit structured phase transitions
+        observer.handle_event(crate::event::AgentEvent::Turn(
+            crate::event::TurnEvent::PhaseChanged {
+                turn_id: String::new(),
+                phase: crate::event::TurnPhase::BuildingRepoMap,
+            },
+        ));
+
+        // Build repo map from live workspace (no frozen snapshot needed for native mode)
+        let repo_map = self.build_context_map_with_cache(cfg, &snapshot_id, &self.workspace)?;
+
+        let available_skills = self.load_and_resolve_skills(prompt, observer);
+
+        let sys_msgs = crate::prompt::PromptBuilder::new()
+            .with_context_map(&repo_map, &snapshot_id)
+            .with_mcp(Some(&self.mcp_manager))
+            .with_dynamic_skills(&available_skills)
+            .with_contract(&snapshot_id)
+            .build();
+
+        messages.set_system(sys_msgs);
+
+        if messages.as_messages().len() <= 2 {
+            messages.push_user(format!("Task:\n{prompt}"));
+        } else {
+            messages.push_user(prompt);
+        }
+
+        // Compact if needed
+        observer.handle_event(crate::event::AgentEvent::Compacting { active: true });
+        let _ = messages.compact_history(&self.compiler).await;
+        observer.handle_event(crate::event::AgentEvent::Compacting { active: false });
+
+        // Run the native agent loop
+        observer.handle_event(crate::event::AgentEvent::Turn(
+            crate::event::TurnEvent::PhaseChanged {
+                turn_id: String::new(),
+                phase: crate::event::TurnPhase::EpistemicLoop { step: 0, max_steps: 40 },
+            },
+        ));
+
+        let result = crow_runtime::agent_loop::run_agent_loop(
+            &self.compiler,
+            messages,
+            &self.workspace,  // Live workspace — agent writes directly
+            std::sync::Arc::clone(&self.tool_registry),
+            std::sync::Arc::clone(&self.permissions),
+            observer,
+        )
+        .await?;
+
+        // Emit final text as markdown
+        if !result.final_text.trim().is_empty() {
+            observer.handle_event(crate::event::AgentEvent::Markdown(result.final_text));
+        }
+
+        observer.handle_event(crate::event::AgentEvent::Turn(
+            crate::event::TurnEvent::PhaseChanged {
+                turn_id: String::new(),
+                phase: crate::event::TurnPhase::Complete,
+            },
+        ));
+
+        Ok(snapshot_id)
     }
 
     // ─── Unified Entry Points ────────────────────────────────────────────────
@@ -679,6 +772,14 @@ impl SessionRuntime {
                 crow_brain::ChatRole::User => messages.push_user(&msg.content),
                 crow_brain::ChatRole::Assistant => messages.push_assistant(&msg.content),
                 crow_brain::ChatRole::System => {}
+                crow_brain::ChatRole::Tool => {
+                    // Tool results are pushed with their tool_call_id if available
+                    if let Some(ref tc_id) = msg.tool_call_id {
+                        messages.push_tool_result(tc_id, &msg.content);
+                    } else {
+                        messages.push_user(&msg.content);
+                    }
+                }
             }
         }
 
