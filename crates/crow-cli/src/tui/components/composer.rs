@@ -9,11 +9,16 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
+/// Maximum number of command palette items visible at once.
+const PALETTE_MAX_VISIBLE: usize = 8;
+
 pub enum ActivePopup {
     None,
     CommandPalette {
         query: String,
         selected_idx: usize,
+        /// Scroll offset: index of the first visible item.
+        scroll_offset: usize,
         options: Vec<(String, String)>,
     },
 }
@@ -65,8 +70,8 @@ impl<'a> ComposerComponent<'a> {
             return 5;
         }
         if let ActivePopup::CommandPalette { ref options, .. } = self.active_popup {
-            // max 5 options height, plus 2 for borders
-            (options.len() as u16).min(5) + 2
+            // Visible items capped at PALETTE_MAX_VISIBLE, plus 2 for borders
+            (options.len() as u16).min(PALETTE_MAX_VISIBLE as u16) + 2
         } else {
             0
         }
@@ -88,6 +93,7 @@ impl<'a> Component for ComposerComponent<'a> {
             if let ActivePopup::CommandPalette {
                 query: _,
                 ref mut selected_idx,
+                ref mut scroll_offset,
                 ref options,
             } = self.active_popup
             {
@@ -96,16 +102,24 @@ impl<'a> Component for ComposerComponent<'a> {
                     return Ok(None);
                 }
 
-                // Intercept navigation
+                // Intercept navigation with auto-scroll
                 if key.code == KeyCode::Up {
                     if *selected_idx > 0 {
                         *selected_idx -= 1;
+                        // Scroll up if cursor moved above visible window
+                        if *selected_idx < *scroll_offset {
+                            *scroll_offset = *selected_idx;
+                        }
                     }
                     return Ok(None);
                 }
                 if key.code == KeyCode::Down {
                     if *selected_idx < options.len().saturating_sub(1) {
                         *selected_idx += 1;
+                        // Scroll down if cursor moved below visible window
+                        if *selected_idx >= *scroll_offset + PALETTE_MAX_VISIBLE {
+                            *scroll_offset = selected_idx.saturating_sub(PALETTE_MAX_VISIBLE - 1);
+                        }
                     }
                     return Ok(None);
                 }
@@ -173,6 +187,7 @@ impl<'a> Component for ComposerComponent<'a> {
                     self.active_popup = ActivePopup::CommandPalette {
                         query,
                         selected_idx: 0,
+                        scroll_offset: 0,
                         options,
                     };
                 } else {
@@ -254,6 +269,7 @@ impl<'a> Component for ComposerComponent<'a> {
         if let ActivePopup::CommandPalette {
             query: _,
             selected_idx,
+            scroll_offset,
             ref options,
         } = self.active_popup
         {
@@ -263,12 +279,18 @@ impl<'a> Component for ComposerComponent<'a> {
 
                 frame.render_widget(Clear, popup_area); // Erase underlying content
 
-                let list_items: Vec<ListItem> = options
+                // Only render the visible window of items
+                let visible_end = (scroll_offset + PALETTE_MAX_VISIBLE).min(options.len());
+                let has_more_above = scroll_offset > 0;
+                let has_more_below = visible_end < options.len();
+
+                let list_items: Vec<ListItem> = options[scroll_offset..visible_end]
                     .iter()
                     .enumerate()
-                    .map(|(i, (cmd, desc))| {
+                    .map(|(vis_i, (cmd, desc))| {
+                        let abs_i = vis_i + scroll_offset;
                         let content = format!(" {cmd:18} {desc}");
-                        if i == selected_idx {
+                        if abs_i == selected_idx {
                             ListItem::new(content)
                                 .style(ratatui::style::Style::new().bg(Color::Cyan).fg(Color::Black).bold())
                         } else {
@@ -277,11 +299,22 @@ impl<'a> Component for ComposerComponent<'a> {
                     })
                     .collect();
 
+                // Build title with scroll indicators
+                let title = if has_more_above && has_more_below {
+                    " Commands ▲▼ "
+                } else if has_more_above {
+                    " Commands ▲ "
+                } else if has_more_below {
+                    " Commands ▼ "
+                } else {
+                    " Commands "
+                };
+
                 let popup_list = List::new(list_items).block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(ratatui::style::Style::new().fg(Color::Cyan))
-                        .title(" Commands "),
+                        .title(title),
                 );
 
                 // Dynamic width: 55% of terminal width, clamped to [40, 60]
