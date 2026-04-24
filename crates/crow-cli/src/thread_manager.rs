@@ -124,9 +124,18 @@ impl ThreadManager {
                 *sid = None;
             }
             Op::Compact => {
+                let mut state = self.thread_state.lock().await;
+                if state.status == TurnStatus::InProgress {
+                    return; // Refuse if another turn or compaction is active
+                }
+                state.status = TurnStatus::InProgress;
+                state.phase = crow_runtime::event::TurnPhase::Compacting;
+                drop(state);
+
                 let msgs = self.messages.clone();
                 let compiler = self.runtime.compiler.clone();
                 let tx = self.ui_tx.clone();
+                let thread_state = self.thread_state.clone();
                 tokio::spawn(async move {
                     let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
                         "    🔄 Starting explicit context compaction...".into(),
@@ -144,6 +153,13 @@ impl ThreadManager {
                         )));
                     }
                     let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: false }));
+                    
+                    // Reset state back to Idle
+                    let mut ts = thread_state.lock().await;
+                    ts.status = TurnStatus::Idle;
+                    ts.phase = crow_runtime::event::TurnPhase::Complete;
+                    drop(ts);
+                    let _ = tx.send(EngineEvent::SessionComplete);
                 });
             }
             Op::SwarmRun(prompt) => {

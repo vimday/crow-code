@@ -29,7 +29,9 @@ pub async fn run_tui_loop(
         // Update terminal title (Codex pattern: workspace + state)
         {
             let title_state = if state.is_streaming {
-                "Working"
+                "Streaming"
+            } else if let Some(ref phase) = state.turn_phase {
+                phase.as_str()
             } else if state.is_task_running() {
                 "Running"
             } else {
@@ -286,6 +288,7 @@ pub async fn run_tui_loop(
                     }
                     state.active_action = None;
                     state.task_start_time = None;
+                    state.turn_phase = None;
                     // Reset streaming metrics (Yomi pattern)
                     state.is_streaming = false;
                     state.streaming_token_estimate = 0.0;
@@ -441,6 +444,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 }
                 TurnEvent::PhaseChanged { phase, .. } => {
                     state.active_action = Some(format!("{phase}"));
+                    state.turn_phase = Some(format!("{phase}"));
                 }
             }
         }

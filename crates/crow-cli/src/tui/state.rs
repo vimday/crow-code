@@ -110,6 +110,8 @@ pub struct AppState {
     pub streaming_token_estimate: f64,
     /// When the current streaming turn started (for elapsed time display).
     pub streaming_start_time: Option<Instant>,
+    /// The agent's current deterministic execution phase (if active)
+    pub turn_phase: Option<String>,
 
     // ── Context Window Usage (Yomi StatusBar pattern) ────────────────
     /// Last known total token usage and context window size.
@@ -191,6 +193,7 @@ impl AppState {
             is_streaming: false,
             streaming_token_estimate: 0.0,
             streaming_start_time: None,
+            turn_phase: None,
             ctx_usage: None,
             status_message: None,
             status_message_timeout: None,
