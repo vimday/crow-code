@@ -108,8 +108,8 @@ pub async fn run_tui_loop(
                     state.last_ctrl_c = None;
                     state.quit_hint_until = None;
 
-                    // Dismiss shortcut overlay on any key except `?`
-                    if state.show_shortcuts_overlay && key.code != KeyCode::Char('?') {
+                    // Dismiss shortcut overlay on any key except `?` or `？`
+                    if state.show_shortcuts_overlay && key.code != KeyCode::Char('?') && key.code != KeyCode::Char('？') {
                         state.show_shortcuts_overlay = false;
                     }
 
@@ -224,7 +224,7 @@ pub async fn run_tui_loop(
                     }
 
                     // ── `?` toggles shortcut overlay (Codex pattern) ─────────
-                    if key.code == KeyCode::Char('?')
+                    if (key.code == KeyCode::Char('?') || key.code == KeyCode::Char('？'))
                         && state.focus == crate::tui::state::Focus::Composer
                         && state.composer.is_empty()
                         && !state.is_task_running()
