@@ -171,6 +171,9 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     )
     .await;
 
+    // Clear terminal title before leaving alternate screen
+    let _ = crate::tui::terminal_title::clear_terminal_title();
+
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),

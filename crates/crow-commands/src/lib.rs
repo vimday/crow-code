@@ -13,6 +13,7 @@ pub fn get_palette_commands(query: &str) -> Vec<(String, String)> {
         ("/view", "Swap Lens Mode (focus|evidence|audit)"),
         ("/swarm", "Launch background sub-agent swarm"),
         ("/compact", "Force context compaction"),
+        ("/diff", "Show git diff (including untracked files)"),
         ("/memory", "Manage persistent workspace memory"),
         ("/session list", "List saved sessions"),
         ("/session resume", "Resume a saved session"),

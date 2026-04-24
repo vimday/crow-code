@@ -8,4 +8,5 @@ pub mod render;
 pub mod shimmer;
 pub mod state;
 pub mod stream_controller;
+pub mod terminal_title;
 pub mod theme;

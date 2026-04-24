@@ -68,7 +68,7 @@ pub fn execute_command_string(
     state: &mut AppState,
     prompt: String,
     tx: &mpsc::UnboundedSender<TuiMessage>,
-    _cfg: &CrowConfig,
+    cfg: &CrowConfig,
     thread_manager: &Arc<crate::thread_manager::ThreadManager>,
 ) {
     let trimmed = prompt.trim();
@@ -125,7 +125,9 @@ pub fn execute_command_string(
                         "  /model         Show current model",
                         "  /swarm <task>  Launch background sub-agent",
                         "  /compact       Force context compaction",
+                        "  /diff          Show git diff (including untracked)",
                         "  /memory        Manage persistent workspace memory",
+                        "  /exit          Exit Crow",
                         "",
                         "Shortcuts:",
                         "  Ctrl+C         Interrupt / quit (press twice)",
@@ -134,6 +136,7 @@ pub fn execute_command_string(
                         "  Ctrl+L         Clear screen",
                         "  Ctrl+U         Clear input",
                         "  Esc            Interrupt running task",
+                        "  ?              Toggle shortcut overlay",
                         "  !<cmd>         Execute shell command",
                     ]
                     .join("\n"),
@@ -179,9 +182,87 @@ pub fn execute_command_string(
                     kind: CellKind::User,
                     payload: "/compact".into(),
                 });
+                // Actually trigger compaction through the thread manager
+                let tm = thread_manager.clone();
+                let tx_c = tx.clone();
+                tokio::spawn(async move {
+                    // Send a special compaction prompt that the agent loop will interpret
+                    tm.submit(crate::thread_manager::Op::Input(
+                        "[SYSTEM: Force context compaction now. Summarize the conversation so far concisely.]".to_string()
+                    )).await;
+                    let _ = tx_c.send(TuiMessage::AgentEvent(
+                        crate::event::AgentEvent::Log("Context compaction initiated.".into())
+                    ));
+                });
                 state.history.push(Cell {
                     kind: CellKind::Log,
-                    payload: "Context compaction will run before the next turn.".into(),
+                    payload: "Compacting context window...".into(),
+                });
+            }
+            "diff" => {
+                state.history.push(Cell {
+                    kind: CellKind::User,
+                    payload: "/diff".into(),
+                });
+                // Show git diff including untracked files (Codex pattern)
+                let workspace = cfg.workspace.clone();
+                let tx_diff = tx.clone();
+                tokio::spawn(async move {
+                    let mut diff_output = String::new();
+
+                    // Tracked changes
+                    if let Ok(output) = tokio::process::Command::new("git")
+                        .args(["diff", "--stat", "HEAD"])
+                        .current_dir(&workspace)
+                        .output()
+                        .await
+                    {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        if !stdout.trim().is_empty() {
+                            diff_output.push_str("Changes (tracked):\n");
+                            diff_output.push_str(&stdout);
+                        }
+                    }
+
+                    // Staged changes
+                    if let Ok(output) = tokio::process::Command::new("git")
+                        .args(["diff", "--stat", "--cached"])
+                        .current_dir(&workspace)
+                        .output()
+                        .await
+                    {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        if !stdout.trim().is_empty() {
+                            if !diff_output.is_empty() { diff_output.push('\n'); }
+                            diff_output.push_str("Changes (staged):\n");
+                            diff_output.push_str(&stdout);
+                        }
+                    }
+
+                    // Untracked files
+                    if let Ok(output) = tokio::process::Command::new("git")
+                        .args(["ls-files", "--others", "--exclude-standard"])
+                        .current_dir(&workspace)
+                        .output()
+                        .await
+                    {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        if !stdout.trim().is_empty() {
+                            if !diff_output.is_empty() { diff_output.push('\n'); }
+                            diff_output.push_str("Untracked files:\n");
+                            for file in stdout.lines() {
+                                diff_output.push_str(&format!("  + {file}\n"));
+                            }
+                        }
+                    }
+
+                    if diff_output.trim().is_empty() {
+                        diff_output = "Working tree is clean.".into();
+                    }
+
+                    let _ = tx_diff.send(TuiMessage::AgentEvent(
+                        crate::event::AgentEvent::Log(diff_output),
+                    ));
                 });
             }
             "memory" => {

@@ -120,6 +120,14 @@ pub struct AppState {
     pub status_message: Option<StatusMessage>,
     /// When the status message should auto-clear.
     pub status_message_timeout: Option<Instant>,
+
+    // ── Shortcut Overlay (Codex `?` key pattern) ────────────────────
+    /// When true, the shortcut help overlay is visible.
+    pub show_shortcuts_overlay: bool,
+
+    // ── Quit Hint (Codex "press again to quit" pattern) ─────────────
+    /// When set, display "Ctrl+C again to quit" until this instant.
+    pub quit_hint_until: Option<Instant>,
 }
 
 /// Transient status bar message with severity level and optional auto-clear.
@@ -186,6 +194,8 @@ impl AppState {
             ctx_usage: None,
             status_message: None,
             status_message_timeout: None,
+            show_shortcuts_overlay: false,
+            quit_hint_until: None,
         }
     }
 

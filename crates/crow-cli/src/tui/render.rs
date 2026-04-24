@@ -45,6 +45,13 @@ pub fn render_app(
     let swarm_lines = if state.active_swarms.is_empty() { 0 } else { 1 };
     let popup_lines = composer_comp.get_popup_height(state);
 
+    // Determine footer hint height (Codex pattern: contextual keyboard hints)
+    let footer_lines: u16 = if state.show_shortcuts_overlay {
+        7 // shortcut overlay (multi-line)
+    } else {
+        1 // quit hint / interrupt hint / shortcut hint
+    };
+
     let main_split = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -62,6 +69,7 @@ pub fn render_app(
             Constraint::Min(0),                 // Conversation pane
             Constraint::Length(swarm_lines),    // Swarm bar
             Constraint::Length(1),              // Status bar
+            Constraint::Length(footer_lines),   // Footer hints
             Constraint::Length(popup_lines),    // Dynamic Command Palette Popup
             Constraint::Length(composer_lines), // Composer
         ])
@@ -76,13 +84,14 @@ pub fn render_app(
     }
 
     render_status_bar(f, state, chunks[2]);
+    render_footer_hints(f, state, chunks[3]);
 
     // Group the bottom areas for passing to composer
     let compound_composer_rect = ratatui::layout::Rect {
-        x: chunks[3].x,
-        y: chunks[3].y,
-        width: chunks[3].width,
-        height: chunks[3].height + chunks[4].height,
+        x: chunks[4].x,
+        y: chunks[4].y,
+        width: chunks[4].width,
+        height: chunks[4].height + chunks[5].height,
     };
     composer_comp.render(f, compound_composer_rect, state);
     
@@ -449,6 +458,84 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
 
     let p = Paragraph::new(Line::from(spans))
         .style(ratatui::style::Style::new().bg(colors::border()));
+    f.render_widget(p, area);
+}
+
+// ── Footer Hints (Codex pattern: contextual keyboard affordances) ────────────
+
+fn render_footer_hints(f: &mut Frame, state: &AppState, area: Rect) {
+    if area.width < 4 || area.height == 0 {
+        return;
+    }
+
+    use ratatui::style::{Style, Stylize};
+
+    let lines = if state.show_shortcuts_overlay {
+        // Full shortcut overlay (Codex `?` key pattern)
+        vec![
+            Line::from(vec![
+                "  enter".bold().dim(),
+                " submit".dim(),
+                "      ".into(),
+                "esc".bold().dim(),
+                " interrupt".dim(),
+            ]),
+            Line::from(vec![
+                "  shift+enter".bold().dim(),
+                " newline".dim(),
+                "  ".into(),
+                "ctrl+c".bold().dim(),
+                " quit (×2)".dim(),
+            ]),
+            Line::from(vec![
+                "  /".bold().dim(),
+                " commands".dim(),
+                "        ".into(),
+                "ctrl+d".bold().dim(),
+                " quit now".dim(),
+            ]),
+            Line::from(vec![
+                "  !".bold().dim(),
+                " shell cmd".dim(),
+                "       ".into(),
+                "tab".bold().dim(),
+                " switch focus".dim(),
+            ]),
+            Line::from(vec![
+                "  pgup/pgdn".bold().dim(),
+                " scroll".dim(),
+                "   ".into(),
+                "ctrl+u".bold().dim(),
+                " clear input".dim(),
+            ]),
+            Line::from(vec![
+                "  ↑/↓".bold().dim(),
+                " input history".dim(),
+            ]),
+            Line::from("  ? again to dismiss".dim()),
+        ]
+    } else if state.quit_hint_until.is_some_and(|t| std::time::Instant::now() < t) {
+        vec![Line::from(vec![
+            "  ".into(),
+            "ctrl+c".bold().fg(colors::accent_warning()),
+            " again to quit".fg(colors::accent_warning()),
+        ])]
+    } else if state.is_task_running() {
+        vec![Line::from(vec![
+            "  ".into(),
+            "esc".bold().dim(),
+            " to interrupt".dim(),
+        ])]
+    } else {
+        vec![Line::from(vec![
+            "  ".into(),
+            "?".bold().dim(),
+            " for shortcuts".dim(),
+        ])]
+    };
+
+    let p = Paragraph::new(lines)
+        .style(Style::new());
     f.render_widget(p, area);
 }
 

@@ -26,6 +26,19 @@ pub async fn run_tui_loop(
     let mut history_comp = HistoryComponent::new();
 
     'event_loop: loop {
+        // Update terminal title (Codex pattern: workspace + state)
+        {
+            let title_state = if state.is_streaming {
+                "Working"
+            } else if state.is_task_running() {
+                "Running"
+            } else {
+                "Ready"
+            };
+            let title = format!("🦅 Crow · {} · {}", state.workspace_name, title_state);
+            let _ = crate::tui::terminal_title::set_terminal_title(&title);
+        }
+
         terminal.draw(|f| render_app(f, state, &mut composer_comp, &mut history_comp))?;
 
         // Poll for keyboard events
@@ -56,17 +69,11 @@ pub async fn run_tui_loop(
                                 break 'event_loop; // Second Ctrl+C within window: quit
                             } else {
                                 state.last_ctrl_c = Some(Instant::now());
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: "Press Ctrl+C again to quit.".into(),
-                                });
+                                state.quit_hint_until = Some(Instant::now() + CTRL_C_QUIT_WINDOW);
                             }
                         } else {
                             state.last_ctrl_c = Some(Instant::now());
-                            state.history.push(Cell {
-                                kind: CellKind::Log,
-                                payload: "Press Ctrl+C again to quit.".into(),
-                            });
+                            state.quit_hint_until = Some(Instant::now() + CTRL_C_QUIT_WINDOW);
                         }
                         continue;
                     }
@@ -97,6 +104,12 @@ pub async fn run_tui_loop(
 
                     // Reset Ctrl+C quit window on any other key
                     state.last_ctrl_c = None;
+                    state.quit_hint_until = None;
+
+                    // Dismiss shortcut overlay on any key except `?`
+                    if state.show_shortcuts_overlay && key.code != KeyCode::Char('?') {
+                        state.show_shortcuts_overlay = false;
+                    }
 
                     // ── Shell Command Approval Interception ───────────────────
                     if let crate::tui::state::ApprovalState::PendingCommand(cmd, mut selected_idx) =
@@ -205,6 +218,16 @@ pub async fn run_tui_loop(
                         } else {
                             state.focus = crate::tui::state::Focus::Composer;
                         }
+                        continue;
+                    }
+
+                    // ── `?` toggles shortcut overlay (Codex pattern) ─────────
+                    if key.code == KeyCode::Char('?')
+                        && state.focus == crate::tui::state::Focus::Composer
+                        && state.composer.is_empty()
+                        && !state.is_task_running()
+                    {
+                        state.show_shortcuts_overlay = !state.show_shortcuts_overlay;
                         continue;
                     }
 
@@ -349,6 +372,11 @@ pub async fn run_tui_loop(
 
                     // Auto-clear expired status messages (Yomi pattern)
                     state.check_status_timeout();
+
+                    // Auto-expire quit hint (Codex pattern)
+                    if state.quit_hint_until.is_some_and(|t| Instant::now() >= t) {
+                        state.quit_hint_until = None;
+                    }
 
                     if let Some(start) = state.task_start_time {
                         if start.elapsed() > Duration::from_secs(180) {
