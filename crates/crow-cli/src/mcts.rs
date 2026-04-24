@@ -28,6 +28,8 @@ pub struct MctsConfig {
     pub max_rounds: usize,
     /// LLM temperature for branch diversity (default: 0.8).
     pub temperature: f64,
+    /// Delay between launching concurrent branches to avoid 429 rate limits (default: 500ms).
+    pub jitter_ms: u64,
 }
 
 impl Default for MctsConfig {
@@ -36,6 +38,7 @@ impl Default for MctsConfig {
             branch_factor: 3,
             max_rounds: 2,
             temperature: 0.8,
+            jitter_ms: 500,
         }
     }
 }
@@ -61,10 +64,16 @@ impl MctsConfig {
             .unwrap_or(0.8_f64)
             .clamp(0.0, 2.0);
 
+        let jitter_ms = std::env::var("CROW_MCTS_JITTER_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500_u64);
+
         Self {
             branch_factor,
             max_rounds,
             temperature,
+            jitter_ms,
         }
     }
 
@@ -156,10 +165,17 @@ pub async fn explore_round(
         let temperature = config.temperature;
         let lang_clone = lang.clone();
         let snap_clone = snapshot_id.clone();
+        let delay = std::time::Duration::from_millis(branch_id as u64 * config.jitter_ms);
+        let timeout = std::time::Duration::from_secs(120) + delay;
 
         join_set.spawn(async move {
+            // Apply stagger delay to avoid hammering the LLM provider concurrently
+            if delay.as_millis() > 0 {
+                tokio::time::sleep(delay).await;
+            }
+            
             match tokio::time::timeout(
-                std::time::Duration::from_secs(120),
+                timeout,
                 run_branch(
                     branch_id,
                     &comp,
@@ -180,7 +196,7 @@ pub async fn explore_round(
                     plan: empty_plan(),
                     sandbox: dummy_sandbox(),
                     passed: false,
-                    log: format!("Branch {branch_id} timed out after 120s (likely network hang)"),
+                    log: format!("Branch {branch_id} timed out after {}s (likely network hang)", timeout.as_secs()),
                 },
             }
         });

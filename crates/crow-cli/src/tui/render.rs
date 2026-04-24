@@ -551,24 +551,35 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
     // ── LEFT: Mode + Git + Streaming indicator ──────────────────────
     let left = if state.is_streaming {
         let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
-        let elapsed = state
-            .streaming_start_time
-            .map(|t| {
-                let secs = t.elapsed().as_secs();
-                if secs < 60 {
-                    format!("{secs}s")
-                } else {
-                    format!("{}m{}s", secs / 60, secs % 60)
-                }
-            })
-            .unwrap_or_default();
+        
+        let (elapsed_str, tps_str) = if let Some(start_time) = state.streaming_start_time {
+            let elapsed_secs_f64 = start_time.elapsed().as_secs_f64();
+            let elapsed_secs = start_time.elapsed().as_secs();
+            
+            let elapsed_fmt = if elapsed_secs < 60 {
+                format!("{elapsed_secs}s")
+            } else {
+                format!("{}m{}s", elapsed_secs / 60, elapsed_secs % 60)
+            };
+            
+            let tps = if elapsed_secs_f64 > 0.5 {
+                state.streaming_token_estimate / elapsed_secs_f64
+            } else {
+                0.0
+            };
+            
+            (elapsed_fmt, format!("{tps:.1} tok/s"))
+        } else {
+            ("0s".to_string(), "0.0 tok/s".to_string())
+        };
+
         let tokens = state.streaming_token_estimate;
         let token_display = if tokens < 1000.0 {
             format!("{tokens:.0}")
         } else {
             format!("{:.1}k", tokens / 1000.0)
         };
-        format!(" {spinner} {token_display} tok · {elapsed} ")
+        format!(" {spinner} {token_display} tok · {tps_str} · {elapsed_str} ")
     } else {
         " ".to_string()
     };

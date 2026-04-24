@@ -289,6 +289,9 @@ pub async fn run_tui_loop(
                     state.active_action = None;
                     state.task_start_time = None;
                     state.turn_phase = None;
+                    
+                    let final_tokens = state.streaming_token_estimate;
+
                     // Reset streaming metrics (Yomi pattern)
                     state.is_streaming = false;
                     state.streaming_token_estimate = 0.0;
@@ -306,7 +309,12 @@ pub async fn run_tui_loop(
                             let ttft = t.ttft_ms
                                 .map(|ms| format!("{ms}ms"))
                                 .unwrap_or_else(|| "n/a".to_string());
-                            format!("Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft})", t.llm_calls)
+                            let tps_display = if total_s > 0.0 && final_tokens > 0.0 {
+                                format!(", {:.1} tok/s", final_tokens / total_s)
+                            } else {
+                                "".to_string()
+                            };
+                            format!("Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft}{tps_display})", t.llm_calls)
                         } else {
                             "Done".to_string()
                         };
