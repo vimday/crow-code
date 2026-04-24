@@ -184,8 +184,10 @@ pub fn execute_command_string(
                 });
                 // Actually trigger compaction through the thread manager
                 let tm = thread_manager.clone();
+                let token = crate::tui::state::CancellationToken::new();
+                state.cancellation = Some(token.clone());
                 tokio::spawn(async move {
-                    tm.submit(crate::thread_manager::Op::Compact).await;
+                    tm.submit(crate::thread_manager::Op::Compact(token)).await;
                 });
             }
             "diff" => {

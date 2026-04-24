@@ -58,7 +58,7 @@ impl SpinnerObserver {
             ProgressStyle::default_spinner()
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
                 .template("  \x1b[90m│\x1b[0m  {spinner:.cyan} {msg}")
-                .unwrap(),
+                .expect("valid spinner template"),
         );
         if console::Term::stdout().is_term() && std::env::var("CI").is_err() {
             spinner.enable_steady_tick(Duration::from_millis(100));

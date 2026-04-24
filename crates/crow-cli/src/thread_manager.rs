@@ -25,7 +25,7 @@ pub enum Op {
     Input(String),
     Interrupt,
     Clear,
-    Compact,
+    Compact(CancellationToken),
     SwarmRun(String),
 }
 
@@ -123,7 +123,7 @@ impl ThreadManager {
                 let mut sid = self.session_id.lock().await;
                 *sid = None;
             }
-            Op::Compact => {
+            Op::Compact(token) => {
                 let mut state = self.thread_state.lock().await;
                 if state.status == TurnStatus::InProgress {
                     return; // Refuse if another turn or compaction is active
@@ -136,6 +136,7 @@ impl ThreadManager {
                 let compiler = self.runtime.compiler.clone();
                 let tx = self.ui_tx.clone();
                 let thread_state = self.thread_state.clone();
+                
                 tokio::spawn(async move {
                     let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
                         "    🔄 Starting explicit context compaction...".into(),
@@ -143,15 +144,27 @@ impl ThreadManager {
                     let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: true }));
                     
                     let mut locked_msgs = msgs.lock().await;
-                    if let Err(e) = locked_msgs.compact_history(&compiler).await {
-                        let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
-                            format!("    ⚠️ Compaction failed: {e}")
-                        )));
-                    } else {
-                        let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
-                            "  ▶ Context compaction complete".into(),
-                        )));
+                    let cancel_token = token.runtime_token();
+                    
+                    tokio::select! {
+                        res = locked_msgs.compact_history(&compiler) => {
+                            if let Err(e) = res {
+                                let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                                    format!("    ⚠️ Compaction failed: {e}")
+                                )));
+                            } else {
+                                let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                                    "  ▶ Context compaction complete".into(),
+                                )));
+                            }
+                        }
+                        _ = cancel_token.cancelled() => {
+                            let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                                "  ⚠️ Context compaction aborted by user.".into(),
+                            )));
+                        }
                     }
+                    
                     let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: false }));
                     
                     // Reset state back to Idle

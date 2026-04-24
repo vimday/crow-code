@@ -79,17 +79,24 @@ impl BackgroundProcessManager {
                 // Read from stdout and stderr concurrently
                 let mut stdout_buf = [0u8; 1024];
                 let mut stderr_buf = [0u8; 1024];
+                let mut stdout_done = false;
+                let mut stderr_done = false;
+                
                 loop {
+                    if stdout_done && stderr_done {
+                        break;
+                    }
+                    
                     tokio::select! {
-                        res = tokio::io::AsyncReadExt::read(&mut stdout, &mut stdout_buf) => {
+                        res = tokio::io::AsyncReadExt::read(&mut stdout, &mut stdout_buf), if !stdout_done => {
                             match res {
-                                Ok(0) | Err(_) => break, // EOF or error
+                                Ok(0) | Err(_) => stdout_done = true, // EOF or error
                                 Ok(n) => { let _ = file.write_all(&stdout_buf[..n]).await; }
                             }
                         }
-                        res = tokio::io::AsyncReadExt::read(&mut stderr, &mut stderr_buf) => {
+                        res = tokio::io::AsyncReadExt::read(&mut stderr, &mut stderr_buf), if !stderr_done => {
                             match res {
-                                Ok(0) | Err(_) => break, // EOF or error
+                                Ok(0) | Err(_) => stderr_done = true, // EOF or error
                                 Ok(n) => { let _ = file.write_all(&stderr_buf[..n]).await; }
                             }
                         }
