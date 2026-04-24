@@ -3,15 +3,32 @@ use crate::IntentCompiler;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
+/// Codex-style compaction prompt. Creates a structured handoff summary
+/// that allows another LLM to seamlessly resume the task.
+pub const DEFAULT_COMPACTION_PROMPT: &str = r"You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
+
+Include:
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- What remains to be done (clear next steps)
+- Any critical data, examples, or references needed to continue
+
+Be concise, structured, and focused on helping the next LLM seamlessly continue the work.";
+
 pub struct CompactorConfig {
     /// Token threshold to trigger compaction (should be ~80% of context_window)
     pub max_history_tokens: usize,
     /// Total context window size for the model
     pub context_window: usize,
+    /// Ratio of context_window at which to trigger compaction (0.0-1.0)
+    /// Default: 0.8 (compact when history reaches 80% of context window)
+    pub compact_threshold_ratio: f64,
     /// Number of recent turns to preserve exactly during compaction
     pub preservation_turns: usize,
     /// Maximum retries for LLM-based compaction (codex pattern: backoff on failure)
     pub max_retries: usize,
+    /// Custom compaction prompt. If None, uses DEFAULT_COMPACTION_PROMPT.
+    pub compaction_prompt: Option<String>,
 }
 
 impl Default for CompactorConfig {
@@ -20,9 +37,36 @@ impl Default for CompactorConfig {
             // ~80% of 128K context window (codex pattern: DEFAULT_COMPACT_THRESHOLD)
             max_history_tokens: 80_000,
             context_window: 131_072, // 128K config bounds
+            compact_threshold_ratio: 0.8,
             preservation_turns: 4,   // Keep enough recent context for coherent reasoning
             max_retries: 2,          // Retry twice on transient LLM failures
+            compaction_prompt: None,
         }
+    }
+}
+
+impl CompactorConfig {
+    /// Create a config with a specific context window size.
+    /// The compaction threshold is automatically calculated from the ratio.
+    pub fn with_context_window(mut self, context_window: usize) -> Self {
+        self.context_window = context_window;
+        self.max_history_tokens =
+            (context_window as f64 * self.compact_threshold_ratio) as usize;
+        self
+    }
+
+    /// Set the compaction threshold ratio (0.0-1.0).
+    pub fn with_threshold_ratio(mut self, ratio: f64) -> Self {
+        self.compact_threshold_ratio = ratio.clamp(0.1, 0.95);
+        self.max_history_tokens =
+            (self.context_window as f64 * self.compact_threshold_ratio) as usize;
+        self
+    }
+
+    /// Set a custom compaction prompt.
+    pub fn with_compaction_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.compaction_prompt = Some(prompt.into());
+        self
     }
 }
 

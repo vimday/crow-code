@@ -359,7 +359,7 @@ pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
         };
     }
 
-    // 1. Active spinner is at the very bottom
+    // 1. Active spinner is at the very bottom (with shimmer animation)
     if let Some(action) = &state.active_action {
         let frame = SPINNER[state.spinner_idx % SPINNER.len()];
         let mut lines = Vec::new();
@@ -371,10 +371,17 @@ pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
             } else {
                 format!("{GUTTER}  ")
             };
-            lines.push(Line::from(vec![
-                prefix.fg(accent_cyan()),
-                line.to_string().fg(accent_cyan()),
-            ]));
+            // Use shimmer animation for the first line (active action)
+            if i == 0 {
+                let mut spans = vec![prefix.fg(accent_cyan())];
+                spans.extend(crate::tui::shimmer::shimmer_spans(line));
+                lines.push(Line::from(spans));
+            } else {
+                lines.push(Line::from(vec![
+                    prefix.fg(accent_cyan()),
+                    line.to_string().fg(accent_cyan()),
+                ]));
+            }
         }
         for item in lines.into_iter().rev() {
             push_item!(ListItem::new(item));

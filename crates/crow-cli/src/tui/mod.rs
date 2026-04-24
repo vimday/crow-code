@@ -5,6 +5,7 @@ pub mod components;
 pub mod event_loop;
 pub mod markdown_stream;
 pub mod render;
+pub mod shimmer;
 pub mod state;
 pub mod stream_controller;
 pub mod theme;

@@ -488,6 +488,13 @@ impl SessionRuntime {
             .with_dynamic_skills(&available_skills)
             .with_contract(&snapshot_id);
 
+        // ── AGENTS.md hierarchical discovery (Codex pattern) ────────
+        // Walk from project root to cwd, collecting all AGENTS.md files.
+        if let Some(agents_md) = crow_runtime::agents_md::discover_agents_md(&self.workspace) {
+            prompt_builder = prompt_builder.with_developer_instructions(&agents_md.content);
+        }
+
+        // ── Persistent workspace memory ─────────────────────────────
         let memory_file = self.workspace.join(".crow").join("memory.md");
         if let Ok(memory_content) = std::fs::read_to_string(&memory_file) {
             if !memory_content.trim().is_empty() {
@@ -536,6 +543,7 @@ impl SessionRuntime {
             background_manager: std::sync::Arc::clone(&self.background_manager),
             subagent_delegator: Some(subagent_delegator),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            max_steps: None,
         };
 
         let result = crow_runtime::agent_loop::run_agent_loop(

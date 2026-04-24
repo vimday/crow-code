@@ -60,6 +60,34 @@ pub struct TurnConfig {
     pub background_manager: Arc<crow_tools::BackgroundProcessManager>,
     pub subagent_delegator: Option<Arc<dyn crow_tools::SubagentDelegator>>,
     pub cancel_token: CancellationToken,
+    /// Maximum agent loop steps before bailing out. Default: 40.
+    pub max_steps: Option<usize>,
+}
+
+// ─── Turn Timing (Codex TurnTimingState pattern) ────────────────────
+
+/// Timing data collected during a single agent turn.
+#[derive(Debug, Clone)]
+pub struct TurnTiming {
+    /// Total wall-clock time for the entire agent turn.
+    pub total_elapsed: std::time::Duration,
+    /// Total time spent executing tool calls.
+    pub tool_execution_time: std::time::Duration,
+    /// Number of LLM API calls made during this turn (including retries).
+    pub llm_call_count: u32,
+    /// Number of pre-sampling compactions performed.
+    pub compactions: u32,
+}
+
+impl Default for TurnTiming {
+    fn default() -> Self {
+        Self {
+            total_elapsed: std::time::Duration::ZERO,
+            tool_execution_time: std::time::Duration::ZERO,
+            llm_call_count: 0,
+            compactions: 0,
+        }
+    }
 }
 
 // ─── Agent Loop Result ──────────────────────────────────────────────
@@ -73,6 +101,8 @@ pub struct AgentLoopResult {
     pub final_text: String,
     /// Total number of tool calls made during this turn.
     pub tool_call_count: usize,
+    /// Turn timing data (Codex TurnTimingState pattern).
+    pub timing: TurnTiming,
 }
 
 // ─── Agent Loop ─────────────────────────────────────────────────────
@@ -95,8 +125,11 @@ pub async fn run_agent_loop(
     messages: &mut ConversationManager,
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
+    let turn_start = std::time::Instant::now();
+    let mut timing = TurnTiming::default();
     let mut step = 0;
     let mut total_tool_calls = 0usize;
+    let max_steps = config.max_steps.unwrap_or(MAX_AGENT_STEPS);
 
     // Get tool definitions from the registry (cached for the duration of the loop)
     let tool_defs = config.tool_registry.tool_definitions();
@@ -107,18 +140,20 @@ pub async fn run_agent_loop(
 
     loop {
         step += 1;
-        if step > MAX_AGENT_STEPS {
+        if step > max_steps {
             anyhow::bail!(
-                "Agent loop exceeded {MAX_AGENT_STEPS} steps without completing. Aborting."
+                "Agent loop exceeded {max_steps} steps without completing. Aborting."
             );
         }
 
         // ── Cancellation check ──────────────────────────────────────
         if config.cancel_token.is_cancelled() {
             observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
+            timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
                 final_text: String::new(),
                 tool_call_count: total_tool_calls,
+                timing,
             });
         }
 
@@ -135,6 +170,7 @@ pub async fn run_agent_loop(
                     "    ⚠️ Pre-sampling compaction failed: {e}"
                 )));
             }
+            timing.compactions += 1;
             observer.handle_event(AgentEvent::Compacting { active: false });
         }
 
@@ -239,9 +275,11 @@ pub async fn run_agent_loop(
             // Record assistant response
             messages.push_assistant(&response_text);
 
+            timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
                 final_text: response_text,
                 tool_call_count: total_tool_calls,
+                timing,
             });
         }
 
@@ -273,6 +311,7 @@ pub async fn run_agent_loop(
         };
 
         // ── Execute tool calls with RwLock parallelism ──────────────
+        let tool_exec_start = std::time::Instant::now();
         // Read-only tools acquire a shared read lock (concurrent).
         // Write tools acquire an exclusive write lock (serialized).
         // This matches Codex's `ToolCallRuntime` pattern from `parallel.rs`.
@@ -384,6 +423,8 @@ pub async fn run_agent_loop(
             }
         }
 
+        timing.tool_execution_time += tool_exec_start.elapsed();
+
         // ── Mid-turn compaction (post-tool) ─────────────────────────
         // After tool results are added, check if context grew past budget.
         // This matches Codex's `run_auto_compact` mid-turn pattern.
@@ -397,6 +438,7 @@ pub async fn run_agent_loop(
                     "    ⚠️ Mid-turn compaction failed: {e}"
                 )));
             }
+            timing.compactions += 1;
             observer.handle_event(AgentEvent::Compacting { active: false });
         }
     }

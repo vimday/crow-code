@@ -238,24 +238,31 @@ impl IntentCompiler {
         &*self.client
     }
 
-    /// Generates an auto-compaction summary of the given messages history
-    /// to replace a long conversation with a tight summary.
+    /// Generates an auto-compaction summary using the Codex-style handoff prompt.
     pub async fn compile_summary_of_history(
         &self,
         messages: &[ChatMessage],
     ) -> Result<String, CompilerError> {
+        self.compile_summary_with_prompt(messages, None).await
+    }
+
+    /// Generates an auto-compaction summary with an optional custom prompt.
+    /// Falls back to the Codex-style handoff prompt if no custom prompt is provided.
+    pub async fn compile_summary_with_prompt(
+        &self,
+        messages: &[ChatMessage],
+        custom_prompt: Option<&str>,
+    ) -> Result<String, CompilerError> {
+        let prompt = custom_prompt
+            .unwrap_or(crate::compactor::DEFAULT_COMPACTION_PROMPT);
+
         let mut conversation = messages.to_vec();
-        conversation.push(ChatMessage::user(
+        conversation.push(ChatMessage::user(format!(
             "[SYSTEM COMPACTION REQUEST]\n\
-            The conversation history is becoming too long.\n\
-            Please generate a highly compressed, structured `<summary>` of the ENTIRE conversation history up to this point.\n\
-            Focus strictly on:\n\
-            1. The overarching goal of the task.\n\
-            2. The precise current state of the workspace (files modified, tests run).\n\
-            3. The immediate next action you were about to take.\n\
+            {prompt}\n\
             \n\
             Return ONLY the summary wrapped in `<summary>...</summary>` tags, without any other text. Do NOT emit a JSON AgentAction."
-        ));
+        )));
 
         let response = self
             .client
