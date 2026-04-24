@@ -17,6 +17,9 @@ pub struct ConversationManager {
     conversation: VecDeque<Memory>,
     max_bytes: usize,
     max_history_turns: usize,
+    /// Bumped whenever history is rewritten (compaction, rollback, clear).
+    /// Mirrors Codex's `history_version` for staleness detection.
+    history_version: u64,
 }
 
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
@@ -55,6 +58,7 @@ impl ConversationManager {
             conversation: VecDeque::new(),
             max_bytes: MAX_CONTEXT_BYTES,
             max_history_turns: MAX_HISTORY_TURNS,
+            history_version: 0,
         }
     }
 
@@ -69,6 +73,7 @@ impl ConversationManager {
     pub fn clear_all(&mut self) {
         self.system_messages.clear();
         self.conversation.clear();
+        self.history_version = self.history_version.saturating_add(1);
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
@@ -196,6 +201,7 @@ impl ConversationManager {
             // (User→Assistant→User). Providers like Anthropic reject requests
             // with consecutive same-role messages (HTTP 400).
             self.fix_role_alternation();
+            self.history_version = self.history_version.saturating_add(1);
 
             Ok(true)
         } else {
@@ -302,13 +308,33 @@ impl ConversationManager {
     }
 
     /// Checks if the auto-compaction threshold is reached.
+    /// Uses token-level estimation (Codex's ~4 chars/token heuristic)
+    /// in addition to byte-level checks.
     pub fn needs_compaction(&self) -> bool {
-        // Only compact if history itself is getting long.
-        // If the system prompt is just huge, compacting a 2-turn history won't help much!
         let hist_bytes = self.history_bytes();
         let turns = self.conversation.len();
+        let estimated_tokens = self.estimate_token_count();
 
-        hist_bytes > (self.max_bytes * 3) / 10 || turns > (self.max_history_turns * 8) / 10
+        // Token-based: compact when history tokens exceed 30% of estimated
+        // context window (assuming ~192K token window → ~768KB / 4)
+        let token_threshold = (self.max_bytes / 4) * 3 / 10;
+
+        hist_bytes > (self.max_bytes * 3) / 10
+            || turns > (self.max_history_turns * 8) / 10
+            || estimated_tokens > token_threshold
+    }
+
+    /// Approximate token count using Codex's ~4 chars/token heuristic.
+    /// This is a coarse lower bound, not a tokenizer-accurate count.
+    pub fn estimate_token_count(&self) -> usize {
+        let sys_chars: usize = self.system_messages.iter().map(|m| m.content.len()).sum();
+        let hist_chars: usize = self.conversation.iter().map(|m| m.message.content.len()).sum();
+        (sys_chars + hist_chars) / 4
+    }
+
+    /// History version counter — bumped on compaction, rollback, or clear.
+    pub fn history_version(&self) -> u64 {
+        self.history_version
     }
 
     /// Shrinks the conversation history by converting the oldest turns into a
@@ -359,10 +385,83 @@ impl ConversationManager {
     ///
     /// All messages are emitted — even pruned ones with placeholder content —
     /// to preserve the strict role alternation that providers like Anthropic require.
+    ///
+    /// Runs history normalization before export (Codex's `for_prompt` pattern):
+    /// - Ensures every assistant tool_call has a matching tool result
+    /// - Removes orphan tool results without a preceding assistant tool_call
     pub fn as_messages(&self) -> Vec<ChatMessage> {
         let mut out = self.system_messages.clone();
         out.extend(self.conversation.iter().map(|m| m.message.clone()));
+
+        // Normalize: ensure tool call/result pairing integrity
+        Self::normalize_tool_pairs(&mut out);
+
         out
+    }
+
+    /// Normalize tool call/result pairs in the message history.
+    ///
+    /// Mirrors Codex's `context_manager/normalize.rs` pattern:
+    /// 1. Collect all tool_call IDs from assistant messages
+    /// 2. Ensure each has a corresponding tool result
+    /// 3. Remove orphan tool results
+    fn normalize_tool_pairs(messages: &mut Vec<ChatMessage>) {
+        use std::collections::HashSet;
+
+        // Collect all tool_call IDs that the assistant requested
+        let mut expected_ids: HashSet<String> = HashSet::new();
+        for msg in messages.iter() {
+            if let Some(ref tcs) = msg.tool_calls {
+                for tc in tcs {
+                    expected_ids.insert(tc.id.clone());
+                }
+            }
+        }
+
+        // Remove orphan tool results (tool_call_id not in expected_ids)
+        messages.retain(|msg| {
+            if msg.role == ChatRole::Tool {
+                if let Some(ref tc_id) = msg.tool_call_id {
+                    return expected_ids.contains(tc_id);
+                }
+            }
+            true
+        });
+
+        // Collect IDs that DO have results
+        let mut fulfilled_ids: HashSet<String> = HashSet::new();
+        for msg in messages.iter() {
+            if msg.role == ChatRole::Tool {
+                if let Some(ref tc_id) = msg.tool_call_id {
+                    fulfilled_ids.insert(tc_id.clone());
+                }
+            }
+        }
+
+        // For any unfulfilled tool call, inject a synthetic error result
+        // to prevent API 400 errors from unpaired call/result
+        let mut insertions: Vec<(usize, ChatMessage)> = Vec::new();
+        for (idx, msg) in messages.iter().enumerate() {
+            if let Some(ref tcs) = msg.tool_calls {
+                for tc in tcs {
+                    if !fulfilled_ids.contains(&tc.id) {
+                        insertions.push((
+                            idx + 1,
+                            ChatMessage::tool_result(
+                                &tc.id,
+                                "[SYSTEM: Tool result missing — execution was interrupted]",
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Insert in reverse order to preserve indices
+        for (idx, msg) in insertions.into_iter().rev() {
+            let insert_at = idx.min(messages.len());
+            messages.insert(insert_at, msg);
+        }
     }
 }
 

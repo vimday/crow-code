@@ -507,11 +507,6 @@ impl SessionRuntime {
             messages.push_user(prompt);
         }
 
-        // Compact if needed
-        observer.handle_event(crate::event::AgentEvent::Compacting { active: true });
-        let _ = messages.compact_history(&self.compiler).await;
-        observer.handle_event(crate::event::AgentEvent::Compacting { active: false });
-
         // Run the native agent loop
         observer.handle_event(crate::event::AgentEvent::Turn(
             crate::event::TurnEvent::PhaseChanged {
@@ -531,15 +526,21 @@ impl SessionRuntime {
             task_registry: self.task_registry.clone(),
         });
 
-        let result = crow_runtime::agent_loop::run_agent_loop(
-            std::sync::Arc::clone(&self.compiler),
-            messages,
-            &self.workspace,  // Live workspace — agent writes directly
-            std::sync::Arc::clone(&self.tool_registry),
-            std::sync::Arc::clone(&self.permissions),
+        // Build TurnConfig (Codex TurnContext pattern — bundles all per-turn state)
+        let turn_config = crow_runtime::agent_loop::TurnConfig {
+            compiler: std::sync::Arc::clone(&self.compiler),
+            workspace_root: self.workspace.clone(),
+            tool_registry: std::sync::Arc::clone(&self.tool_registry),
+            permissions: std::sync::Arc::clone(&self.permissions),
             file_state,
-            std::sync::Arc::clone(&self.background_manager),
-            Some(subagent_delegator),
+            background_manager: std::sync::Arc::clone(&self.background_manager),
+            subagent_delegator: Some(subagent_delegator),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let result = crow_runtime::agent_loop::run_agent_loop(
+            turn_config,
+            messages,
             observer,
         )
         .await?;

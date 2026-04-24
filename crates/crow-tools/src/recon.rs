@@ -13,6 +13,8 @@ impl Tool for ListDirTool {
         "List directory contents with detailed file information"
     }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -64,6 +66,8 @@ impl Tool for SearchTool {
     fn description(&self) -> &'static str {
         "Search for a regex pattern across files using ripgrep. Returns matching lines with file paths and line numbers."
     }
+
+    fn is_read_only(&self) -> bool { true }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -143,6 +147,8 @@ impl Tool for FetchUrlTool {
         "Fetch and process the text content of a public URL"
     }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -202,6 +208,8 @@ impl Tool for FileInfoTool {
         "Show file metadata (size, type, permissions)"
     }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -238,6 +246,8 @@ impl Tool for WordCountTool {
         "Count lines, words, and bytes in a file"
     }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -273,6 +283,8 @@ impl Tool for DirTreeTool {
     fn description(&self) -> &'static str {
         "Show directory tree structure with a depth limit"
     }
+
+    fn is_read_only(&self) -> bool { true }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -311,6 +323,8 @@ impl Tool for ReadFilesTool {
     fn description(&self) -> &'static str {
         "Read the contents of a file from the workspace. Supports optional line-range selection."
     }
+
+    fn is_read_only(&self) -> bool { true }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({

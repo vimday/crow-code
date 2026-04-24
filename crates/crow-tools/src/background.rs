@@ -172,6 +172,8 @@ impl Tool for BashStatusTool {
         "Check the status and read the latest output of a background bash task."
     }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

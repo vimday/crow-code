@@ -143,6 +143,8 @@ impl Tool for GrepTool {
          Always searches hidden files. Use this instead of bash grep/rg for structured results."
     }
 
+    fn is_read_only(&self) -> bool { true }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

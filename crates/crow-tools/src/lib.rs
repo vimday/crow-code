@@ -87,6 +87,18 @@ pub trait Tool: Send + Sync {
     /// JSON Schema for the tool's input parameters (OpenAI function calling format).
     fn parameters(&self) -> serde_json::Value;
 
+    /// Whether this tool only reads state and never mutates the workspace.
+    /// Read-only tools can execute in parallel; write tools acquire exclusive access.
+    /// Inspired by Codex's `ToolCallRuntime` RwLock parallelism pattern.
+    fn is_read_only(&self) -> bool {
+        false
+    }
+
+    /// Per-tool timeout. Override for tools that need longer (e.g. bash) or shorter windows.
+    fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(120)
+    }
+
     /// Execute the tool given a set of JSON parameters and execution context.
     async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput>;
 }
@@ -142,5 +154,19 @@ impl ToolRegistry {
 
     pub fn has(&self, name: &str) -> bool {
         self.tools.contains_key(name)
+    }
+
+    /// Check if a tool is read-only (safe for parallel execution).
+    /// Returns false for unknown tools (conservative default).
+    pub fn is_read_only(&self, name: &str) -> bool {
+        self.tools.get(name).is_some_and(|t| t.is_read_only())
+    }
+
+    /// Get the per-tool timeout duration.
+    /// Returns the default 120s for unknown tools.
+    pub fn tool_timeout(&self, name: &str) -> std::time::Duration {
+        self.tools
+            .get(name)
+            .map_or(std::time::Duration::from_secs(120), |t| t.timeout())
     }
 }

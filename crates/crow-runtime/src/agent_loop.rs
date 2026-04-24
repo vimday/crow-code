@@ -1,22 +1,31 @@
 //! Native tool-calling agent loop.
 //!
 //! Replaces the legacy `epistemic.rs` loop (custom AgentAction JSON parsing)
-//! with a Yomi-inspired streaming tool-call state machine. The agent:
+//! with a Codex-inspired streaming tool-call state machine. The agent:
 //!
-//! 1. Sends messages + tool definitions to the LLM provider via streaming
-//! 2. Collects response: text chunks + tool_call requests
-//! 3. If no tool_calls → conversation complete, return
-//! 4. For each tool_call → execute (in parallel) via ToolRegistry
-//! 5. Append tool results as tool-role messages
-//! 6. Loop back to step 1
+//! 1. Pre-sampling compaction: if context nears budget, compact before calling LLM
+//! 2. Sends messages + tool definitions to the LLM provider via streaming
+//! 3. Collects response: text chunks + tool_call requests
+//! 4. If no tool_calls → conversation complete, return
+//! 5. For each tool_call → execute via RwLock-gated parallel dispatch
+//! 6. Append tool results as tool-role messages
+//! 7. Mid-turn compaction: if context grew past budget from tool outputs, compact
+//! 8. Loop back to step 1
 //!
-//! This architecture matches how Codex, Claude Code, and Yomi operate,
-//! enabling the agent to naturally decide which tools to invoke without
-//! requiring custom JSON output formatting.
+//! Key architectural features matching Codex parity:
+//! - **Double-loop**: inner retry loop for transient LLM errors
+//! - **Pre-sampling compaction**: compact before each LLM call (Codex `run_pre_sampling_compact`)
+//! - **Mid-turn compaction**: compact after tool outputs grow context too large
+//! - **RwLock parallelism**: read-only tools run in parallel, write tools acquire exclusive lock
+//! - **CancellationToken propagation**: cancel reaches in-flight tool tasks via `tokio::select!`
+//! - **Per-tool timeouts**: from `Tool::timeout()` instead of hardcoded 120s
+//! - **Context-window-exceeded recovery**: auto-compact and retry on overflow errors
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
@@ -31,6 +40,27 @@ const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024; // 100 KB
 
 /// Maximum number of tool calls to execute per response.
 const MAX_TOOL_CALLS_PER_TURN: usize = 20;
+
+/// Maximum retries for transient LLM errors (inner retry loop).
+const MAX_LLM_RETRIES: u32 = 5;
+
+// ─── Turn Configuration ─────────────────────────────────────────────
+
+/// Aggregated configuration for a single agent turn.
+///
+/// Replaces the previous 9 bare function parameters, resolving
+/// the `clippy::too_many_arguments` lint. Modeled after Codex's
+/// `TurnContext` which bundles all per-turn state into one struct.
+pub struct TurnConfig {
+    pub compiler: Arc<crow_brain::IntentCompiler>,
+    pub workspace_root: PathBuf,
+    pub tool_registry: Arc<crow_tools::ToolRegistry>,
+    pub permissions: Arc<crow_tools::PermissionEnforcer>,
+    pub file_state: Arc<crow_tools::FileStateStore>,
+    pub background_manager: Arc<crow_tools::BackgroundProcessManager>,
+    pub subagent_delegator: Option<Arc<dyn crow_tools::SubagentDelegator>>,
+    pub cancel_token: CancellationToken,
+}
 
 // ─── Agent Loop Result ──────────────────────────────────────────────
 
@@ -55,27 +85,25 @@ pub struct AgentLoopResult {
 /// protocol. The loop drives:
 ///
 /// ```text
-/// LLM Response → Parse tool_calls → Execute tools → Feed results → LLM Response → ...
+/// [Pre-compact] → LLM Response → Parse tool_calls → Execute tools →
+/// Feed results → [Mid-compact] → LLM Response → ...
 /// ```
 ///
 /// Returns when the LLM responds with text only (no tool calls).
-#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
-    compiler: Arc<crow_brain::IntentCompiler>,
+    config: TurnConfig,
     messages: &mut ConversationManager,
-    workspace_root: &Path,
-    tool_registry: Arc<crow_tools::ToolRegistry>,
-    permissions: Arc<crow_tools::PermissionEnforcer>,
-    file_state: Arc<crow_tools::FileStateStore>,
-    background_manager: Arc<crow_tools::BackgroundProcessManager>,
-    subagent_delegator: Option<Arc<dyn crow_tools::SubagentDelegator>>,
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
     let mut step = 0;
     let mut total_tool_calls = 0usize;
 
     // Get tool definitions from the registry (cached for the duration of the loop)
-    let tool_defs = tool_registry.tool_definitions();
+    let tool_defs = config.tool_registry.tool_definitions();
+
+    // RwLock for read/write tool parallelism (Codex's `parallel_execution` pattern).
+    // Read-only tools acquire a read lock (concurrent), write tools acquire a write lock (exclusive).
+    let execution_lock: Arc<RwLock<()>> = Arc::new(RwLock::new(()));
 
     loop {
         step += 1;
@@ -86,12 +114,28 @@ pub async fn run_agent_loop(
         }
 
         // ── Cancellation check ──────────────────────────────────────
-        if observer.is_cancelled() {
+        if config.cancel_token.is_cancelled() {
             observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
             return Ok(AgentLoopResult {
                 final_text: String::new(),
                 tool_call_count: total_tool_calls,
             });
+        }
+
+        // ── Pre-sampling compaction (Codex pattern) ─────────────────
+        // Check context budget BEFORE sending to the LLM. This prevents
+        // context-window-exceeded errors from the provider.
+        if messages.needs_compaction() {
+            observer.handle_event(AgentEvent::Log(
+                "    🔄 Pre-sampling compaction: context nearing limit...".into(),
+            ));
+            observer.handle_event(AgentEvent::Compacting { active: true });
+            if let Err(e) = messages.compact_history(&config.compiler).await {
+                observer.handle_event(AgentEvent::Log(format!(
+                    "    ⚠️ Pre-sampling compaction failed: {e}"
+                )));
+            }
+            observer.handle_event(AgentEvent::Compacting { active: false });
         }
 
         observer.handle_event(AgentEvent::StateChanged {
@@ -100,7 +144,7 @@ pub async fn run_agent_loop(
         });
         observer.handle_event(AgentEvent::Thinking(step as u32, MAX_AGENT_STEPS as u32));
 
-        // ── Stream LLM response with tools ──────────────────────────
+        // ── Stream LLM response with tools (inner retry loop) ───────
         let response = {
             struct ToolObserverAdapter<'a>(&'a mut dyn EventHandler);
             impl crow_brain::ToolStreamObserver for ToolObserverAdapter<'_> {
@@ -119,10 +163,14 @@ pub async fn run_agent_loop(
 
             let mut adapter = ToolObserverAdapter(observer);
             let mut retry_count = 0u32;
-            const MAX_LLM_RETRIES: u32 = 3;
 
             let result = loop {
-                match compiler.client()
+                // Check cancellation before each LLM attempt
+                if config.cancel_token.is_cancelled() {
+                    break Err(crow_brain::BrainError::Config("Turn cancelled".into()));
+                }
+
+                match config.compiler.client()
                     .generate_streaming_with_tools(
                         &messages.as_messages(),
                         &tool_defs,
@@ -131,21 +179,43 @@ pub async fn run_agent_loop(
                     .await
                 {
                     Ok(resp) => break Ok(resp),
+                    Err(ref brain_err) if is_context_overflow(brain_err) => {
+                        // Context window exceeded — compact and retry once
+                        adapter.0.handle_event(AgentEvent::Log(
+                            "    🔄 Context window exceeded, compacting and retrying...".into(),
+                        ));
+                        adapter.0.handle_event(AgentEvent::Compacting { active: true });
+                        let compact_result = messages.compact_history(&config.compiler).await;
+                        adapter.0.handle_event(AgentEvent::Compacting { active: false });
+
+                        if compact_result.is_err() || retry_count >= 1 {
+                            break Err(crow_brain::BrainError::Config(
+                                "Context window exceeded even after compaction".into(),
+                            ));
+                        }
+                        retry_count += 1;
+                        continue;
+                    }
                     Err(ref brain_err) if brain_err.is_retryable() && retry_count < MAX_LLM_RETRIES => {
                         retry_count += 1;
                         let backoff_secs = 2u64.pow(retry_count);
-                        adapter.0.handle_event(AgentEvent::Retrying {
-                            attempt: retry_count,
-                            max_attempts: MAX_LLM_RETRIES,
-                            reason: format!("Transient LLM error: {brain_err}"),
-                        });
+
+                        // Suppress first retry event to reduce UI noise (Codex pattern)
+                        if retry_count > 1 {
+                            adapter.0.handle_event(AgentEvent::Retrying {
+                                attempt: retry_count,
+                                max_attempts: MAX_LLM_RETRIES,
+                                reason: format!("Transient LLM error: {brain_err}"),
+                            });
+                        }
+
                         tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
                     }
                     Err(e) => break Err(e),
                 }
             };
 
-            // Reclaim observer from adapter — adapter is dropped here
+            // Reclaim observer from adapter
             observer = adapter.0;
             result
         };
@@ -187,7 +257,8 @@ pub async fn run_agent_loop(
         }
 
         // Record the assistant message with tool calls
-        let tc_requests: Vec<crow_brain::ToolCallRequest> = tool_calls.iter().map(|tc| (*tc).clone()).collect();
+        let tc_requests: Vec<crow_brain::ToolCallRequest> =
+            tool_calls.iter().map(|tc| (*tc).clone()).collect();
         messages.push_assistant_with_tool_calls(&response_text, tc_requests);
 
         // Limit tool calls per response to prevent runaway
@@ -201,19 +272,25 @@ pub async fn run_agent_loop(
             &tool_calls
         };
 
-        // ── Execute tool calls concurrently ─────────────────────────
+        // ── Execute tool calls with RwLock parallelism ──────────────
+        // Read-only tools acquire a shared read lock (concurrent).
+        // Write tools acquire an exclusive write lock (serialized).
+        // This matches Codex's `ToolCallRuntime` pattern from `parallel.rs`.
         let mut tasks = Vec::with_capacity(calls_to_execute.len());
         for tc in calls_to_execute {
-            let registry = Arc::clone(&tool_registry);
+            let registry = Arc::clone(&config.tool_registry);
             let tc_id = tc.id.clone();
             let tc_name = tc.name.clone();
             let tc_args = tc.arguments.clone();
-            let root = workspace_root.to_path_buf();
-            let perms = Arc::clone(&permissions);
+            let root = config.workspace_root.clone();
+            let perms = Arc::clone(&config.permissions);
+            let fs = Arc::clone(&config.file_state);
+            let bgm = Arc::clone(&config.background_manager);
+            let delegator = config.subagent_delegator.clone();
+            let lock = Arc::clone(&execution_lock);
+            let tool_cancel = config.cancel_token.child_token();
+            let tool_timeout = registry.tool_timeout(&tc_name);
 
-            let fs = Arc::clone(&file_state);
-            let bgm = Arc::clone(&background_manager);
-            let delegator = subagent_delegator.clone();
             tasks.push(tokio::spawn(async move {
                 let ctx = crow_tools::ToolContext {
                     workspace_root: &root,
@@ -223,16 +300,43 @@ pub async fn run_agent_loop(
                     subagent_delegator: delegator,
                 };
 
-                let timeout = std::time::Duration::from_secs(120);
-                let result = tokio::time::timeout(
-                    timeout,
-                    registry.execute(&tc_name, tc_args, &ctx),
-                ).await;
+                // Determine lock type based on tool's read-only status
+                let is_read_only = registry.is_read_only(&tc_name);
+
+                // Execute with RwLock + cancellation + per-tool timeout
+                let result = tokio::select! {
+                    _ = tool_cancel.cancelled() => {
+                        Err(anyhow::anyhow!("Tool '{tc_name}' aborted by user"))
+                    }
+                    result = async {
+                        // Acquire appropriate lock
+                        if is_read_only {
+                            let _guard = lock.read().await;
+                            tokio::time::timeout(
+                                tool_timeout,
+                                registry.execute(&tc_name, tc_args, &ctx),
+                            ).await
+                        } else {
+                            let _guard = lock.write().await;
+                            tokio::time::timeout(
+                                tool_timeout,
+                                registry.execute(&tc_name, tc_args, &ctx),
+                            ).await
+                        }
+                    } => {
+                        match result {
+                            Ok(inner) => inner,
+                            Err(_) => Err(anyhow::anyhow!(
+                                "Tool '{tc_name}' timed out after {}s",
+                                tool_timeout.as_secs()
+                            )),
+                        }
+                    }
+                };
 
                 let output = match result {
-                    Ok(Ok(out)) => out,
-                    Ok(Err(e)) => crow_tools::ToolOutput::error(format!("Tool execution error: {e}")),
-                    Err(_) => crow_tools::ToolOutput::error(format!("Tool '{tc_name}' timed out after 120s")),
+                    Ok(out) => out,
+                    Err(e) => crow_tools::ToolOutput::error(format!("Tool execution error: {e}")),
                 };
 
                 (tc_id, tc_name, output)
@@ -250,43 +354,59 @@ pub async fn run_agent_loop(
                     let mut content = output.content;
                     if content.len() > MAX_TOOL_OUTPUT_BYTES {
                         // Safe truncation at a char boundary
-                        let truncated = crow_patch::safe_truncate(&content, MAX_TOOL_OUTPUT_BYTES);
-                        content = format!("{truncated}\n\n[SYSTEM WARNING: Tool output truncated to 100KB]");
+                        let truncated =
+                            crow_patch::safe_truncate(&content, MAX_TOOL_OUTPUT_BYTES);
+                        content = format!(
+                            "{truncated}\n\n[SYSTEM WARNING: Tool output truncated to 100KB]"
+                        );
                     }
 
                     // Safe preview for the event (avoid UTF-8 boundary panics)
                     let preview = crow_patch::safe_truncate(&content, 120);
-                    observer.handle_event(AgentEvent::ActionComplete(
-                        format!("{tc_name}: {preview}"),
-                    ));
+                    observer.handle_event(AgentEvent::ActionComplete(format!(
+                        "{tc_name}: {preview}"
+                    )));
 
                     if output.is_error {
-                        observer.handle_event(AgentEvent::Log(
-                            format!("    ⚠️ Tool '{tc_name}' returned error"),
-                        ));
+                        observer.handle_event(AgentEvent::Log(format!(
+                            "    ⚠️ Tool '{tc_name}' returned error"
+                        )));
                     }
 
                     // Push tool result into conversation
                     messages.push_tool_result(&tc_id, &content);
                 }
                 Err(e) => {
-                    observer.handle_event(AgentEvent::Error(
-                        format!("Tool execution panicked: {e}"),
-                    ));
+                    observer.handle_event(AgentEvent::Error(format!(
+                        "Tool execution panicked: {e}"
+                    )));
                 }
             }
         }
 
-        // ── Proactive Mid-turn Compaction ───────────────────────────
-        // Mirroring Codex's proactive `run_auto_compact` mid-turn to prevent 
-        // runaway tool outputs from blowing out the context window.
+        // ── Mid-turn compaction (post-tool) ─────────────────────────
+        // After tool results are added, check if context grew past budget.
+        // This matches Codex's `run_auto_compact` mid-turn pattern.
         if messages.needs_compaction() {
-            observer.handle_event(AgentEvent::Log("    🔄 Context window nearing limit, running mid-turn compaction...".into()));
+            observer.handle_event(AgentEvent::Log(
+                "    🔄 Mid-turn compaction: tool outputs grew context past budget...".into(),
+            ));
             observer.handle_event(AgentEvent::Compacting { active: true });
-            if let Err(e) = messages.compact_history(&compiler).await {
-                observer.handle_event(AgentEvent::Log(format!("    ⚠️ Compaction failed: {e}")));
+            if let Err(e) = messages.compact_history(&config.compiler).await {
+                observer.handle_event(AgentEvent::Log(format!(
+                    "    ⚠️ Mid-turn compaction failed: {e}"
+                )));
             }
             observer.handle_event(AgentEvent::Compacting { active: false });
         }
     }
+}
+
+/// Check if a brain error indicates the context window was exceeded.
+fn is_context_overflow(err: &crow_brain::BrainError) -> bool {
+    let msg = format!("{err:?}").to_lowercase();
+    msg.contains("context_length_exceeded")
+        || msg.contains("context window")
+        || msg.contains("maximum context length")
+        || msg.contains("token limit")
 }
