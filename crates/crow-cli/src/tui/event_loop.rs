@@ -25,7 +25,7 @@ pub async fn run_tui_loop(
     let mut composer_comp = ComposerComponent::new();
     let mut history_comp = HistoryComponent::new();
 
-    loop {
+    'event_loop: loop {
         terminal.draw(|f| render_app(f, state, &mut composer_comp, &mut history_comp))?;
 
         // Poll for keyboard events
@@ -53,7 +53,7 @@ pub async fn run_tui_loop(
                             state.last_ctrl_c = Some(Instant::now());
                         } else if let Some(last) = state.last_ctrl_c {
                             if last.elapsed() < CTRL_C_QUIT_WINDOW {
-                                break; // Second Ctrl+C within window: quit
+                                break 'event_loop; // Second Ctrl+C within window: quit
                             } else {
                                 state.last_ctrl_c = Some(Instant::now());
                                 state.history.push(Cell {
@@ -75,7 +75,7 @@ pub async fn run_tui_loop(
                     if key.code == KeyCode::Char('d')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        break;
+                        break 'event_loop;
                     }
 
                     // ── ESC: interrupt running task (Codex behavior) ─────────
@@ -373,7 +373,7 @@ pub async fn run_tui_loop(
                         }
                     }
                 }
-                TuiMessage::Quit => break,
+                TuiMessage::Quit => break 'event_loop,
             }
         }
     }
