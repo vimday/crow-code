@@ -569,10 +569,8 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
             format!("{:.1}k", tokens / 1000.0)
         };
         format!(" {spinner} {token_display} tok · {elapsed} ")
-    } else if state.is_task_running() {
-        " esc to interrupt ".to_string()
     } else {
-        " ? for help ".to_string()
+        " ".to_string()
     };
 
     let git_info = if state.is_dirty {

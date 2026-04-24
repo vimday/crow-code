@@ -184,19 +184,8 @@ pub fn execute_command_string(
                 });
                 // Actually trigger compaction through the thread manager
                 let tm = thread_manager.clone();
-                let tx_c = tx.clone();
                 tokio::spawn(async move {
-                    // Send a special compaction prompt that the agent loop will interpret
-                    tm.submit(crate::thread_manager::Op::Input(
-                        "[SYSTEM: Force context compaction now. Summarize the conversation so far concisely.]".to_string()
-                    )).await;
-                    let _ = tx_c.send(TuiMessage::AgentEvent(
-                        crate::event::AgentEvent::Log("Context compaction initiated.".into())
-                    ));
-                });
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: "Compacting context window...".into(),
+                    tm.submit(crate::thread_manager::Op::Compact).await;
                 });
             }
             "diff" => {

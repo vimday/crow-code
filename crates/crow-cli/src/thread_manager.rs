@@ -25,6 +25,7 @@ pub enum Op {
     Input(String),
     Interrupt,
     Clear,
+    Compact,
     SwarmRun(String),
 }
 
@@ -121,6 +122,29 @@ impl ThreadManager {
                 msgs.clear_all();
                 let mut sid = self.session_id.lock().await;
                 *sid = None;
+            }
+            Op::Compact => {
+                let msgs = self.messages.clone();
+                let compiler = self.runtime.compiler.clone();
+                let tx = self.ui_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                        "    🔄 Starting explicit context compaction...".into(),
+                    )));
+                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: true }));
+                    
+                    let mut locked_msgs = msgs.lock().await;
+                    if let Err(e) = locked_msgs.compact_history(&compiler).await {
+                        let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                            format!("    ⚠️ Compaction failed: {e}")
+                        )));
+                    } else {
+                        let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                            "  ▶ Context compaction complete".into(),
+                        )));
+                    }
+                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: false }));
+                });
             }
             Op::SwarmRun(prompt) => {
                 let token = CancellationToken::new();
