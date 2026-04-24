@@ -245,7 +245,7 @@ pub async fn run_tui_loop(
                 TuiMessage::AgentEvent(ev) => {
                     handle_agent_event(state, ev);
                 }
-                TuiMessage::TurnComplete(success) => {
+                TuiMessage::TurnComplete(success, timing) => {
                     // Finish the stream controller and drain all remaining lines
                     state.stream_controller.finish();
                     let remaining = state.stream_controller.drain_all();
@@ -274,9 +274,19 @@ pub async fn run_tui_loop(
                     state.cancellation = None;
 
                     if success && !was_cancelled {
+                        // Display timing summary in Audit mode (Codex TurnCompleted pattern)
+                        let timing_label = if let Some(ref t) = timing {
+                            let total_s = t.total_ms as f64 / 1000.0;
+                            let ttft = t.ttft_ms
+                                .map(|ms| format!("{ms}ms"))
+                                .unwrap_or_else(|| "n/a".to_string());
+                            format!("Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft})", t.llm_calls)
+                        } else {
+                            "Done".to_string()
+                        };
                         state.history.push(Cell {
                             kind: CellKind::Result,
-                            payload: "Done".into(),
+                            payload: timing_label,
                         });
 
                         if let Some(next_task) = state.task_queue.pop_front() {

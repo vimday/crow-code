@@ -14,3 +14,4 @@ pub mod mcp;
 pub mod registry;
 pub mod session;
 pub mod subagent;
+pub mod turn_diff;

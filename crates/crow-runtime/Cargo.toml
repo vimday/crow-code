@@ -25,6 +25,7 @@ arc-swap = "1.9.1"
 tokio-util = "0.7.18"
 uuid = { version = "1.23.1", features = ["v4"] }
 futures = "0.3"
+similar = "2.7"
 
 [lints]
 workspace = true

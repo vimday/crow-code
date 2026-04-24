@@ -77,6 +77,10 @@ pub struct TurnTiming {
     pub llm_call_count: u32,
     /// Number of pre-sampling compactions performed.
     pub compactions: u32,
+    /// Time to first token (TTFT) from the first LLM call.
+    pub time_to_first_token: Option<std::time::Duration>,
+    /// Timestamp when the turn started.
+    pub started_at: Option<std::time::Instant>,
 }
 
 impl Default for TurnTiming {
@@ -86,7 +90,25 @@ impl Default for TurnTiming {
             tool_execution_time: std::time::Duration::ZERO,
             llm_call_count: 0,
             compactions: 0,
+            time_to_first_token: None,
+            started_at: None,
         }
+    }
+}
+
+impl TurnTiming {
+    /// Return a human-readable summary of the turn timing.
+    pub fn summary(&self) -> String {
+        let total_ms = self.total_elapsed.as_millis();
+        let tool_ms = self.tool_execution_time.as_millis();
+        let llm_ms = total_ms.saturating_sub(tool_ms);
+        let ttft = self.time_to_first_token
+            .map(|d| format!("{}ms", d.as_millis()))
+            .unwrap_or_else(|| "n/a".to_string());
+        format!(
+            "Turn: {total_ms}ms total, {llm_ms}ms LLM ({} calls), {tool_ms}ms tools, TTFT: {ttft}, {} compaction(s)",
+            self.llm_call_count, self.compactions
+        )
     }
 }
 
@@ -126,7 +148,8 @@ pub async fn run_agent_loop(
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
     let turn_start = std::time::Instant::now();
-    let mut timing = TurnTiming::default();
+    let mut timing = TurnTiming { started_at: Some(turn_start), ..TurnTiming::default() };
+    let mut first_token_recorded = false;
     let mut step = 0;
     let mut total_tool_calls = 0usize;
     let max_steps = config.max_steps.unwrap_or(MAX_AGENT_STEPS);
@@ -172,6 +195,10 @@ pub async fn run_agent_loop(
             }
             timing.compactions += 1;
             observer.handle_event(AgentEvent::Compacting { active: false });
+            // Codex pattern: warn user about accuracy degradation after compaction
+            observer.handle_event(AgentEvent::Log(
+                "    ⚠️ Long threads and compactions can reduce accuracy. Start a new session when possible.".into(),
+            ));
         }
 
         observer.handle_event(AgentEvent::StateChanged {
@@ -199,6 +226,7 @@ pub async fn run_agent_loop(
 
             let mut adapter = ToolObserverAdapter(observer);
             let mut retry_count = 0u32;
+            let llm_call_start = std::time::Instant::now();
 
             let result = loop {
                 // Check cancellation before each LLM attempt
@@ -214,7 +242,15 @@ pub async fn run_agent_loop(
                     )
                     .await
                 {
-                    Ok(resp) => break Ok(resp),
+                    Ok(resp) => {
+                        timing.llm_call_count += 1;
+                        // Record TTFT on first successful response
+                        if !first_token_recorded {
+                            first_token_recorded = true;
+                            timing.time_to_first_token = Some(llm_call_start.elapsed());
+                        }
+                        break Ok(resp);
+                    }
                     Err(ref brain_err) if is_context_overflow(brain_err) => {
                         // Context window exceeded — compact and retry once
                         adapter.0.handle_event(AgentEvent::Log(
@@ -440,6 +476,10 @@ pub async fn run_agent_loop(
             }
             timing.compactions += 1;
             observer.handle_event(AgentEvent::Compacting { active: false });
+            // Codex pattern: warn user about accuracy degradation
+            observer.handle_event(AgentEvent::Log(
+                "    ⚠️ Long threads and compactions can reduce accuracy. Start a new session when possible.".into(),
+            ));
         }
     }
 }

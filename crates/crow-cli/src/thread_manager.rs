@@ -164,7 +164,7 @@ impl ThreadManager {
                         reason: "Cancelled by user".into(),
                     },
                 )));
-                let _ = ui_tx.send(EngineEvent::TurnComplete(false));
+                let _ = ui_tx.send(EngineEvent::TurnComplete(false, None));
             } else {
                 // Safe to write back: turn completed normally
                 *msgs_clone.lock().await = local_msgs.clone();
@@ -178,7 +178,7 @@ impl ThreadManager {
                                 token_usage: None,
                             },
                         )));
-                        let _ = ui_tx.send(EngineEvent::TurnComplete(true));
+                        let _ = ui_tx.send(EngineEvent::TurnComplete(true, None));
 
                         // Async persistence after turn completion
                         if let Ok(store) = SessionStore::open() {
@@ -218,7 +218,7 @@ impl ThreadManager {
                                 token_usage: None,
                             },
                         )));
-                        let _ = ui_tx.send(EngineEvent::TurnComplete(false));
+                        let _ = ui_tx.send(EngineEvent::TurnComplete(false, None));
                     }
                 }
             }

@@ -99,9 +99,25 @@ pub trait EventHandler: Send {
 pub enum EngineEvent {
     AgentEvent(AgentEvent),
     SessionComplete,
-    TurnComplete(bool),
+    /// Turn completed with success flag and optional timing data.
+    TurnComplete(bool, Option<TurnTimingSummary>),
     SwarmStarted(String, String),
     SwarmComplete(String, bool),
+}
+
+/// Compact summary of turn timing for display in the TUI.
+#[derive(Debug, Clone)]
+pub struct TurnTimingSummary {
+    /// Total wall-clock time.
+    pub total_ms: u64,
+    /// Time spent in tool execution.
+    pub tool_ms: u64,
+    /// Number of LLM API calls.
+    pub llm_calls: u32,
+    /// Number of compactions.
+    pub compactions: u32,
+    /// Time to first token.
+    pub ttft_ms: Option<u64>,
 }
 
 pub struct ChannelEventHandler {

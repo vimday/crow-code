@@ -7,7 +7,7 @@ use std::time::Instant;
 
 pub enum TuiMessage {
     AgentEvent(AgentEvent),
-    TurnComplete(bool),
+    TurnComplete(bool, Option<crow_runtime::event::TurnTimingSummary>),
     SessionComplete,
     SwarmStarted(String, String),
     SwarmComplete(String, bool),

@@ -135,7 +135,7 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
             match evt {
                 crow_runtime::event::EngineEvent::AgentEvent(e) => { let _ = tx_for_engine.send(TuiMessage::AgentEvent(e)); }
                 crow_runtime::event::EngineEvent::SessionComplete => { let _ = tx_for_engine.send(TuiMessage::SessionComplete); }
-                crow_runtime::event::EngineEvent::TurnComplete(b) => { let _ = tx_for_engine.send(TuiMessage::TurnComplete(b)); }
+                crow_runtime::event::EngineEvent::TurnComplete(b, timing) => { let _ = tx_for_engine.send(TuiMessage::TurnComplete(b, timing)); }
                 crow_runtime::event::EngineEvent::SwarmStarted(a, b) => { let _ = tx_for_engine.send(TuiMessage::SwarmStarted(a, b)); }
                 crow_runtime::event::EngineEvent::SwarmComplete(a, b) => { let _ = tx_for_engine.send(TuiMessage::SwarmComplete(a, b)); }
             }
