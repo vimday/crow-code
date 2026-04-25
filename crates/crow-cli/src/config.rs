@@ -3,7 +3,7 @@
 //! Priority: Environment variables > `.crow/config.json` > defaults.
 
 use crow_brain::{BrainError, LlmProviderConfig, ProviderKind};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ impl From<WriteMode> for crow_tools::WriteMode {
 
 // ─── File-based configuration shapes ───────────────────────────
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 struct ConfigFile {
     llm: Option<LlmConfigFile>,
     workspace: Option<WorkspaceConfigFile>,
@@ -68,14 +68,14 @@ struct ConfigFile {
 }
 
 /// Configuration for a remote Model Context Protocol (MCP) server integration.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpServerConfig {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 struct LlmConfigFile {
     provider: Option<String>,
     api_key: Option<String>,
@@ -89,7 +89,7 @@ struct LlmConfigFile {
     reasoning_effort: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 struct WorkspaceConfigFile {
     map_budget: Option<usize>,
     write_mode: Option<String>,
@@ -233,6 +233,14 @@ impl CrowConfig {
         let env_api_key = env::var("OPENAI_API_KEY")
             .or_else(|_| env::var("ANTHROPIC_API_KEY"))
             .or_else(|_| env::var("DEEPSEEK_API_KEY"))
+            .or_else(|_| env::var("KIMI_API_KEY"))
+            .or_else(|_| env::var("MOONSHOT_API_KEY"))
+            .or_else(|_| env::var("GLM_API_KEY"))
+            .or_else(|_| env::var("ZHIPU_API_KEY"))
+            .or_else(|_| env::var("QWEN_API_KEY"))
+            .or_else(|_| env::var("DASHSCOPE_API_KEY"))
+            .or_else(|_| env::var("XAI_API_KEY"))
+            .or_else(|_| env::var("DOUBAO_API_KEY"))
             .or_else(|_| env::var("CROW_API_KEY"))
             .ok();
         let api_key = env_api_key.or(file_llm.api_key);
@@ -264,13 +272,13 @@ impl CrowConfig {
             Some("openai") | Some("openaicompatible") | Some("openai-compatible") => (
                 ProviderKind::OpenAICompatible,
                 base_url.unwrap_or_else(|| default_base_url.clone()),
-                model.unwrap_or_else(|| "gpt-4-turbo".to_string()),
+                model.unwrap_or_else(|| "gpt-4o".to_string()),
             ),
             // Well-known providers with sensible defaults
             Some("anthropic") | Some("claude") => (
                 ProviderKind::Custom("anthropic".to_string()),
                 base_url.unwrap_or_else(|| "https://api.anthropic.com/v1".to_string()),
-                model.unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
+                model.unwrap_or_else(|| "claude-3-7-sonnet-20250219".to_string()),
             ),
             Some("ollama") => (
                 ProviderKind::Custom("ollama".to_string()),
@@ -280,8 +288,37 @@ impl CrowConfig {
             Some("deepseek") => (
                 ProviderKind::Custom("deepseek".to_string()),
                 base_url.unwrap_or_else(|| "https://api.deepseek.com/v1".to_string()),
-                model.unwrap_or_else(|| "deepseek-coder".to_string()),
+                model.unwrap_or_else(|| "deepseek-chat".to_string()),
             ),
+            Some("kimi") | Some("moonshot") => (
+                ProviderKind::Custom("moonshot".to_string()),
+                base_url.unwrap_or_else(|| "https://api.moonshot.cn/v1".to_string()),
+                model.unwrap_or_else(|| "moonshot-v1-auto".to_string()),
+            ),
+            Some("glm") | Some("zhipu") => (
+                ProviderKind::Custom("zhipu".to_string()),
+                base_url.unwrap_or_else(|| "https://open.bigmodel.cn/api/paas/v4".to_string()),
+                model.unwrap_or_else(|| "glm-4-plus".to_string()),
+            ),
+            Some("qwen") | Some("dashscope") => (
+                ProviderKind::Custom("dashscope".to_string()),
+                base_url.unwrap_or_else(|| "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
+                model.unwrap_or_else(|| "qwen-max".to_string()),
+            ),
+            Some("grok") | Some("xai") => (
+                ProviderKind::Custom("xai".to_string()),
+                base_url.unwrap_or_else(|| "https://api.x.ai/v1".to_string()),
+                model.unwrap_or_else(|| "grok-2-latest".to_string()),
+            ),
+            Some("doubao") | Some("volcengine") => {
+                let url = base_url.unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3".to_string());
+                let m = model.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Doubao provider requires an explicitly set LLM_MODEL representing your inference endpoint ID (e.g. ep-xxxx)."
+                    )
+                })?;
+                (ProviderKind::Custom("volcengine".to_string()), url, m)
+            }
             Some(other) => {
                 let url = base_url.ok_or_else(|| {
                     anyhow::anyhow!(
@@ -332,6 +369,21 @@ impl CrowConfig {
                 }
                 ProviderKind::Custom(name) if name == "deepseek" => {
                     "Set DEEPSEEK_API_KEY or CROW_API_KEY."
+                }
+                ProviderKind::Custom(name) if name == "moonshot" => {
+                    "Set KIMI_API_KEY, MOONSHOT_API_KEY, or CROW_API_KEY."
+                }
+                ProviderKind::Custom(name) if name == "zhipu" => {
+                    "Set GLM_API_KEY, ZHIPU_API_KEY, or CROW_API_KEY."
+                }
+                ProviderKind::Custom(name) if name == "dashscope" => {
+                    "Set QWEN_API_KEY, DASHSCOPE_API_KEY, or CROW_API_KEY."
+                }
+                ProviderKind::Custom(name) if name == "xai" => {
+                    "Set XAI_API_KEY or CROW_API_KEY."
+                }
+                ProviderKind::Custom(name) if name == "volcengine" => {
+                    "Set DOUBAO_API_KEY or CROW_API_KEY."
                 }
                 _ => "Set OPENAI_API_KEY or CROW_API_KEY.",
             };
@@ -448,6 +500,35 @@ impl CrowConfig {
     pub fn build_context_map_for(&self, root: &Path) -> Result<crow_intel::ContextMap, String> {
         let walker = crow_intel::RepoWalker::new().with_max_bytes(self.map_budget);
         walker.build_context_map(root)
+    }
+
+    /// Update the LLM provider in the local `.crow/config.json` file.
+    pub fn set_llm_provider(workspace: &Path, provider: &str) -> anyhow::Result<()> {
+        let crow_dir = workspace.join(".crow");
+        if !crow_dir.exists() {
+            fs::create_dir_all(&crow_dir)?;
+        }
+        
+        let config_path = crow_dir.join("config.json");
+        let mut config_file: ConfigFile = if config_path.exists() {
+            let content = fs::read_to_string(&config_path)?;
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            ConfigFile::default()
+        };
+
+        if let Some(ref mut llm) = config_file.llm {
+            llm.provider = Some(provider.to_string());
+        } else {
+            config_file.llm = Some(LlmConfigFile {
+                provider: Some(provider.to_string()),
+                ..Default::default()
+            });
+        }
+
+        let new_content = serde_json::to_string_pretty(&config_file)?;
+        fs::write(config_path, new_content)?;
+        Ok(())
     }
 }
 

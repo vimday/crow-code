@@ -156,14 +156,40 @@ pub fn execute_command_string(
                 });
             }
             "model" => {
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: "/model".into(),
-                });
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: format!("Current model: {}", state.model_info),
-                });
+                if let Some(provider) = parts.next() {
+                    let provider = provider.trim();
+                    match crate::config::CrowConfig::set_llm_provider(&cfg.workspace, provider) {
+                        Ok(_) => {
+                            state.history.push(Cell {
+                                kind: CellKind::User,
+                                payload: format!("/model {provider}"),
+                            });
+                            state.history.push(Cell {
+                                kind: CellKind::Log,
+                                payload: format!("✅ Model provider updated to '{provider}'. Restart crow or create a new turn to take effect."),
+                            });
+                        }
+                        Err(e) => {
+                            state.history.push(Cell {
+                                kind: CellKind::User,
+                                payload: format!("/model {provider}"),
+                            });
+                            state.history.push(Cell {
+                                kind: CellKind::Error,
+                                payload: format!("Failed to set model: {e}"),
+                            });
+                        }
+                    }
+                } else {
+                    state.history.push(Cell {
+                        kind: CellKind::User,
+                        payload: "/model".into(),
+                    });
+                    state.history.push(Cell {
+                        kind: CellKind::Log,
+                        payload: format!("Current model: {}\nUsage: /model <provider> (e.g. /model kimi, /model claude, /model qwen)", state.model_info),
+                    });
+                }
             }
             "view" => {
                 let mode = parts.next().unwrap_or("evidence");
