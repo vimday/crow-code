@@ -110,6 +110,7 @@ After launching `crow`, type a natural language task and press Enter. The agent 
 | `Tab` | Switch focus (composer ↔ history) |
 | `PageUp/Down` | Scroll history |
 | `/help` | Show all slash commands |
+| `/model <provider>` | Hot-swap LLM provider (e.g. `/model kimi`) |
 | `!<cmd>` | Execute shell command (with approval dialog) |
 
 ---
@@ -122,12 +123,29 @@ After launching `crow`, type a natural language task and press Enter. The agent 
 |---|---|---|
 | `OPENAI_API_KEY` | — | OpenAI API key (or `CROW_API_KEY`) |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `LLM_PROVIDER` | `openai` | Provider type (`openai`, `anthropic`, `custom`) |
-| `LLM_MODEL` | `gpt-4o` | Model identifier |
-| `LLM_BASE_URL` | — | Custom endpoint URL |
+| `KIMI_API_KEY` | — | Moonshot/Kimi API key |
+| `GLM_API_KEY` | — | Zhipu/GLM API key |
+| `QWEN_API_KEY` | — | Dashscope/Qwen API key |
+| `LLM_PROVIDER` | `openai` | Smart Preset (`openai`, `anthropic`, `kimi`, `glm`, `qwen`, `deepseek`, `xai`, `doubao`, `ollama`) or `custom` |
+| `LLM_MODEL` | (Auto) | Model identifier. Automatically inferred for presets (e.g. `gpt-4o`, `moonshot-v1-auto`) |
+| `LLM_BASE_URL` | (Auto) | Endpoint URL. Automatically inferred for presets. Required if `provider=custom` |
 | `CROW_WRITE_MODE` | `write` | `sandbox` (verify only), `write` (apply after verify), `danger` (skip verify) |
 | `CROW_MCTS_BRANCHES` | `3` | MCTS parallel branch factor |
 | `CROW_MAP_BUDGET` | — | Repo map size budget (bytes) |
+
+### Custom Providers
+
+If you use a provider not listed in the presets (e.g., LMStudio, local proxies), simply set `provider="custom"` and provide your own `base_url` and `model` in `.crow/config.json`:
+
+```json
+{
+  "llm": {
+    "provider": "custom",
+    "base_url": "http://127.0.0.1:1234/v1",
+    "model": "my-local-model"
+  }
+}
+```
 
 ### Safety Model
 

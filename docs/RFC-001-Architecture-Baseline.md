@@ -25,6 +25,7 @@ Crow-Code is an intelligent coding agent architecture designed with extreme defe
 - **Precondition Verification:** Final disk flushes must match the hash, baseline snapshot ID, and file precondition rules before applying.
 - **Zero Pollution:** A failed MCTS sequence or verification step must leave the physical workspace completely untouched.
 - **Evidence Traceability:** Every risk flag or test pass must trace back to a specific command log, snapshot, or parser output.
+- **Provider-Agnostic Engine:** The system must seamlessly abstract OpenAI-compatible and Anthropic protocols, supporting diverse local (Ollama, LMStudio) and remote LLM topologies (OpenAI, DeepSeek, Kimi, GLM, Qwen) interchangeably via Smart Presets.
 
 ## 5. Architectural Topology (Physical Crates)
 

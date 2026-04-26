@@ -134,3 +134,9 @@ MCP servers are configured via `CrowConfig.mcp_servers` and managed by the `crow
 - When introducing cross-workspace UI changes, update `walkthrough.md` or similar documentation inside the artifact tracking directories.
 - Keep commits isolated to thematic tasks.
 - If dependencies change, ensure `cargo check --workspace` and `cargo test --workspace` pass synchronously.
+
+## 8. Multi-Provider LLM Configuration
+Crow supports dynamic, zero-config Smart Presets for various LLM providers (OpenAI, Anthropic, DeepSeek, Kimi, GLM, Qwen, Doubao, xAI, Ollama). 
+- **Inference logic (`config.rs`)**: Passing a recognized provider alias (e.g., `kimi`) automatically assigns its flagship `base_url` (e.g., `https://api.moonshot.cn/v1`) and `model` (e.g., `moonshot-v1-auto`), whilst checking provider-specific environment variables (`KIMI_API_KEY`).
+- **Interactive TUI Switching**: The TUI provides a `/model <provider>` command which dynamically updates the `.crow/config.json` configuration file.
+- **Custom Proxies**: When configuring non-standard gateways, the engine falls back to treating `custom` providers as standard OpenAI-compatible endpoints, requiring the user to explicitly define `base_url` and `model`.

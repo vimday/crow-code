@@ -94,9 +94,10 @@ cargo build -p crow-cli
 - **Step 7** ✅ Polyglot Preflights & Snapshot Anchor Runtime Verification. Manifest-aware walker.
 - **Step 8** ✅ Phase 1 Product Foundation: Session persistence (`~/.crow/sessions/`), `crow -r` Instant Rehydration, Evidence Report module, CLI subcommands.
 - **Step 9** ✅ Phase 1.5 Promise Closures: Real snapshot anchoring via `git rev-parse HEAD` (3-tier fallback), WriteMode runtime enforcement in execute path with `apply_sandbox_to_workspace()`.
-- **Step 10** ✅ Phase 2 Multi-Provider: `AnthropicClient`, `ProviderRouter`, `LLM_PROVIDER` overrides.
+- **Step 10** ✅ Phase 2 Multi-Provider: `AnthropicClient`, `ProviderRouter`, Smart Presets (`kimi`, `glm`, `qwen`, `openai`, `anthropic`, `deepseek`, etc.) and `LLM_PROVIDER` overrides.
 - **Step 11** ✅ Phase 2 MCP Stdio Transport: New `crow-mcp` crate. JSON-RPC 2.0 full-duplex protocol over `tokio::process::Command` stdio. Ergonomic `McpClient` wrapper.
 - **Step 12** ✅ Architectural Fusion (Phase 1 & 2): Integrated `Codex` native TUI mechanics, `ThreadManager` non-blocking agent loop with TurnStatus isolation, `yomi` inspired Context Persistence & per-tool Memory Whitelist (`A` auto-approve security wall).
 - **Step 13** ✅ Phase 3 Sub-Agent Swarms & Non-Blocking TUI: Asynchronous Task Queuing, isolated `SubagentWorker` execution paths, interior mutability across `SessionRuntime` and `ConversationManager` for zero-lock ThreadManager scheduling.
 - **Step 14** ✅ Yomi Alignment & Codebase Hardening: CancellationToken docs (arc-swap rotation pattern), AgentEvent taxonomy documentation, dead code removal (dashboard.rs, duplicate Component trait, scratch files), AGENTS.md/README.md comprehensive sync with actual implementation state.
+- **Step 15** ✅ Smart LLM Configuration: Multi-Vendor LLM Configuration (Global/Chinese flagships) with dynamic `/model <provider>` TUI hot-switching and auto-serialization to `.crow/config.json`.
 
