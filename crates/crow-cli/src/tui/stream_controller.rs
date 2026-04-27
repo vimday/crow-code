@@ -180,7 +180,9 @@ impl StreamController {
 
     /// Returns the age of the oldest queued line.
     fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
-        self.enqueue_times.first().map(|t| now.saturating_duration_since(*t))
+        self.enqueue_times
+            .first()
+            .map(|t| now.saturating_duration_since(*t))
     }
 
     /// Drain lines on a tick boundary (called every 120ms from the TUI tick).

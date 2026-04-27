@@ -76,14 +76,21 @@ impl Tool for BashTool {
 
         if parsed.background.unwrap_or(false) {
             if let Some(bg_mgr) = &ctx.background_manager {
-                let task_id = bg_mgr.spawn(parsed.command.clone(), ctx.workspace_root).await?;
+                let task_id = bg_mgr
+                    .spawn(parsed.command.clone(), ctx.workspace_root)
+                    .await?;
                 return Ok(ToolOutput::success(format!("Background task spawned successfully.\nTask ID: {task_id}\nUse 'bash_status' to check its output and status.")));
             } else {
-                return Ok(ToolOutput::error("Background execution is not available in this context."));
+                return Ok(ToolOutput::error(
+                    "Background execution is not available in this context.",
+                ));
             }
         }
 
-        let timeout_secs = parsed.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS).min(MAX_TIMEOUT_SECS);
+        let timeout_secs = parsed
+            .timeout_secs
+            .unwrap_or(DEFAULT_TIMEOUT_SECS)
+            .min(MAX_TIMEOUT_SECS);
         let timeout = std::time::Duration::from_secs(timeout_secs);
 
         let result = tokio::time::timeout(timeout, async {
@@ -91,13 +98,15 @@ impl Tool for BashTool {
                 .arg("-c")
                 .arg(&parsed.command)
                 .current_dir(ctx.workspace_root)
-                .env("PAGER", "cat")       // Prevent paging in interactive commands
-                .env("GIT_PAGER", "cat")   // Same for git
-                .env("TERM", "dumb")       // Disable color codes in some tools
-                .kill_on_drop(true)        // Ensure child cleanup on cancellation
+                .env("PAGER", "cat") // Prevent paging in interactive commands
+                .env("GIT_PAGER", "cat") // Same for git
+                .env("GIT_TERMINAL_PROMPT", "0") // Block git credential prompts (claw-code pattern)
+                .env("TERM", "dumb") // Disable color codes in some tools
+                .kill_on_drop(true) // Ensure child cleanup on cancellation
                 .output()
                 .await
-        }).await;
+        })
+        .await;
 
         match result {
             Ok(Ok(output)) => {
@@ -107,7 +116,10 @@ impl Tool for BashTool {
                 if output.status.success() {
                     Ok(ToolOutput::success(combined))
                 } else {
-                    Ok(ToolOutput { content: combined, is_error: true })
+                    Ok(ToolOutput {
+                        content: combined,
+                        is_error: true,
+                    })
                 }
             }
             Ok(Err(e)) => Ok(ToolOutput::error(format!("Failed to execute command: {e}"))),

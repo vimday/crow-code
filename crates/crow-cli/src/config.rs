@@ -229,26 +229,33 @@ impl CrowConfig {
 
         // ── LLM Configuration ──
 
-        // Resolve API key with provider-aware fallback chain
-        let env_api_key = env::var("OPENAI_API_KEY")
-            .or_else(|_| env::var("ANTHROPIC_API_KEY"))
-            .or_else(|_| env::var("DEEPSEEK_API_KEY"))
-            .or_else(|_| env::var("KIMI_API_KEY"))
-            .or_else(|_| env::var("MOONSHOT_API_KEY"))
-            .or_else(|_| env::var("GLM_API_KEY"))
-            .or_else(|_| env::var("ZHIPU_API_KEY"))
-            .or_else(|_| env::var("QWEN_API_KEY"))
-            .or_else(|_| env::var("DASHSCOPE_API_KEY"))
-            .or_else(|_| env::var("XAI_API_KEY"))
-            .or_else(|_| env::var("DOUBAO_API_KEY"))
-            .or_else(|_| env::var("CROW_API_KEY"))
-            .ok();
+        // Resolve API key with provider-aware fallback chain.
+        // Priority: env vars → workspace .env → config file.
+        // Uses dotenv discovery (claw-code pattern) to support
+        // workspace-local .env files alongside process environment.
+        let api_key_env_vars = [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "KIMI_API_KEY",
+            "MOONSHOT_API_KEY",
+            "GLM_API_KEY",
+            "ZHIPU_API_KEY",
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "XAI_API_KEY",
+            "DOUBAO_API_KEY",
+            "CROW_API_KEY",
+        ];
+        let env_api_key = api_key_env_vars
+            .iter()
+            .find_map(|key| crate::dotenv::resolve_env_from(workspace_dir, key));
         let api_key = env_api_key.or(file_llm.api_key);
 
-        let env_base_url = env::var("LLM_BASE_URL").ok();
+        let env_base_url = crate::dotenv::resolve_env_from(workspace_dir, "LLM_BASE_URL");
         let base_url = env_base_url.or(file_llm.base_url);
 
-        let env_model = env::var("LLM_MODEL").ok();
+        let env_model = crate::dotenv::resolve_env_from(workspace_dir, "LLM_MODEL");
         let model = env_model.or(file_llm.model);
 
         // Strict parsing for JSON mode
@@ -263,8 +270,21 @@ impl CrowConfig {
             Err(_) => file_llm.json_mode.unwrap_or(true),
         };
 
-        // Resolve ProviderKind
-        let provider_str = env::var("LLM_PROVIDER").ok().or(file_llm.provider);
+        // Resolve ProviderKind.
+        // Priority: explicit LLM_PROVIDER > model-name auto-detection > env fallback.
+        let explicit_provider =
+            crate::dotenv::resolve_env_from(workspace_dir, "LLM_PROVIDER").or(file_llm.provider);
+
+        // Model-name-based provider auto-detection (claw-code pattern).
+        // If no explicit provider is set, infer from the model name.
+        let provider_str = explicit_provider.or_else(|| {
+            model
+                .as_deref()
+                .and_then(|m| crow_brain::detect_provider_from_model(m).map(String::from))
+        });
+
+        // Resolve model alias (e.g., "sonnet" → "claude-sonnet-4-6")
+        let model = model.map(|m| crow_brain::resolve_model_alias(&m));
 
         let default_base_url = "https://api.openai.com/v1".to_string();
 
@@ -302,7 +322,9 @@ impl CrowConfig {
             ),
             Some("qwen") | Some("dashscope") => (
                 ProviderKind::Custom("dashscope".to_string()),
-                base_url.unwrap_or_else(|| "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()),
+                base_url.unwrap_or_else(|| {
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()
+                }),
                 model.unwrap_or_else(|| "qwen-max".to_string()),
             ),
             Some("grok") | Some("xai") => (
@@ -311,7 +333,8 @@ impl CrowConfig {
                 model.unwrap_or_else(|| "grok-2-latest".to_string()),
             ),
             Some("doubao") | Some("volcengine") => {
-                let url = base_url.unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3".to_string());
+                let url = base_url
+                    .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3".to_string());
                 let m = model.ok_or_else(|| {
                     anyhow::anyhow!(
                         "Doubao provider requires an explicitly set LLM_MODEL representing your inference endpoint ID (e.g. ep-xxxx)."
@@ -363,31 +386,28 @@ impl CrowConfig {
         };
 
         if requires_api_key && api_key.is_none() {
-            let hint = match &provider_kind {
-                ProviderKind::Custom(name) if name == "anthropic" => {
-                    "Set ANTHROPIC_API_KEY or CROW_API_KEY."
-                }
-                ProviderKind::Custom(name) if name == "deepseek" => {
-                    "Set DEEPSEEK_API_KEY or CROW_API_KEY."
-                }
-                ProviderKind::Custom(name) if name == "moonshot" => {
-                    "Set KIMI_API_KEY, MOONSHOT_API_KEY, or CROW_API_KEY."
-                }
-                ProviderKind::Custom(name) if name == "zhipu" => {
-                    "Set GLM_API_KEY, ZHIPU_API_KEY, or CROW_API_KEY."
-                }
-                ProviderKind::Custom(name) if name == "dashscope" => {
-                    "Set QWEN_API_KEY, DASHSCOPE_API_KEY, or CROW_API_KEY."
-                }
-                ProviderKind::Custom(name) if name == "xai" => {
-                    "Set XAI_API_KEY or CROW_API_KEY."
-                }
-                ProviderKind::Custom(name) if name == "volcengine" => {
-                    "Set DOUBAO_API_KEY or CROW_API_KEY."
-                }
+            let provider_name = match &provider_kind {
+                ProviderKind::Custom(name) => name.as_str(),
+                ProviderKind::OpenAICompatible => "openai",
+            };
+            let hint = match provider_name {
+                "anthropic" => "Set ANTHROPIC_API_KEY or CROW_API_KEY.",
+                "deepseek" => "Set DEEPSEEK_API_KEY or CROW_API_KEY.",
+                "moonshot" => "Set KIMI_API_KEY, MOONSHOT_API_KEY, or CROW_API_KEY.",
+                "zhipu" => "Set GLM_API_KEY, ZHIPU_API_KEY, or CROW_API_KEY.",
+                "dashscope" => "Set QWEN_API_KEY, DASHSCOPE_API_KEY, or CROW_API_KEY.",
+                "xai" => "Set XAI_API_KEY or CROW_API_KEY.",
+                "volcengine" => "Set DOUBAO_API_KEY or CROW_API_KEY.",
                 _ => "Set OPENAI_API_KEY or CROW_API_KEY.",
             };
-            anyhow::bail!("Missing API Key for {provider_kind:?}. {hint}");
+
+            // Foreign-provider credential hint (claw-code pattern).
+            // If we detect a different provider's key is available, suggest the fix.
+            let foreign_hint = crate::dotenv::missing_credentials_hint(provider_name)
+                .map(|h| format!("\n  💡 Hint: {h}"))
+                .unwrap_or_default();
+
+            anyhow::bail!("Missing API Key for {provider_kind:?}. {hint}{foreign_hint}");
         }
 
         let max_tokens = env::var("LLM_MAX_TOKENS")
@@ -508,7 +528,7 @@ impl CrowConfig {
         if !crow_dir.exists() {
             fs::create_dir_all(&crow_dir)?;
         }
-        
+
         let config_path = crow_dir.join("config.json");
         let mut config_file: ConfigFile = if config_path.exists() {
             let content = fs::read_to_string(&config_path)?;

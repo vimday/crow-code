@@ -103,6 +103,15 @@ The epistemic loop retries transient errors up to 3 times with exponential backo
 ### Role Alternation
 The `ConversationManager` enforces strict User→Assistant→User role alternation required by providers like Anthropic. After compaction, `fix_role_alternation()` inserts minimal placeholder messages to repair any violations.
 
+### Micro-Compaction
+To save context budget and API latency, the `Compactor` performs a fast, local "micro-compaction" pass. It clears all intermediate `ChatRole::Tool` messages and `[TOOL OUTPUT]` prefixed responses, trimming the conversation down to its essential skeleton before resorting to a full API-based summarization pass.
+
+### Turn Diff Tracking
+Inspired by Codex, the engine maintains an in-memory `TurnDiffTracker`. It snapshots file baselines the first time they are modified during a turn. When the turn completes, it generates a precise unified diff, allowing the TUI and the user to inspect exactly what changed.
+
+### Parallel Tool Execution
+Tool execution leverages `tokio::task::JoinSet` combined with `CancellationToken` integration. This guarantees that when a user interrupts a turn or when the epistemic loop aborts early, all child tool processes (including heavy shell executions) are safely torn down.
+
 ### Recon Output Capping
 Recon tool output is capped at 100KB before entering the conversation context (`MAX_RECON_CONTEXT_BYTES`), separate from the 512KB execution-level cap in the verifier. This prevents a single oversized tool result from consuming the entire context budget.
 

@@ -1,4 +1,6 @@
 use crate::config::CrowConfig;
+use crate::tui::event_loop::run_tui_loop;
+use crate::tui::state::{AppState, Cell, CellKind, TuiMessage};
 use anyhow::Result;
 use crossterm::{
     event::{DisableBracketedPaste, EnableBracketedPaste},
@@ -6,15 +8,13 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use crate::tui::state::{AppState, Cell, CellKind, TuiMessage};
-use crate::tui::event_loop::run_tui_loop;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
-use std::io;
 
-use crow_runtime::context::ConversationManager;
 use crate::runtime::SessionRuntime;
+use crow_runtime::context::ConversationManager;
 
 use crate::tui::theme;
 
@@ -133,11 +133,21 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     tokio::spawn(async move {
         while let Some(evt) = engine_rx.recv().await {
             match evt {
-                crow_runtime::event::EngineEvent::AgentEvent(e) => { let _ = tx_for_engine.send(TuiMessage::AgentEvent(e)); }
-                crow_runtime::event::EngineEvent::SessionComplete => { let _ = tx_for_engine.send(TuiMessage::SessionComplete); }
-                crow_runtime::event::EngineEvent::TurnComplete(b, timing) => { let _ = tx_for_engine.send(TuiMessage::TurnComplete(b, timing)); }
-                crow_runtime::event::EngineEvent::SwarmStarted(a, b) => { let _ = tx_for_engine.send(TuiMessage::SwarmStarted(a, b)); }
-                crow_runtime::event::EngineEvent::SwarmComplete(a, b) => { let _ = tx_for_engine.send(TuiMessage::SwarmComplete(a, b)); }
+                crow_runtime::event::EngineEvent::AgentEvent(e) => {
+                    let _ = tx_for_engine.send(TuiMessage::AgentEvent(e));
+                }
+                crow_runtime::event::EngineEvent::SessionComplete => {
+                    let _ = tx_for_engine.send(TuiMessage::SessionComplete);
+                }
+                crow_runtime::event::EngineEvent::TurnComplete(b, timing) => {
+                    let _ = tx_for_engine.send(TuiMessage::TurnComplete(b, timing));
+                }
+                crow_runtime::event::EngineEvent::SwarmStarted(a, b) => {
+                    let _ = tx_for_engine.send(TuiMessage::SwarmStarted(a, b));
+                }
+                crow_runtime::event::EngineEvent::SwarmComplete(a, b) => {
+                    let _ = tx_for_engine.send(TuiMessage::SwarmComplete(a, b));
+                }
             }
         }
     });

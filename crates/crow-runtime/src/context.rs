@@ -107,14 +107,17 @@ impl ConversationManager {
     }
 
     /// Push a tool result message for the native tool calling flow.
-    pub fn push_tool_result(&mut self, tool_call_id: impl Into<String>, content: impl Into<String>) {
+    pub fn push_tool_result(
+        &mut self,
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) {
         self.conversation.push_back(Memory {
             message: ChatMessage::tool_result(tool_call_id, content),
             summary: Some("[SYSTEM: Tool result pruned from history]".into()),
         });
         self.enforce_budget();
     }
-
 
     /// Adds the result of a file read to the context.
     /// Truncates the text if the file is massive, and provides a semantic summary for pruning.
@@ -141,12 +144,35 @@ impl ConversationManager {
         self.enforce_budget();
     }
 
+    /// Truncates the conversation history such that everything after the Nth user message
+    /// is removed. This supports the Codex ForkSnapshot branching pattern, allowing users
+    /// to back up to a specific point and re-branch.
+    pub fn truncate_before_nth_user_message(&mut self, n: usize) {
+        let mut user_count = 0;
+        let mut truncate_at = self.conversation.len();
+
+        for (i, mem) in self.conversation.iter().enumerate() {
+            if mem.message.role == crow_brain::ChatRole::User {
+                user_count += 1;
+                if user_count == n {
+                    truncate_at = i;
+                    break;
+                }
+            }
+        }
+
+        if truncate_at < self.conversation.len() {
+            self.conversation.truncate(truncate_at);
+            self.history_version = self.history_version.saturating_add(1);
+        }
+    }
+
     /// Appends a verification result to the conversation.
     /// When pruned, the huge log is dropped but the logical outcome is preserved in the summary.
     pub fn push_verifier_result(&mut self, outcome_str: &str, log: &str) {
-        let content = format!(
-            "[VERIFICATION FAILED]\nYour previous plan resulted in a failed test execution.\nOutcome: {outcome_str}\nLog:\n{log}\n\nPlease reflect and output a new AgentAction to fix the issue. If you need to read more files to understand the failure, use the read_files action."
-        );
+        let content = crow_brain::prompt::PromptBuilder::new()
+            .with_verifier_feedback(outcome_str, log)
+            .build();
 
         // Extract first error-like line for a richer pruned summary
         let first_error = log
@@ -197,15 +223,133 @@ impl ConversationManager {
                 });
             }
 
-            // Post-compaction validation: ensure strict role alternation
-            // (User→Assistant→User). Providers like Anthropic reject requests
-            // with consecutive same-role messages (HTTP 400).
+            // Post-compaction validation pipeline (claw-code pattern):
+            //
+            // 1. Remove orphan ToolResult messages whose parent
+            //    AssistantToolCall was compacted away.
+            // 2. Ensure the first message is a User message (some
+            //    providers reject conversations starting with Assistant).
+            // 3. Fix strict role alternation (User→Assistant→User).
+            //
+            // Order matters: orphan cleanup must run first to avoid
+            // fix_role_alternation inserting fillers around orphans.
+            self.remove_orphan_tool_results();
+            self.ensure_first_message_is_user();
             self.fix_role_alternation();
             self.history_version = self.history_version.saturating_add(1);
 
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Remove orphan and broken tool-call chains from the conversation deque.
+    ///
+    /// Ported from yomi's `MessageBuffer::santinize()` — validates that every
+    /// assistant message with `tool_calls` has a matching contiguous chain of
+    /// tool responses immediately following it. Three kinds of invalid state
+    /// are cleaned up:
+    ///
+    /// 1. **Orphan tool results** — tool messages not preceded by a matching
+    ///    assistant tool_call.
+    /// 2. **Interrupted chains** — assistant→user→tool (user interrupted).
+    /// 3. **Incomplete chains** — assistant expects 2 tool results but only 1
+    ///    appears.
+    ///
+    /// This prevents API 400 errors from providers that enforce strict
+    /// tool_call ↔ tool_result pairing.
+    fn remove_orphan_tool_results(&mut self) {
+        use std::collections::HashSet;
+
+        let n = self.conversation.len();
+        let mut to_remove: HashSet<usize> = HashSet::new();
+        let mut i = 0;
+
+        while i < n {
+            let role = &self.conversation[i].message.role;
+
+            // Non-assistant messages: orphan Tool messages get marked
+            if *role != ChatRole::Assistant {
+                if *role == ChatRole::Tool {
+                    to_remove.insert(i);
+                }
+                i += 1;
+                continue;
+            }
+
+            // Assistant without tool_calls: skip
+            let Some(ref calls) = self.conversation[i].message.tool_calls else {
+                i += 1;
+                continue;
+            };
+
+            // Validate the contiguous tool response chain
+            let mut expected_ids: HashSet<String> = calls.iter().map(|c| c.id.clone()).collect();
+            let tool_call_count = calls.len();
+            let mut valid_chain = true;
+            let mut tool_indices = Vec::new();
+
+            for tool_idx in (i + 1)..=(i + tool_call_count) {
+                let Some(mem) = self.conversation.get(tool_idx) else {
+                    valid_chain = false;
+                    break;
+                };
+                if mem.message.role != ChatRole::Tool {
+                    valid_chain = false;
+                    break;
+                }
+                tool_indices.push(tool_idx);
+                let Some(ref tc_id) = mem.message.tool_call_id else {
+                    valid_chain = false;
+                    break;
+                };
+                if !expected_ids.remove(tc_id) {
+                    valid_chain = false;
+                    break;
+                }
+            }
+
+            // All expected tool calls must have responses
+            if valid_chain && !expected_ids.is_empty() {
+                valid_chain = false;
+            }
+
+            if !valid_chain {
+                // Remove the assistant message and any partial tool responses
+                to_remove.insert(i);
+                to_remove.extend(tool_indices.iter());
+                i += 1 + tool_indices.len();
+                continue;
+            }
+
+            // Valid chain — skip past all tool responses
+            i += tool_call_count + 1;
+        }
+
+        if !to_remove.is_empty() {
+            let mut idx = 0;
+            self.conversation.retain(|_| {
+                let keep = !to_remove.contains(&idx);
+                idx += 1;
+                keep
+            });
+        }
+    }
+
+    /// Ensure the first conversation message is a User message.
+    ///
+    /// Some providers (e.g., Anthropic) reject conversations that start
+    /// with an Assistant message. If compaction removed all preceding
+    /// User messages, prepend a minimal context stub.
+    fn ensure_first_message_is_user(&mut self) {
+        if let Some(first) = self.conversation.front() {
+            if first.message.role != ChatRole::User {
+                self.conversation.push_front(Memory {
+                    message: ChatMessage::user("[Context resumed from previous session]"),
+                    summary: Some("[SYSTEM: Session continuity stub]".into()),
+                });
+            }
         }
     }
 
@@ -328,7 +472,11 @@ impl ConversationManager {
     /// This is a coarse lower bound, not a tokenizer-accurate count.
     pub fn estimate_token_count(&self) -> usize {
         let sys_chars: usize = self.system_messages.iter().map(|m| m.content.len()).sum();
-        let hist_chars: usize = self.conversation.iter().map(|m| m.message.content.len()).sum();
+        let hist_chars: usize = self
+            .conversation
+            .iter()
+            .map(|m| m.message.content.len())
+            .sum();
         (sys_chars + hist_chars) / 4
     }
 

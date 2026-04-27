@@ -634,6 +634,10 @@ impl MarkdownStreamState {
         self.committed_line_count = 0;
     }
 
+    pub fn raw_buffer(&self) -> &str {
+        &self.buffer
+    }
+
     /// Push a new text delta. Returns rendered ANSI lines for any newly
     /// completed logical lines (newline-gated). Returns None if no new
     /// complete lines are available yet.

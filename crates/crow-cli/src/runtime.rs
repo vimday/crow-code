@@ -1,9 +1,9 @@
 use crate::config::CrowConfig;
-use crow_runtime::mcp::McpManager;
 use anyhow::{Context, Result};
 use crow_brain::IntentCompiler;
 use crow_materialize::{materialize, MaterializeConfig};
 use crow_patch::SnapshotId;
+use crow_runtime::mcp::McpManager;
 use crow_workspace::ledger::EventLedger;
 use std::sync::{Arc, Mutex};
 
@@ -53,24 +53,32 @@ impl crow_tools::SubagentDelegator for NativeSubagentDelegator {
         let mut observer = NullEventHandler;
         let frozen_root = self.workspace.clone(); // In native mode, we don't freeze, we just pass the workspace
 
-        match subagent.execute(
-            &task,
-            &focus_paths,
-            "Delegated via Native Tool",
-            vec![], // No special inherited sys_msgs for now
-            &frozen_root,
-            None,
-            &mut observer,
-        ).await {
+        match subagent
+            .execute(
+                &task,
+                &focus_paths,
+                "Delegated via Native Tool",
+                vec![], // No special inherited sys_msgs for now
+                &frozen_root,
+                None,
+                &mut observer,
+            )
+            .await
+        {
             Ok(plan) => {
                 let mut output = String::new();
                 for op in plan.operations {
                     output.push_str(&format!("- {op:?}\n"));
                 }
                 if output.is_empty() {
-                    Ok("Subagent explored the repository but did not generate any actions.".to_string())
+                    Ok(
+                        "Subagent explored the repository but did not generate any actions."
+                            .to_string(),
+                    )
                 } else {
-                    Ok(format!("Subagent proposed the following operations:\n{output}"))
+                    Ok(format!(
+                        "Subagent proposed the following operations:\n{output}"
+                    ))
                 }
             }
             Err(e) => anyhow::bail!("Subagent failed: {e}"),
@@ -96,12 +104,22 @@ impl SessionRuntime {
         let client = cfg.build_llm_client()?;
         let compiler =
             Arc::new(IntentCompiler::new(client).with_native_tool_calling(cfg.llm.json_mode));
-        let converted_mcp_servers: std::collections::HashMap<String, crow_runtime::mcp::ServerConfig> = cfg.mcp_servers.iter().map(|(k, v)| {
-            (k.clone(), crow_runtime::mcp::ServerConfig {
-                command: v.command.clone(),
-                args: v.args.clone(),
+        let converted_mcp_servers: std::collections::HashMap<
+            String,
+            crow_runtime::mcp::ServerConfig,
+        > = cfg
+            .mcp_servers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    crow_runtime::mcp::ServerConfig {
+                        command: v.command.clone(),
+                        args: v.args.clone(),
+                    },
+                )
             })
-        }).collect();
+            .collect();
         let mcp_manager = Arc::new(McpManager::boot(&converted_mcp_servers).await?);
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&cfg.workspace);
 
@@ -124,22 +142,22 @@ impl SessionRuntime {
 
         let mut tool_registry = crow_tools::ToolRegistry::new();
         // Recon tools (read-only workspace exploration)
-        tool_registry.register(Box::new(crow_tools::recon::ListDirTool));
-        tool_registry.register(Box::new(crow_tools::recon::FetchUrlTool));
-        tool_registry.register(Box::new(crow_tools::recon::FileInfoTool));
-        tool_registry.register(Box::new(crow_tools::recon::WordCountTool));
-        tool_registry.register(Box::new(crow_tools::recon::DirTreeTool));
-        tool_registry.register(Box::new(crow_tools::recon::ReadFilesTool));
+        tool_registry.register(crow_tools::recon::ListDirTool);
+        tool_registry.register(crow_tools::recon::FetchUrlTool);
+        tool_registry.register(crow_tools::recon::FileInfoTool);
+        tool_registry.register(crow_tools::recon::WordCountTool);
+        tool_registry.register(crow_tools::recon::DirTreeTool);
+        tool_registry.register(crow_tools::recon::ReadFilesTool);
         // Intelligence tools (smart search & discovery)
-        tool_registry.register(Box::new(crow_tools::grep::GrepTool));
-        tool_registry.register(Box::new(crow_tools::glob::GlobTool));
+        tool_registry.register(crow_tools::grep::GrepTool);
+        tool_registry.register(crow_tools::glob::GlobTool);
         // Action tools (write/execute)
-        tool_registry.register(Box::new(crow_tools::subagent::SubagentTool));
-        tool_registry.register(Box::new(crow_tools::bash::BashTool));
-        tool_registry.register(Box::new(crow_tools::background::BashStatusTool));
-        tool_registry.register(Box::new(crow_tools::background::BashKillTool));
-        tool_registry.register(Box::new(crow_tools::file_edit::FileEditTool));
-        tool_registry.register(Box::new(crow_tools::file_write::FileWriteTool));
+        tool_registry.register(crow_tools::subagent::SubagentTool);
+        tool_registry.register(crow_tools::bash::BashTool);
+        tool_registry.register(crow_tools::background::BashStatusTool);
+        tool_registry.register(crow_tools::background::BashKillTool);
+        tool_registry.register(crow_tools::file_edit::FileEditTool);
+        tool_registry.register(crow_tools::file_write::FileWriteTool);
 
         Ok(Self {
             compiler,
@@ -150,7 +168,9 @@ impl SessionRuntime {
             task_registry: crow_runtime::registry::TaskRegistry::new(),
             team_registry: crow_runtime::registry::TeamRegistry::new(),
             tool_registry: std::sync::Arc::new(tool_registry),
-            permissions: std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: cfg.write_mode.into() }),
+            permissions: std::sync::Arc::new(crow_tools::PermissionEnforcer::new(
+                cfg.write_mode.into(),
+            )),
             background_manager: std::sync::Arc::new(crow_tools::BackgroundProcessManager::new()),
         })
     }
@@ -199,7 +219,10 @@ impl SessionRuntime {
                     .map_err(|e| anyhow::anyhow!(e))
                     .context("Failed to build repo map from frozen baseline")?;
                 let arc_map = Arc::new(map);
-                *self.cached_repo_map.lock().map_err(|_| anyhow::anyhow!("Cache lock poisoned"))? =
+                *self
+                    .cached_repo_map
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Cache lock poisoned"))? =
                     Some((snapshot_id.clone(), Arc::clone(&arc_map)));
                 Ok(arc_map)
             }
@@ -295,13 +318,15 @@ impl SessionRuntime {
         // Build repo map from the FROZEN snapshot, not live workspace
         let repo_map = self.build_context_map_with_cache(cfg, &snapshot_id, &frozen_root)?;
 
-        let _ = self.ledger.lock().map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?.append(
-            crow_workspace::ledger::LedgerEvent::SnapshotCreated {
+        let _ = self
+            .ledger
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
+            .append(crow_workspace::ledger::LedgerEvent::SnapshotCreated {
                 id: snapshot_id.clone(),
                 git_hash: snapshot_id.0.clone(),
                 timestamp: chrono::Utc::now(),
-            },
-        );
+            });
 
         let available_skills = self.load_and_resolve_skills(prompt, observer);
 
@@ -518,7 +543,10 @@ impl SessionRuntime {
         observer.handle_event(crate::event::AgentEvent::Turn(
             crate::event::TurnEvent::PhaseChanged {
                 turn_id: String::new(),
-                phase: crate::event::TurnPhase::EpistemicLoop { step: 0, max_steps: 40 },
+                phase: crate::event::TurnPhase::EpistemicLoop {
+                    step: 0,
+                    max_steps: 40,
+                },
             },
         ));
 
@@ -546,12 +574,8 @@ impl SessionRuntime {
             max_steps: None,
         };
 
-        let result = crow_runtime::agent_loop::run_agent_loop(
-            turn_config,
-            messages,
-            observer,
-        )
-        .await?;
+        let result =
+            crow_runtime::agent_loop::run_agent_loop(turn_config, messages, observer).await?;
 
         // Emit final text as markdown
         if !result.final_text.trim().is_empty() {
@@ -815,7 +839,8 @@ impl SessionRuntime {
         );
 
         let store = crow_runtime::session::SessionStore::open()?;
-        let mut loaded_session = store.load(&crow_runtime::session::SessionId(session_id.to_string()))?;
+        let mut loaded_session =
+            store.load(&crow_runtime::session::SessionId(session_id.to_string()))?;
 
         println!("  Workspace: {}", loaded_session.workspace_root.display());
         println!("  Task: {}", loaded_session.task);
@@ -997,7 +1022,8 @@ impl SessionRuntime {
         ) {
             println!("\n[4] Writing verified changes to workspace...");
             if let Err(e) =
-                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan).await
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, &hydrated_plan)
+                    .await
             {
                 eprintln!("  ❌ Failed to apply to workspace: {e:?}");
                 anyhow::bail!("Workspace mutation failed during resume.");

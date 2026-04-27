@@ -16,8 +16,10 @@ impl GitWorkspaceManager {
             .args(["branch", "--show-current"])
             .output()
             .await?;
-        
-        let original_branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+
+        let original_branch = String::from_utf8_lossy(&branch_output.stdout)
+            .trim()
+            .to_string();
         if original_branch.is_empty() {
             anyhow::bail!("Workspace must be a valid git repository with an active branch");
         }
@@ -78,7 +80,7 @@ impl GitWorkspaceManager {
             .args(["stash", "list"])
             .output()
             .await?;
-        
+
         if String::from_utf8_lossy(&stash_list.stdout).contains("crow-auto-stash") {
             let _ = Command::new("git")
                 .current_dir(&self.root)

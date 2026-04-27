@@ -15,13 +15,20 @@ use std::path::Path;
 pub struct FileEditTool;
 
 /// Validates that a path stays within the workspace root (no directory traversal).
-pub(crate) fn validate_workspace_path(workspace_root: &Path, relative_path: &str) -> std::result::Result<std::path::PathBuf, ToolOutput> {
+pub(crate) fn validate_workspace_path(
+    workspace_root: &Path,
+    relative_path: &str,
+) -> std::result::Result<std::path::PathBuf, ToolOutput> {
     let abs = workspace_root.join(relative_path);
-    let canonical_root = workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical_root = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
     let canonical_target = if abs.exists() {
         abs.canonicalize().unwrap_or(abs.clone())
     } else if let Some(parent) = abs.parent() {
-        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+        let canonical_parent = parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf());
         canonical_parent.join(abs.file_name().unwrap_or_default())
     } else {
         abs.clone()
@@ -93,6 +100,27 @@ impl Tool for FileEditTool {
         // Permission check
         ctx.permissions.check_file_write(&abs_path)?;
 
+        // ── Binary File Guard (claw-code pattern) ─────────────────────
+        // Prevent text-replacement edits on binary files, which would
+        // silently corrupt them.
+        if abs_path.exists() {
+            match crate::file_safety::is_binary_file(&abs_path) {
+                Ok(true) => {
+                    return Ok(ToolOutput::error(format!(
+                        "File '{}' appears to be binary. Cannot apply text edits to binary files.",
+                        parsed.path
+                    )));
+                }
+                Err(e) => {
+                    return Ok(ToolOutput::error(format!(
+                        "Cannot check file type of '{}': {e}",
+                        parsed.path
+                    )));
+                }
+                Ok(false) => {} // text file, proceed
+            }
+        }
+
         // Staleness check (if file state tracking is available)
         if let Some(ref store) = ctx.file_state {
             if !store.has_recorded(&abs_path) {
@@ -131,7 +159,7 @@ impl Tool for FileEditTool {
         // Check old_text == new_text
         if parsed.old_text == parsed.new_text {
             return Ok(ToolOutput::error(
-                "No changes to make: old_text and new_text are exactly the same."
+                "No changes to make: old_text and new_text are exactly the same.",
             ));
         }
 
@@ -160,7 +188,10 @@ impl Tool for FileEditTool {
 
         // Write back
         if let Err(e) = std::fs::write(&abs_path, &new_content) {
-            return Ok(ToolOutput::error(format!("Failed to write file '{path}': {e}", path = parsed.path)));
+            return Ok(ToolOutput::error(format!(
+                "Failed to write file '{path}': {e}",
+                path = parsed.path
+            )));
         }
 
         // Update file state tracking

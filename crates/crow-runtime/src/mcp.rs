@@ -18,9 +18,7 @@ pub struct ServerConfig {
 
 impl McpManager {
     /// Boot configured MCP servers and build the prompt injection material.
-    pub async fn boot(
-        config_servers: &HashMap<String, ServerConfig>,
-    ) -> Result<Self> {
+    pub async fn boot(config_servers: &HashMap<String, ServerConfig>) -> Result<Self> {
         let mut clients = HashMap::new();
         let mut lines = Vec::new();
 

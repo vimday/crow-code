@@ -13,7 +13,9 @@ impl Tool for ListDirTool {
         "List directory contents with detailed file information"
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -34,10 +36,14 @@ impl Tool for ListDirTool {
             path: crow_patch::WorkspacePath,
         }
         let parsed: Args = serde_json::from_value(args)?;
-        
+
         let v_cmd = crow_probe::VerificationCommand {
             program: "ls".to_string(),
-            args: vec!["-la".to_string(), "--".to_string(), parsed.path.as_str().to_string()],
+            args: vec![
+                "-la".to_string(),
+                "--".to_string(),
+                parsed.path.as_str().to_string(),
+            ],
             cwd: None,
         };
         let exec_config = crow_verifier::ExecutionConfig {
@@ -50,7 +56,8 @@ impl Tool for ListDirTool {
             &exec_config,
             &crow_verifier::types::AciConfig::compact(),
             None,
-        ).await?;
+        )
+        .await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -67,7 +74,9 @@ impl Tool for SearchTool {
         "Search for a regex pattern across files using ripgrep. Returns matching lines with file paths and line numbers."
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -99,11 +108,7 @@ impl Tool for SearchTool {
         }
         let parsed: Args = serde_json::from_value(args)?;
 
-        let mut a = vec![
-            "-rn".to_string(),
-            "-e".to_string(),
-            parsed.pattern,
-        ];
+        let mut a = vec!["-rn".to_string(), "-e".to_string(), parsed.pattern];
         if let Some(g) = parsed.glob {
             a.push("-g".to_string());
             a.push(g);
@@ -130,7 +135,8 @@ impl Tool for SearchTool {
             &exec_config,
             &crow_verifier::types::AciConfig::compact(),
             None,
-        ).await?;
+        )
+        .await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -147,7 +153,9 @@ impl Tool for FetchUrlTool {
         "Fetch and process the text content of a public URL"
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -179,12 +187,17 @@ impl Tool for FetchUrlTool {
         let res = client.get(&parsed.url).send().await?;
         let status = res.status();
         if !status.is_success() {
-            return Ok(ToolOutput::error(format!("{url} returned HTTP {status}", url = parsed.url)));
+            return Ok(ToolOutput::error(format!(
+                "{url} returned HTTP {status}",
+                url = parsed.url
+            )));
         }
         if let Some(ct) = res.headers().get(reqwest::header::CONTENT_TYPE) {
             let ct_str = ct.to_str().unwrap_or("");
             if !ct_str.contains("text/") && !ct_str.contains("application/json") {
-                return Ok(ToolOutput::error(format!("Unsupported Content-Type '{ct_str}'. Only text or json supported.")));
+                return Ok(ToolOutput::error(format!(
+                    "Unsupported Content-Type '{ct_str}'. Only text or json supported."
+                )));
             }
         }
 
@@ -208,7 +221,9 @@ impl Tool for FileInfoTool {
         "Show file metadata (size, type, permissions)"
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -222,15 +237,27 @@ impl Tool for FileInfoTool {
 
     async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
-        struct Args { path: crow_patch::WorkspacePath }
+        struct Args {
+            path: crow_patch::WorkspacePath,
+        }
         let parsed: Args = serde_json::from_value(args)?;
         let v_cmd = crow_probe::VerificationCommand {
             program: "file".to_string(),
             args: vec!["--".to_string(), parsed.path.as_str().to_string()],
             cwd: None,
         };
-        let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
-        let result = crow_verifier::executor::execute(ctx.workspace_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
+        let exec_config = crow_verifier::ExecutionConfig {
+            timeout: std::time::Duration::from_secs(10),
+            max_output_bytes: 512 * 1024,
+        };
+        let result = crow_verifier::executor::execute(
+            ctx.workspace_root,
+            &v_cmd,
+            &exec_config,
+            &crow_verifier::types::AciConfig::compact(),
+            None,
+        )
+        .await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -246,7 +273,9 @@ impl Tool for WordCountTool {
         "Count lines, words, and bytes in a file"
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -260,15 +289,32 @@ impl Tool for WordCountTool {
 
     async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
-        struct Args { path: crow_patch::WorkspacePath }
+        struct Args {
+            path: crow_patch::WorkspacePath,
+        }
         let parsed: Args = serde_json::from_value(args)?;
         let v_cmd = crow_probe::VerificationCommand {
             program: "wc".to_string(),
-            args: vec!["-l".to_string(), "-c".to_string(), "--".to_string(), parsed.path.as_str().to_string()],
+            args: vec![
+                "-l".to_string(),
+                "-c".to_string(),
+                "--".to_string(),
+                parsed.path.as_str().to_string(),
+            ],
             cwd: None,
         };
-        let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
-        let result = crow_verifier::executor::execute(ctx.workspace_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
+        let exec_config = crow_verifier::ExecutionConfig {
+            timeout: std::time::Duration::from_secs(10),
+            max_output_bytes: 512 * 1024,
+        };
+        let result = crow_verifier::executor::execute(
+            ctx.workspace_root,
+            &v_cmd,
+            &exec_config,
+            &crow_verifier::types::AciConfig::compact(),
+            None,
+        )
+        .await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -284,7 +330,9 @@ impl Tool for DirTreeTool {
         "Show directory tree structure with a depth limit"
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -299,16 +347,34 @@ impl Tool for DirTreeTool {
 
     async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
-        struct Args { path: crow_patch::WorkspacePath, max_depth: Option<u32> }
+        struct Args {
+            path: crow_patch::WorkspacePath,
+            max_depth: Option<u32>,
+        }
         let parsed: Args = serde_json::from_value(args)?;
         let depth = parsed.max_depth.unwrap_or(3).min(10);
         let v_cmd = crow_probe::VerificationCommand {
             program: "tree".to_string(),
-            args: vec!["-L".to_string(), depth.to_string(), "--".to_string(), parsed.path.as_str().to_string()],
+            args: vec![
+                "-L".to_string(),
+                depth.to_string(),
+                "--".to_string(),
+                parsed.path.as_str().to_string(),
+            ],
             cwd: None,
         };
-        let exec_config = crow_verifier::ExecutionConfig { timeout: std::time::Duration::from_secs(10), max_output_bytes: 512 * 1024 };
-        let result = crow_verifier::executor::execute(ctx.workspace_root, &v_cmd, &exec_config, &crow_verifier::types::AciConfig::compact(), None).await?;
+        let exec_config = crow_verifier::ExecutionConfig {
+            timeout: std::time::Duration::from_secs(10),
+            max_output_bytes: 512 * 1024,
+        };
+        let result = crow_verifier::executor::execute(
+            ctx.workspace_root,
+            &v_cmd,
+            &exec_config,
+            &crow_verifier::types::AciConfig::compact(),
+            None,
+        )
+        .await?;
         Ok(ToolOutput::success(result.test_run.truncated_log))
     }
 }
@@ -324,7 +390,9 @@ impl Tool for ReadFilesTool {
         "Read the contents of a file from the workspace. Supports optional line-range selection."
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -355,14 +423,26 @@ impl Tool for ReadFilesTool {
             end_line: Option<usize>,
         }
         let parsed: Args = serde_json::from_value(args)?;
-        
+
         use std::io::{BufRead, BufReader};
         const MAX_FILE_BYTES: usize = 50 * 1024;
         const MAX_FILE_LINES: usize = 500;
 
         let abs_path = parsed.path.to_absolute(ctx.workspace_root);
+
+        // ── File Safety Preflight (claw-code pattern) ─────────────────
+        // Check workspace boundary, binary detection, and file size
+        // before attempting to read. This prevents binary gibberish from
+        // polluting the LLM context window.
+        if let Err(reason) = crate::file_safety::preflight_read(&abs_path, ctx.workspace_root) {
+            return Ok(ToolOutput::error(format!(
+                "Cannot read '{}': {reason}",
+                parsed.path.as_str()
+            )));
+        }
+
         let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
-        
+
         let content = match std::fs::File::open(&abs_path) {
             Ok(file) => {
                 let reader = BufReader::new(file);
@@ -415,10 +495,13 @@ impl Tool for ReadFilesTool {
                 }
             }
             Err(e) => {
-                return Ok(ToolOutput::error(format!("Could not read file '{path}': {e}", path = parsed.path.as_str())));
+                return Ok(ToolOutput::error(format!(
+                    "Could not read file '{path}': {e}",
+                    path = parsed.path.as_str()
+                )));
             }
         };
-        
+
         // Record file state for staleness tracking
         if let Some(ref store) = ctx.file_state {
             let mtime = crate::file_state::get_file_mtime(&abs_path).await;

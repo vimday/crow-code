@@ -1,12 +1,12 @@
 use crate::config::CrowConfig;
 use crate::event::{AgentEvent, ViewMode};
+use crate::tui::commands::{execute_shell_command, handle_enter};
+use crate::tui::components::{composer::ComposerComponent, history::HistoryComponent};
+use crate::tui::render::render_app;
+use crate::tui::state::{self, AppState, Cell, CellKind, TuiMessage};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use crate::tui::render::render_app;
-use crate::tui::state::{self, AppState, Cell, CellKind, TuiMessage};
-use crate::tui::components::{composer::ComposerComponent, history::HistoryComponent};
-use crate::tui::commands::{execute_shell_command, handle_enter};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -271,25 +271,15 @@ pub async fn run_tui_loop(
                     handle_agent_event(state, ev);
                 }
                 TuiMessage::TurnComplete(success, timing) => {
-                    // Finish the stream controller and drain all remaining lines
-                    state.stream_controller.finish();
-                    let remaining = state.stream_controller.drain_all();
-                    state.history.extend(remaining);
-
-                    // Also flush legacy stream state as a safety net
-                    let renderer = crate::render::TerminalRenderer::new();
-                    if let Some(flushed) = state.stream_state.flush(&renderer) {
-                        for line in flushed.lines() {
-                            state.history.push(Cell {
-                                kind: CellKind::AgentMessage,
-                                payload: line.to_string(),
-                            });
-                        }
+                    // Commit active cell to history
+                    if let Some(cell) = state.active_cell.take() {
+                        state.history.push(cell);
                     }
+
                     state.active_action = None;
                     state.task_start_time = None;
                     state.turn_phase = None;
-                    
+
                     let final_tokens = state.streaming_token_estimate;
 
                     // Reset streaming metrics (Yomi pattern)
@@ -306,7 +296,8 @@ pub async fn run_tui_loop(
                         // Display timing summary in Audit mode (Codex TurnCompleted pattern)
                         let timing_label = if let Some(ref t) = timing {
                             let total_s = t.total_ms as f64 / 1000.0;
-                            let ttft = t.ttft_ms
+                            let ttft = t
+                                .ttft_ms
                                 .map(|ms| format!("{ms}ms"))
                                 .unwrap_or_else(|| "n/a".to_string());
                             let tps_display = if total_s > 0.0 && final_tokens > 0.0 {
@@ -314,7 +305,10 @@ pub async fn run_tui_loop(
                             } else {
                                 "".to_string()
                             };
-                            format!("Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft}{tps_display})", t.llm_calls)
+                            format!(
+                                "Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft}{tps_display})",
+                                t.llm_calls
+                            )
                         } else {
                             "Done".to_string()
                         };
@@ -324,7 +318,13 @@ pub async fn run_tui_loop(
                         });
 
                         if let Some(next_task) = state.task_queue.pop_front() {
-                            crate::tui::commands::execute_command_string(state, next_task, tx, &cfg, thread_manager);
+                            crate::tui::commands::execute_command_string(
+                                state,
+                                next_task,
+                                tx,
+                                &cfg,
+                                thread_manager,
+                            );
                         }
                     } else if !state.task_queue.is_empty() {
                         let drop_count = state.task_queue.len();
@@ -341,11 +341,9 @@ pub async fn run_tui_loop(
                     crate::tui::app::refresh_git_state(state, &cfg.workspace);
                 }
                 TuiMessage::SessionComplete => {
-                    // Drain any remaining stream content on session end
-                    state.stream_controller.finish();
-                    let remaining = state.stream_controller.drain_all();
-                    state.history.extend(remaining);
-
+                    if let Some(cell) = state.active_cell.take() {
+                        state.history.push(cell);
+                    }
                     state.active_action = None;
                     state.task_start_time = None;
                     state.is_streaming = false;
@@ -373,13 +371,8 @@ pub async fn run_tui_loop(
                 TuiMessage::Tick => {
                     state.spinner_idx = state.spinner_idx.wrapping_add(1);
 
-                    // ── CommitTick: drain buffered stream lines ──
-                    let drained = state.stream_controller.drain_tick();
-                    if !drained.is_empty() {
-                        state.history.extend(drained);
-                        // Auto-scroll to bottom when new streaming content arrives
-                        state.scroll_offset = 0;
-                    }
+                    // We no longer rely on stream_controller for buffered rendering.
+                    // The live active_cell is natively rendered by the TUI render loop.
 
                     // Auto-clear expired status messages (Yomi pattern)
                     state.check_status_timeout();
@@ -466,15 +459,23 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.streaming_start_time = Some(Instant::now());
         }
         AgentEvent::StreamChunk(chunk) => {
-            // CommitTick pattern: buffer chunks into the stream controller.
-            // Lines are drained one-per-tick in the Tick handler for smooth animation.
-            state.stream_controller.push_chunk(&chunk);
-            // Accumulate token estimate for InfoBar display
+            if let Some(cell) = &mut state.active_cell {
+                cell.payload.push_str(&chunk);
+            } else {
+                state.active_cell = Some(Cell {
+                    kind: CellKind::AgentMessage,
+                    payload: chunk.clone(),
+                });
+            }
             state.streaming_token_estimate += AppState::estimate_tokens(&chunk);
+            state.scroll_offset = 0; // Force scroll to bottom on new content
         }
         AgentEvent::Markdown(md) => {
-            // Final markdown block: route through controller for buffered drain.
-            state.stream_controller.push_markdown(&md);
+            state.active_cell = Some(Cell {
+                kind: CellKind::AgentMessage,
+                payload: md,
+            });
+            state.scroll_offset = 0;
         }
         AgentEvent::Log(msg) => {
             state.history.push(Cell {
@@ -512,7 +513,9 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_swarms.push((id, task));
         }
         AgentEvent::DelegateComplete(id, _success) => {
-            state.active_swarms.retain(|(active_id, _)| active_id != &id);
+            state
+                .active_swarms
+                .retain(|(active_id, _)| active_id != &id);
         }
         AgentEvent::PlanSubmitted(plan) => {
             if !plan.operations.is_empty() {
@@ -558,7 +561,9 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_action = Some(format!("Retrying ({attempt}/{max_attempts})… {reason}"));
             // Show timed warning in status bar (Yomi pattern)
             state.show_status(
-                state::StatusMessage::warn(format!("Retrying ({attempt}/{max_attempts}): {reason}")),
+                state::StatusMessage::warn(format!(
+                    "Retrying ({attempt}/{max_attempts}): {reason}"
+                )),
                 5000,
             );
         }

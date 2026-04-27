@@ -3,6 +3,7 @@ mod config;
 pub mod crucible;
 pub mod crucible_runner;
 mod diff;
+pub mod dotenv;
 pub mod epistemic_ui;
 pub mod event;
 mod evidence_report;
@@ -195,12 +196,7 @@ async fn run_yolo(args: &[String]) -> Result<()> {
     let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     let mut observer = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
     runtime
-        .execute_native_turn(
-            &cfg,
-            &prompt,
-            &mut messages,
-            &mut observer,
-        )
+        .execute_native_turn(&cfg, &prompt, &mut messages, &mut observer)
         .await
         .map(|_| ())
 }

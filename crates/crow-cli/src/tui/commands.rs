@@ -250,7 +250,9 @@ pub fn execute_command_string(
                     {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         if !stdout.trim().is_empty() {
-                            if !diff_output.is_empty() { diff_output.push('\n'); }
+                            if !diff_output.is_empty() {
+                                diff_output.push('\n');
+                            }
                             diff_output.push_str("Changes (staged):\n");
                             diff_output.push_str(&stdout);
                         }
@@ -265,7 +267,9 @@ pub fn execute_command_string(
                     {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         if !stdout.trim().is_empty() {
-                            if !diff_output.is_empty() { diff_output.push('\n'); }
+                            if !diff_output.is_empty() {
+                                diff_output.push('\n');
+                            }
                             diff_output.push_str("Untracked files:\n");
                             for file in stdout.lines() {
                                 diff_output.push_str(&format!("  + {file}\n"));
@@ -277,9 +281,9 @@ pub fn execute_command_string(
                         diff_output = "Working tree is clean.".into();
                     }
 
-                    let _ = tx_diff.send(TuiMessage::AgentEvent(
-                        crate::event::AgentEvent::Log(diff_output),
-                    ));
+                    let _ = tx_diff.send(TuiMessage::AgentEvent(crate::event::AgentEvent::Log(
+                        diff_output,
+                    )));
                 });
             }
             "memory" => {
@@ -290,7 +294,7 @@ pub fn execute_command_string(
                 } else {
                     format!("/memory {}", rest_args.join(" "))
                 };
-                
+
                 state.history.push(Cell {
                     kind: CellKind::User,
                     payload: display_payload,
@@ -307,43 +311,60 @@ pub fn execute_command_string(
                                 payload: "Usage: /memory add <text>".into(),
                             });
                         } else if let Err(e) = std::fs::create_dir_all(".crow") {
-                            state.history.push(Cell { kind: CellKind::Error, payload: format!("Failed to create .crow directory: {e}") });
+                            state.history.push(Cell {
+                                kind: CellKind::Error,
+                                payload: format!("Failed to create .crow directory: {e}"),
+                            });
                         } else {
                             use std::io::Write;
-                            match std::fs::OpenOptions::new().create(true).append(true).open(&memory_file) {
+                            match std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&memory_file)
+                            {
                                 Ok(mut f) => {
                                     if let Err(e) = writeln!(f, "- {text}") {
-                                        state.history.push(Cell { kind: CellKind::Error, payload: format!("Failed to write to memory: {e}") });
+                                        state.history.push(Cell {
+                                            kind: CellKind::Error,
+                                            payload: format!("Failed to write to memory: {e}"),
+                                        });
                                     } else {
-                                        state.history.push(Cell { kind: CellKind::Log, payload: "Memory added successfully.".into() });
+                                        state.history.push(Cell {
+                                            kind: CellKind::Log,
+                                            payload: "Memory added successfully.".into(),
+                                        });
                                     }
                                 }
                                 Err(e) => {
-                                    state.history.push(Cell { kind: CellKind::Error, payload: format!("Failed to open memory file: {e}") });
+                                    state.history.push(Cell {
+                                        kind: CellKind::Error,
+                                        payload: format!("Failed to open memory file: {e}"),
+                                    });
                                 }
                             }
                         }
                     }
                     "clear" => {
                         let _ = std::fs::remove_file(&memory_file);
-                        state.history.push(Cell { kind: CellKind::Log, payload: "Persistent memory cleared.".into() });
+                        state.history.push(Cell {
+                            kind: CellKind::Log,
+                            payload: "Persistent memory cleared.".into(),
+                        });
                     }
-                    _ => {
-                        match std::fs::read_to_string(&memory_file) {
-                            Ok(content) if !content.trim().is_empty() => {
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: format!("Persistent Memory:\n{content}"),
-                                });
-                            }
-                            _ => {
-                                state.history.push(Cell {
+                    _ => match std::fs::read_to_string(&memory_file) {
+                        Ok(content) if !content.trim().is_empty() => {
+                            state.history.push(Cell {
+                                kind: CellKind::Log,
+                                payload: format!("Persistent Memory:\n{content}"),
+                            });
+                        }
+                        _ => {
+                            state.history.push(Cell {
                                     kind: CellKind::Log,
                                     payload: "Memory is empty. Use '/memory add <text>' to store persistent context.".into(),
                                 });
-                            }
                         }
-                    }
+                    },
                 }
             }
             "session" => {
@@ -452,7 +473,8 @@ pub fn execute_command_string(
         // path. Execution goes through `sh -c`, so `!cargo test && curl ...`
         // would bypass the prefix allowlist without this check.
         const SHELL_METACHARACTERS: &[&str] = &[
-            "&&", "||", ";", "|", "$(", "${", "$", "`", ">", "<", "(", ")", "{", "}", "\n", "\\", "#",
+            "&&", "||", ";", "|", "$(", "${", "$", "`", ">", "<", "(", ")", "{", "}", "\n", "\\",
+            "#",
         ];
         let has_metacharacters = SHELL_METACHARACTERS
             .iter()

@@ -44,7 +44,22 @@ pub struct Cell {
     pub payload: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusIndicatorState {
+    pub header: String,
+    pub details: Option<String>,
+    pub details_max_lines: usize,
+}
 
+impl StatusIndicatorState {
+    pub fn working() -> Self {
+        Self {
+            header: String::from("Working"),
+            details: None,
+            details_max_lines: 3,
+        }
+    }
+}
 
 // ── App State ────────────────────────────────────────────────────────────────
 
@@ -71,6 +86,7 @@ pub struct AppState {
     // View
     pub view_mode: ViewMode,
     pub history: Vec<Cell>,
+    pub active_cell: Option<Cell>,
     pub scroll_offset: usize,
 
     // Runtime
@@ -123,6 +139,9 @@ pub struct AppState {
     /// When the status message should auto-clear.
     pub status_message_timeout: Option<Instant>,
 
+    // ── Deep Status Indicator (Codex pattern) ──────────────────────
+    pub status_indicator: Option<StatusIndicatorState>,
+
     // ── Shortcut Overlay (Codex `?` key pattern) ────────────────────
     /// When true, the shortcut help overlay is visible.
     pub show_shortcuts_overlay: bool,
@@ -150,13 +169,22 @@ pub enum StatusLevel {
 
 impl StatusMessage {
     pub fn info(content: impl Into<String>) -> Self {
-        Self { content: content.into(), level: StatusLevel::Info }
+        Self {
+            content: content.into(),
+            level: StatusLevel::Info,
+        }
     }
     pub fn warn(content: impl Into<String>) -> Self {
-        Self { content: content.into(), level: StatusLevel::Warn }
+        Self {
+            content: content.into(),
+            level: StatusLevel::Warn,
+        }
     }
     pub fn tip(content: impl Into<String>) -> Self {
-        Self { content: content.into(), level: StatusLevel::Tip }
+        Self {
+            content: content.into(),
+            level: StatusLevel::Tip,
+        }
     }
 }
 
@@ -169,6 +197,7 @@ impl AppState {
             input_history_idx: None,
             view_mode: ViewMode::default(),
             history: Vec::new(),
+            active_cell: None,
             scroll_offset: 0,
             current_turn_id: None,
             active_action: None,
@@ -197,6 +226,7 @@ impl AppState {
             ctx_usage: None,
             status_message: None,
             status_message_timeout: None,
+            status_indicator: None,
             show_shortcuts_overlay: false,
             quit_hint_until: None,
         }

@@ -2,8 +2,8 @@ use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
 use crow_brain::compiler::IntentCompiler;
 use crow_patch::IntentPlan;
-use std::path::Path;
 use std::fmt;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,8 +40,8 @@ pub struct SubagentWorker {
 
 impl SubagentWorker {
     pub fn new(
-        role: AgentRole, 
-        compiler: IntentCompiler, 
+        role: AgentRole,
+        compiler: IntentCompiler,
         task_registry: crate::registry::TaskRegistry,
         tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
         permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
@@ -51,7 +51,14 @@ impl SubagentWorker {
             .unwrap_or(std::time::Duration::ZERO)
             .as_micros();
         let id = format!("sub-{:08x}", ts as u32);
-        Self { id, role, compiler, task_registry, tool_registry, permissions }
+        Self {
+            id,
+            role,
+            compiler,
+            task_registry,
+            tool_registry,
+            permissions,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -87,7 +94,10 @@ impl SubagentWorker {
         let mut sub_messages = ConversationManager::new(msgs);
 
         let task_desc = format!("[{}] {}", self.role, task);
-        parent_observer.handle_event(crate::event::AgentEvent::DelegateStart(self.id.clone(), task_desc.clone()));
+        parent_observer.handle_event(crate::event::AgentEvent::DelegateStart(
+            self.id.clone(),
+            task_desc.clone(),
+        ));
 
         let mut observer = SubagentEventHandler {
             id: self.id.clone(),
@@ -108,7 +118,7 @@ impl SubagentWorker {
             output: None,
         };
         self.task_registry.register(task_def);
-        
+
         let execution_result = tokio::time::timeout(
             SUBAGENT_TIMEOUT,
             crate::epistemic::run_epistemic_loop(
@@ -123,22 +133,36 @@ impl SubagentWorker {
             ),
         )
         .await;
-        
+
         let success = matches!(&execution_result, Ok(Ok(_)));
-        observer.parent.handle_event(crate::event::AgentEvent::DelegateComplete(self.id.clone(), success));
+        observer
+            .parent
+            .handle_event(crate::event::AgentEvent::DelegateComplete(
+                self.id.clone(),
+                success,
+            ));
 
         match execution_result {
             Ok(Ok(plan)) => {
-                self.task_registry.update_status(&self.id, crate::registry::TaskStatus::Completed);
+                self.task_registry
+                    .update_status(&self.id, crate::registry::TaskStatus::Completed);
                 Ok(plan)
             }
             Ok(Err(e)) => {
-                self.task_registry.update_status(&self.id, crate::registry::TaskStatus::Failed(e.to_string()));
+                self.task_registry
+                    .update_status(&self.id, crate::registry::TaskStatus::Failed(e.to_string()));
                 Err(e)
             }
             Err(_) => {
-                let err_msg = format!("Subagent [{id}] timed out after {timeout}s", id = self.id, timeout = SUBAGENT_TIMEOUT.as_secs());
-                self.task_registry.update_status(&self.id, crate::registry::TaskStatus::Failed(err_msg.clone()));
+                let err_msg = format!(
+                    "Subagent [{id}] timed out after {timeout}s",
+                    id = self.id,
+                    timeout = SUBAGENT_TIMEOUT.as_secs()
+                );
+                self.task_registry.update_status(
+                    &self.id,
+                    crate::registry::TaskStatus::Failed(err_msg.clone()),
+                );
                 Err(anyhow::anyhow!(err_msg))
             }
         }
@@ -156,12 +180,12 @@ impl EventHandler for SubagentEventHandler<'_> {
         match event {
             AgentEvent::StreamChunk(c) => self.parent.handle_event(AgentEvent::StreamChunk(c)),
             AgentEvent::Thinking(a, b) => self.parent.handle_event(AgentEvent::Thinking(a, b)),
-            AgentEvent::ActionStart(msg) => self
-                .parent
-                .handle_event(AgentEvent::ActionStart(format!("[{}:{}] {}", self.role, self.id, msg))),
-            AgentEvent::ActionComplete(msg) => self
-                .parent
-                .handle_event(AgentEvent::ActionComplete(format!("[{}:{}] {}", self.role, self.id, msg))),
+            AgentEvent::ActionStart(msg) => self.parent.handle_event(AgentEvent::ActionStart(
+                format!("[{}:{}] {}", self.role, self.id, msg),
+            )),
+            AgentEvent::ActionComplete(msg) => self.parent.handle_event(
+                AgentEvent::ActionComplete(format!("[{}:{}] {}", self.role, self.id, msg)),
+            ),
             AgentEvent::ReadFiles(paths) => {
                 let display = if paths.len() <= 3 {
                     paths.join(", ")
@@ -177,11 +201,12 @@ impl EventHandler for SubagentEventHandler<'_> {
                 "  [{}:{}] 🔍 Recon: {}",
                 self.role, self.id, msg
             ))),
-            AgentEvent::DelegateStart(id, msg) => self.parent.handle_event(AgentEvent::DelegateStart(id, format!(
-                "[{}:{}] {}",
-                self.role, self.id, msg
-            ))),
-            AgentEvent::DelegateComplete(id, success) => self.parent.handle_event(AgentEvent::DelegateComplete(id, success)),
+            AgentEvent::DelegateStart(id, msg) => self.parent.handle_event(
+                AgentEvent::DelegateStart(id, format!("[{}:{}] {}", self.role, self.id, msg)),
+            ),
+            AgentEvent::DelegateComplete(id, success) => self
+                .parent
+                .handle_event(AgentEvent::DelegateComplete(id, success)),
             AgentEvent::PlanSubmitted(_) => self.parent.handle_event(AgentEvent::Log(format!(
                 "  [{}:{}] 📋 Plan Submitted",
                 self.role, self.id
@@ -189,12 +214,14 @@ impl EventHandler for SubagentEventHandler<'_> {
             AgentEvent::CruciblePreflight(msg) => self.parent.handle_event(AgentEvent::Log(
                 format!("  [{}:{}] 🛡️ Preflight: {}", self.role, self.id, msg),
             )),
-            AgentEvent::Log(msg) => self
-                .parent
-                .handle_event(AgentEvent::Log(format!("  [{}:{}] {}", self.role, self.id, msg))),
-            AgentEvent::Error(msg) => self
-                .parent
-                .handle_event(AgentEvent::Error(format!("[{}:{}] {}", self.role, self.id, msg))),
+            AgentEvent::Log(msg) => self.parent.handle_event(AgentEvent::Log(format!(
+                "  [{}:{}] {}",
+                self.role, self.id, msg
+            ))),
+            AgentEvent::Error(msg) => self.parent.handle_event(AgentEvent::Error(format!(
+                "[{}:{}] {}",
+                self.role, self.id, msg
+            ))),
             AgentEvent::Markdown(msg) => self.parent.handle_event(AgentEvent::Markdown(msg)),
             // Pass through new high-granularity events with subagent context
             AgentEvent::TokenUsage { .. } => self.parent.handle_event(event),

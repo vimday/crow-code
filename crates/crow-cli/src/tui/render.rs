@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Stylize, Styled};
+use ratatui::style::{Color, Styled, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -54,10 +54,7 @@ pub fn render_app(
 
     let main_split = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(78),
-            Constraint::Percentage(22),
-        ])
+        .constraints([Constraint::Percentage(78), Constraint::Percentage(22)])
         .split(size);
 
     let main_area = main_split[0];
@@ -94,7 +91,7 @@ pub fn render_app(
         height: chunks[4].height + chunks[5].height,
     };
     composer_comp.render(f, compound_composer_rect, state);
-    
+
     // Render side context dashboard
     render_side_context(f, state, side_area);
 }
@@ -102,27 +99,31 @@ pub fn render_app(
 // ── Side Context Dashboard ───────────────────────────────────────────────────
 
 fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
+    use ratatui::style::{Color, Style};
     use ratatui::widgets::{Block, Borders, Paragraph};
-    use ratatui::style::{Style, Color};
-    
+
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::new().fg(Color::DarkGray));
-        
+
     let mut lines = Vec::new();
     lines.push(Line::from(""));
-    
+
     lines.push(Line::from(vec![
         format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
         "ENVIRONMENT".set_style(Styles::evidence()),
     ]));
-    
-    let path = if state.workspace_name.is_empty() { "memfs" } else { &state.workspace_name };
+
+    let path = if state.workspace_name.is_empty() {
+        "memfs"
+    } else {
+        &state.workspace_name
+    };
     lines.push(Line::from(vec![
         "    Path:   ".set_style(Styles::evidence()),
         path.set_style(Styles::code_block()),
     ]));
-    
+
     lines.push(Line::from(vec![
         "    Branch: ".set_style(Styles::evidence()),
         state.git_branch.as_str().set_style(Styles::code_block()),
@@ -130,26 +131,26 @@ fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
             " *".set_style(Styles::error())
         } else {
             "".set_style(Styles::evidence())
-        }
+        },
     ]));
-    
+
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
         "AGENT CONTEXT".set_style(Styles::evidence()),
     ]));
-    
+
     let mode_str = format!("{:?}", state.view_mode);
     lines.push(Line::from(vec![
         "    Auth:   ".set_style(Styles::evidence()),
         mode_str.set_style(Styles::success()),
     ]));
-    
+
     lines.push(Line::from(vec![
         "    Write:  ".set_style(Styles::evidence()),
         state.write_mode.as_str().set_style(Styles::warning()),
     ]));
-        
+
     let p = Paragraph::new(lines).block(block);
     f.render_widget(p, area);
 }
@@ -203,7 +204,7 @@ impl<'a> HistoryCell for AgentMessageCell<'a> {
             } else {
                 format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content())
             };
-            
+
             let mut new_spans = vec![prefix];
             for span in line.spans.iter() {
                 new_spans.push(span.clone());
@@ -397,6 +398,27 @@ pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
         }
     }
 
+    // 1.5 Active streaming cell (Codex pattern)
+    if let Some(cell) = &state.active_cell {
+        if to_take > 0 {
+            let history_cell: Box<dyn HistoryCell> = match cell.kind {
+                CellKind::User => Box::new(UserCell(&cell.payload)),
+                CellKind::AgentMessage => Box::new(AgentMessageCell(&cell.payload)),
+                CellKind::Evidence => Box::new(EvidenceCell(&cell.payload)),
+                CellKind::Action => Box::new(ActionCell(&cell.payload)),
+                CellKind::Result => Box::new(ResultCell(&cell.payload)),
+                CellKind::Log => Box::new(LogCell(&cell.payload)),
+                CellKind::Error => Box::new(ErrorCell(&cell.payload)),
+                CellKind::Debate => Box::new(DebateCell(&cell.payload)),
+            };
+
+            let lines = history_cell.display_lines(area.width);
+            for item in lines.into_iter().rev() {
+                push_item!(ListItem::new(item));
+            }
+        }
+    }
+
     // 2. Iterate history backwards using HistoryCell implementations
     for cell in state.history.iter().rev() {
         if to_take == 0 {
@@ -456,8 +478,8 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
         }
     }
 
-    let p = Paragraph::new(Line::from(spans))
-        .style(ratatui::style::Style::new().bg(colors::border()));
+    let p =
+        Paragraph::new(Line::from(spans)).style(ratatui::style::Style::new().bg(colors::border()));
     f.render_widget(p, area);
 }
 
@@ -508,13 +530,13 @@ fn render_footer_hints(f: &mut Frame, state: &AppState, area: Rect) {
                 "ctrl+u".bold().dim(),
                 " clear input".dim(),
             ]),
-            Line::from(vec![
-                "  ↑/↓".bold().dim(),
-                " input history".dim(),
-            ]),
+            Line::from(vec!["  ↑/↓".bold().dim(), " input history".dim()]),
             Line::from("  ? again to dismiss".dim()),
         ]
-    } else if state.quit_hint_until.is_some_and(|t| std::time::Instant::now() < t) {
+    } else if state
+        .quit_hint_until
+        .is_some_and(|t| std::time::Instant::now() < t)
+    {
         vec![Line::from(vec![
             "  ".into(),
             "ctrl+c".bold().fg(colors::accent_warning()),
@@ -534,8 +556,7 @@ fn render_footer_hints(f: &mut Frame, state: &AppState, area: Rect) {
         ])]
     };
 
-    let p = Paragraph::new(lines)
-        .style(Style::new());
+    let p = Paragraph::new(lines).style(Style::new());
     f.render_widget(p, area);
 }
 
@@ -551,23 +572,23 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
     // ── LEFT: Mode + Git + Streaming indicator ──────────────────────
     let left = if state.is_streaming {
         let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
-        
+
         let (elapsed_str, tps_str) = if let Some(start_time) = state.streaming_start_time {
             let elapsed_secs_f64 = start_time.elapsed().as_secs_f64();
             let elapsed_secs = start_time.elapsed().as_secs();
-            
+
             let elapsed_fmt = if elapsed_secs < 60 {
                 format!("{elapsed_secs}s")
             } else {
                 format!("{}m{}s", elapsed_secs / 60, elapsed_secs % 60)
             };
-            
+
             let tps = if elapsed_secs_f64 > 0.5 {
                 state.streaming_token_estimate / elapsed_secs_f64
             } else {
                 0.0
             };
-            
+
             (elapsed_fmt, format!("{tps:.1} tok/s"))
         } else {
             ("0s".to_string(), "0.0 tok/s".to_string())
@@ -605,6 +626,17 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
             crate::tui::state::StatusLevel::Tip => dim_gray(),
         };
         (msg.content.clone(), color)
+    } else if let Some(ref indicator) = state.status_indicator {
+        let text = if let Some(ref details) = indicator.details {
+            let mut det = details.clone();
+            if det.len() > 20 {
+                det = format!("{}…", &det[..19]);
+            }
+            format!("{}: {}", indicator.header, det)
+        } else {
+            indicator.header.clone()
+        };
+        (text, accent_cyan())
     } else if let Some(ref action) = state.active_action {
         let action_display = if action.len() > 30 {
             format!("{}…", &action[..29])
@@ -681,7 +713,9 @@ fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
     let (center_text, center_color) = center;
     let mid_widget = if !center_text.is_empty() && center_text.len() <= mid_w {
         let pad_left = (mid_w.saturating_sub(center_text.len())) / 2;
-        let pad_right = mid_w.saturating_sub(center_text.len()).saturating_sub(pad_left);
+        let pad_right = mid_w
+            .saturating_sub(center_text.len())
+            .saturating_sub(pad_left);
         Paragraph::new(Line::from(vec![
             "─".repeat(pad_left).fg(colors::divider()),
             center_text.fg(center_color),

@@ -6,14 +6,14 @@
 //! All output goes through the `EventHandler` observer — no direct stdout/stderr.
 
 use crate::config::CrowConfig;
-use crow_runtime::context::ConversationManager;
-use crow_runtime::epistemic;
 use crate::event::{AgentEvent, EventHandler};
 use anyhow::{Context, Result};
 use crow_brain::IntentCompiler;
 use crow_materialize::MaterializeConfig;
 use crow_patch::SnapshotId;
 use crow_probe::types::{ProjectProfile, VerificationCandidate};
+use crow_runtime::context::ConversationManager;
+use crow_runtime::epistemic;
 use crow_workspace::ledger::EventLedger;
 use std::path::Path;
 
@@ -195,7 +195,8 @@ impl SerialCrucible<'_> {
         let compiled_plan = if let Some(p) = precompiled_plan {
             p
         } else {
-            let file_state_store = std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
+            let file_state_store =
+                std::sync::Arc::new(crow_runtime::file_state::FileStateStore::new());
             epistemic::run_epistemic_loop(
                 self.compiler,
                 messages,
@@ -204,7 +205,9 @@ impl SerialCrucible<'_> {
                 observer,
                 file_state_store,
                 std::sync::Arc::new(crow_tools::ToolRegistry::new()),
-                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
+                std::sync::Arc::new(crow_tools::PermissionEnforcer::new(
+                    crow_tools::WriteMode::Sandbox,
+                )),
             )
             .await?
         };

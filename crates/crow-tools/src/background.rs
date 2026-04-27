@@ -2,10 +2,10 @@ use crate::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tokio::sync::Mutex;
-use tokio::process::Child;
-use tokio::io::AsyncWriteExt;
 use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Child;
+use tokio::sync::Mutex;
 
 /// Maximum bytes to return when checking bash status.
 const MAX_STATUS_OUTPUT_BYTES: usize = 50 * 1024; // 50 KB
@@ -39,12 +39,16 @@ impl BackgroundProcessManager {
 
     /// Spawns a background bash command and returns its task ID.
     pub async fn spawn(&self, command: String, cwd: &std::path::Path) -> Result<String> {
-        let task_id = format!("bg-{}", self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
-        
+        let task_id = format!(
+            "bg-{}",
+            self.next_id
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
+
         let temp_dir = std::env::temp_dir().join("crow-bg-tasks");
         tokio::fs::create_dir_all(&temp_dir).await?;
         let log_file = temp_dir.join(format!("{task_id}.log"));
-        
+
         // Truncate/create log file
         tokio::fs::write(&log_file, "").await?;
 
@@ -71,22 +75,26 @@ impl BackgroundProcessManager {
             None => anyhow::bail!("Failed to capture stderr"),
         };
         let log_path_clone = log_file.clone();
-        
+
         // Spawn a background copier to stream outputs to the log file.
         tokio::spawn(async move {
-            let file = tokio::fs::OpenOptions::new().append(true).create(true).open(&log_path_clone).await;
+            let file = tokio::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&log_path_clone)
+                .await;
             if let Ok(mut file) = file {
                 // Read from stdout and stderr concurrently
                 let mut stdout_buf = [0u8; 1024];
                 let mut stderr_buf = [0u8; 1024];
                 let mut stdout_done = false;
                 let mut stderr_done = false;
-                
+
                 loop {
                     if stdout_done && stderr_done {
                         break;
                     }
-                    
+
                     tokio::select! {
                         res = tokio::io::AsyncReadExt::read(&mut stdout, &mut stdout_buf), if !stdout_done => {
                             match res {
@@ -135,7 +143,9 @@ impl BackgroundProcessManager {
         };
 
         let elapsed = task.start_time.elapsed().as_secs();
-        let log_content = tokio::fs::read_to_string(&task.log_file).await.unwrap_or_default();
+        let log_content = tokio::fs::read_to_string(&task.log_file)
+            .await
+            .unwrap_or_default();
         let truncated_log = crow_patch::safe_truncate(&log_content, MAX_STATUS_OUTPUT_BYTES);
         let log_suffix = if log_content.len() > MAX_STATUS_OUTPUT_BYTES {
             "\n\n[SYSTEM WARNING: Log truncated to 50KB]"
@@ -157,7 +167,9 @@ impl BackgroundProcessManager {
         if let Some(mut task) = tasks.remove(task_id) {
             match task.child.kill().await {
                 Ok(_) => Ok(format!("Task '{task_id}' successfully killed.")),
-                Err(e) => Ok(format!("Attempted to kill task '{task_id}' but encountered error: {e}")),
+                Err(e) => Ok(format!(
+                    "Attempted to kill task '{task_id}' but encountered error: {e}"
+                )),
             }
         } else {
             anyhow::bail!("Task ID '{task_id}' not found.")
@@ -179,7 +191,9 @@ impl Tool for BashStatusTool {
         "Check the status and read the latest output of a background bash task."
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -196,12 +210,18 @@ impl Tool for BashStatusTool {
 
     async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
-        struct Args { task_id: String }
+        struct Args {
+            task_id: String,
+        }
         let parsed: Args = serde_json::from_value(args)?;
 
         let bg_manager = match &ctx.background_manager {
             Some(mgr) => mgr,
-            None => return Ok(ToolOutput::error("Background task management is not available in this context.")),
+            None => {
+                return Ok(ToolOutput::error(
+                    "Background task management is not available in this context.",
+                ))
+            }
         };
 
         match bg_manager.status(&parsed.task_id).await {
@@ -238,12 +258,18 @@ impl Tool for BashKillTool {
 
     async fn execute(&self, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
         #[derive(serde::Deserialize)]
-        struct Args { task_id: String }
+        struct Args {
+            task_id: String,
+        }
         let parsed: Args = serde_json::from_value(args)?;
 
         let bg_manager = match &ctx.background_manager {
             Some(mgr) => mgr,
-            None => return Ok(ToolOutput::error("Background task management is not available in this context.")),
+            None => {
+                return Ok(ToolOutput::error(
+                    "Background task management is not available in this context.",
+                ))
+            }
         };
 
         match bg_manager.kill(&parsed.task_id).await {

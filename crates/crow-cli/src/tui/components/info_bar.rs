@@ -10,9 +10,9 @@ use crate::tui::theme::{chars, colors, Styles};
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::Styled;
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
-use ratatui::style::Styled;
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use ratatui::Frame;
 
@@ -81,7 +81,9 @@ impl InfoBar {
         };
 
         let left = Line::from(vec![
-            format!(" {model_display} ").fg(colors::accent_system()).bold(),
+            format!(" {model_display} ")
+                .fg(colors::accent_system())
+                .bold(),
             " │ ".fg(colors::divider()),
             format!(" {branch_display} ").fg(colors::accent_warning()),
         ]);

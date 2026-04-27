@@ -56,7 +56,10 @@ impl ChatMessage {
     }
 
     /// Create an assistant message that includes tool call requests.
-    pub fn assistant_with_tool_calls(content: impl Into<String>, tool_calls: Vec<ToolCallRequest>) -> Self {
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCallRequest>,
+    ) -> Self {
         Self {
             role: ChatRole::Assistant,
             content: content.into(),
@@ -102,23 +105,32 @@ pub struct AgentResponse {
 impl AgentResponse {
     /// Extract all text blocks concatenated.
     pub fn text(&self) -> String {
-        self.blocks.iter().filter_map(|b| match b {
-            AgentResponseBlock::Text(t) => Some(t.as_str()),
-            AgentResponseBlock::ToolCall(_) => None,
-        }).collect::<Vec<_>>().join("")
+        self.blocks
+            .iter()
+            .filter_map(|b| match b {
+                AgentResponseBlock::Text(t) => Some(t.as_str()),
+                AgentResponseBlock::ToolCall(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
     }
 
     /// Extract all tool calls.
     pub fn tool_calls(&self) -> Vec<&ToolCallRequest> {
-        self.blocks.iter().filter_map(|b| match b {
-            AgentResponseBlock::ToolCall(tc) => Some(tc),
-            AgentResponseBlock::Text(_) => None,
-        }).collect()
+        self.blocks
+            .iter()
+            .filter_map(|b| match b {
+                AgentResponseBlock::ToolCall(tc) => Some(tc),
+                AgentResponseBlock::Text(_) => None,
+            })
+            .collect()
     }
 
     /// Whether this response requests any tool calls.
     pub fn has_tool_calls(&self) -> bool {
-        self.blocks.iter().any(|b| matches!(b, AgentResponseBlock::ToolCall(_)))
+        self.blocks
+            .iter()
+            .any(|b| matches!(b, AgentResponseBlock::ToolCall(_)))
     }
 }
 
@@ -253,16 +265,12 @@ impl IntentCompiler {
         messages: &[ChatMessage],
         custom_prompt: Option<&str>,
     ) -> Result<String, CompilerError> {
-        let prompt = custom_prompt
-            .unwrap_or(crate::compactor::DEFAULT_COMPACTION_PROMPT);
+        let prompt = custom_prompt.unwrap_or(crate::compactor::DEFAULT_COMPACTION_PROMPT);
 
         let mut conversation = messages.to_vec();
-        conversation.push(ChatMessage::user(format!(
-            "[SYSTEM COMPACTION REQUEST]\n\
-            {prompt}\n\
-            \n\
-            Return ONLY the summary wrapped in `<summary>...</summary>` tags, without any other text. Do NOT emit a JSON AgentAction."
-        )));
+        
+        let compaction_prompt = crate::prompt::CompactionPrompt::new(prompt).build();
+        conversation.push(ChatMessage::user(compaction_prompt));
 
         let response = self
             .client
@@ -320,20 +328,17 @@ impl IntentCompiler {
         let mut conversation: Vec<ChatMessage> = Vec::new();
 
         if self.native_tool_calling {
-            // When native tool calling is active, the formal schema is already
-            // sent via tools/tool_choice. We only need a minimal identity prompt.
-            conversation.push(ChatMessage::system(
-                "You are an autonomous coding agent. Respond by calling the agent_action function. \
-                 For conversational responses (no file changes), emit submit_plan with an empty operations array \
-                 and put your response in the rationale field."
-            ));
+            let sys_prompt = crate::prompt::PromptBuilder::new()
+                .with_system_instruction("You are an autonomous coding agent. Respond by calling the agent_action function. For conversational responses (no file changes), emit submit_plan with an empty operations array and put your response in the rationale field.")
+                .build();
+            conversation.push(ChatMessage::system(sys_prompt));
         } else {
-            // Fallback: no native tool calling. The full schema guide is the model's
-            // ONLY contract for producing valid AgentAction JSON.
             let schema_guide = crate::schema::intent_plan_schema();
-            conversation.push(ChatMessage::system(format!(
-                "You are the Intelligence Compiler. Output ONLY valid JSON matching the AgentAction schema.\n\n{schema_guide}"
-            )));
+            let sys_prompt = crate::prompt::PromptBuilder::new()
+                .with_system_instruction("You are the Intelligence Compiler.")
+                .with_schema_guide(schema_guide)
+                .build();
+            conversation.push(ChatMessage::system(sys_prompt));
         }
 
         conversation.extend(messages.iter().cloned());
@@ -358,9 +363,11 @@ impl IntentCompiler {
                     // Semantic validation: enforce constraints serde can't check.
                     if let Err(reason) = action.validate() {
                         conversation.push(ChatMessage::assistant(response.clone()));
-                        conversation.push(ChatMessage::user(format!(
-                            "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour JSON was syntactically valid but semantically invalid.\nReason: {reason}\n\nPlease fix and resubmit."
-                        )));
+                        
+                        let err_prompt = crate::prompt::PromptBuilder::new()
+                            .with_validation_feedback(&reason.to_string())
+                            .build();
+                        conversation.push(ChatMessage::user(err_prompt));
                         // Use a synthetic serde error for the error list
                         #[allow(clippy::unwrap_used)]
                         errors.push(
@@ -375,9 +382,11 @@ impl IntentCompiler {
                     // Self-healing: append the failed attempt and error as
                     // assistant + user messages for the next retry.
                     conversation.push(ChatMessage::assistant(response.clone()));
-                    conversation.push(ChatMessage::user(format!(
-                        "[SYSTEM: PREVIOUS ATTEMPT FAILED]\nYour previous JSON output was invalid.\nError:\n{e}\n\nPlease fix the JSON to strictly conform to the schema."
-                    )));
+                    
+                    let err_prompt = crate::prompt::PromptBuilder::new()
+                        .with_error_feedback(&e.to_string())
+                        .build();
+                    conversation.push(ChatMessage::user(err_prompt));
                     errors.push(e);
                 }
             }

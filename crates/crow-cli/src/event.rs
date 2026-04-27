@@ -3,9 +3,7 @@ use crossterm::style::{Color, Stylize};
 
 // ── Structured Protocol Layer (SQ/EQ Pattern) ──────────────────────
 
-pub use crow_runtime::event::{
-    AgentEvent, EventHandler, TokenUsageSummary, TurnEvent, TurnPhase,
-};
+pub use crow_runtime::event::{AgentEvent, EventHandler, TokenUsageSummary, TurnEvent, TurnPhase};
 
 /// The level of detail provided to the user during the autonomous loop.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]

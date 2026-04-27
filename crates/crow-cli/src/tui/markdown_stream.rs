@@ -89,7 +89,8 @@ impl StreamingMarkdownRenderer {
         let tail = &self.content[self.committed_offset..];
         if let Some(last_nl) = tail.rfind('\n') {
             let new_committed_end = self.committed_offset + last_nl + 1;
-            let chunk_to_commit = self.content[self.committed_offset..new_committed_end].to_string();
+            let chunk_to_commit =
+                self.content[self.committed_offset..new_committed_end].to_string();
 
             if !chunk_to_commit.is_empty() {
                 let new_lines = self.render_chunk(&chunk_to_commit);
@@ -198,19 +199,16 @@ impl StreamingMarkdownRenderer {
                                 .find_syntax_by_token(&lang_str)
                                 .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
                             let theme = &THEME_SET.themes["base16-ocean.dark"];
-                            highlighter =
-                                Some(syntect::easy::HighlightLines::new(syntax, theme));
+                            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
                         } else {
                             let syntax = SYNTAX_SET.find_syntax_plain_text();
                             let theme = &THEME_SET.themes["base16-ocean.dark"];
-                            highlighter =
-                                Some(syntect::easy::HighlightLines::new(syntax, theme));
+                            highlighter = Some(syntect::easy::HighlightLines::new(syntax, theme));
                         }
                     }
                     Tag::List(start_num) => {
                         list_stack.push(
-                            start_num
-                                .map_or(ListState::Unordered, |n| ListState::Ordered(n, n)),
+                            start_num.map_or(ListState::Unordered, |n| ListState::Ordered(n, n)),
                         );
                     }
                     Tag::Item => {
@@ -226,7 +224,10 @@ impl StreamingMarkdownRenderer {
                             }
                             None => format!("{} ", chars::BULLET),
                         };
-                        current_line.push((prefix).set_style(ratatui::style::Style::new().fg(colors::accent_user()),));
+                        current_line.push(
+                            (prefix)
+                                .set_style(ratatui::style::Style::new().fg(colors::accent_user())),
+                        );
                     }
                     Tag::Heading { level, .. } => {
                         if !current_line.is_empty() {
@@ -242,15 +243,22 @@ impl StreamingMarkdownRenderer {
                             pulldown_cmark::HeadingLevel::H5 => "##### ",
                             pulldown_cmark::HeadingLevel::H6 => "###### ",
                         };
-                        current_line.push((prefix).set_style(ratatui::style::Style::new()
-                                .fg(colors::text_primary())
-                                .add_modifier(Modifier::BOLD),));
+                        current_line.push(
+                            (prefix).set_style(
+                                ratatui::style::Style::new()
+                                    .fg(colors::text_primary())
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        );
                         current_style = ratatui::style::Style::new()
                             .fg(colors::text_primary())
                             .add_modifier(Modifier::BOLD);
                     }
                     Tag::BlockQuote(_) => {
-                        current_line.push((format!("{} ", chars::USER_BAR)).set_style(ratatui::style::Style::new().fg(colors::border()),));
+                        current_line.push(
+                            (format!("{} ", chars::USER_BAR))
+                                .set_style(ratatui::style::Style::new().fg(colors::border())),
+                        );
                     }
                     _ => {}
                 },
@@ -275,11 +283,14 @@ impl StreamingMarkdownRenderer {
                             ));
                             current_line = Vec::new();
                         }
-                        result.push(Line::from((format!(
+                        result.push(Line::from(
+                            (format!(
                                 "{}{}",
                                 chars::CODE_BOTTOM_LEFT,
                                 chars::CODE_HORIZONTAL.repeat(40),
-                            )).set_style(ratatui::style::Style::new().fg(colors::code_border()),)));
+                            ))
+                            .set_style(ratatui::style::Style::new().fg(colors::code_border())),
+                        ));
                         code_language = None;
                     }
                     TagEnd::Item if !current_line.is_empty() => {
@@ -316,10 +327,13 @@ impl StreamingMarkdownRenderer {
                                 let lang = code_language.take().unwrap_or_default();
                                 result.push(Line::from(vec![
                                     (format!(
-                                            "{}{} ",
-                                            chars::CODE_TOP_LEFT,
-                                            chars::CODE_HORIZONTAL.repeat(2),
-                                        )).set_style(ratatui::style::Style::new().fg(colors::code_border()),),
+                                        "{}{} ",
+                                        chars::CODE_TOP_LEFT,
+                                        chars::CODE_HORIZONTAL.repeat(2),
+                                    ))
+                                    .set_style(
+                                        ratatui::style::Style::new().fg(colors::code_border()),
+                                    ),
                                     (lang).set_style(Styles::code_lang()),
                                 ]));
                             }
@@ -327,25 +341,27 @@ impl StreamingMarkdownRenderer {
                                 result.push(Line::from(
                                     current_line
                                         .into_iter()
-                                        .map(|s| {
-                                            s.set_style(Styles::code_block())
-                                        })
+                                        .map(|s| s.set_style(Styles::code_block()))
                                         .collect::<Vec<_>>(),
                                 ));
                                 current_line = Vec::new();
                             }
                             let expanded = line.replace('\t', "  ");
-                            let mut spans = vec![(format!("{} ", chars::CODE_VERTICAL)).set_style(ratatui::style::Style::new().fg(colors::code_border()),)];
+                            let mut spans = vec![(format!("{} ", chars::CODE_VERTICAL))
+                                .set_style(ratatui::style::Style::new().fg(colors::code_border()))];
 
                             if let Some(hl) = highlighter.as_mut() {
                                 match hl.highlight_line(&expanded, &SYNTAX_SET) {
                                     Ok(ranges) => {
                                         for (style, s) in ranges {
-                                            spans.push((s.to_string()).set_style(translate_syn_style(style),));
+                                            spans.push(
+                                                (s.to_string())
+                                                    .set_style(translate_syn_style(style)),
+                                            );
                                         }
                                     }
                                     Err(_) => {
-                                        spans.push((expanded).set_style(Styles::code_block(),));
+                                        spans.push((expanded).set_style(Styles::code_block()));
                                     }
                                 }
                             } else {
@@ -364,11 +380,13 @@ impl StreamingMarkdownRenderer {
                 }
                 MdEvent::TaskListMarker(checked) => {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
-                    current_line.push((format!("{checkbox} ")).set_style(ratatui::style::Style::new().fg(if checked {
+                    current_line.push((format!("{checkbox} ")).set_style(
+                        ratatui::style::Style::new().fg(if checked {
                             colors::accent_success()
                         } else {
                             colors::text_secondary()
-                        }),));
+                        }),
+                    ));
                 }
                 MdEvent::SoftBreak | MdEvent::HardBreak => {
                     if in_code_block {
@@ -387,7 +405,10 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Rule => {
-                    result.push(Line::from(("─".repeat(40)).set_style(ratatui::style::Style::new().fg(colors::divider()),)));
+                    result
+                        .push(Line::from(("─".repeat(40)).set_style(
+                            ratatui::style::Style::new().fg(colors::divider()),
+                        )));
                 }
                 _ => {}
             }

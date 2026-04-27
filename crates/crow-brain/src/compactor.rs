@@ -1,4 +1,4 @@
-use crate::compiler::ChatMessage;
+use crate::compiler::{ChatMessage, ChatRole};
 use crate::IntentCompiler;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -38,8 +38,8 @@ impl Default for CompactorConfig {
             max_history_tokens: 80_000,
             context_window: 131_072, // 128K config bounds
             compact_threshold_ratio: 0.8,
-            preservation_turns: 4,   // Keep enough recent context for coherent reasoning
-            max_retries: 2,          // Retry twice on transient LLM failures
+            preservation_turns: 4, // Keep enough recent context for coherent reasoning
+            max_retries: 2,        // Retry twice on transient LLM failures
             compaction_prompt: None,
         }
     }
@@ -50,9 +50,21 @@ impl CompactorConfig {
     /// The compaction threshold is automatically calculated from the ratio.
     pub fn with_context_window(mut self, context_window: usize) -> Self {
         self.context_window = context_window;
-        self.max_history_tokens =
-            (context_window as f64 * self.compact_threshold_ratio) as usize;
+        self.max_history_tokens = (context_window as f64 * self.compact_threshold_ratio) as usize;
         self
+    }
+
+    /// Create a config auto-sized for a specific model.
+    ///
+    /// Uses the model registry to look up the context window and sets
+    /// thresholds accordingly. Falls back to defaults for unknown models.
+    pub fn for_model(model: &str) -> Self {
+        let base = Self::default();
+        if let Some(limit) = crate::model_registry::model_token_limit(model) {
+            base.with_context_window(limit.context_window_tokens as usize)
+        } else {
+            base
+        }
     }
 
     /// Set the compaction threshold ratio (0.0-1.0).
@@ -96,7 +108,9 @@ impl Compactor {
 
     /// Phase 1: Micro-compaction (free, no API call).
     /// Replaces old tool result content with a cleared marker,
-    /// preserving message structure. Returns None if nothing to clear.
+    /// preserving message structure. Clears ALL tool-result-like
+    /// messages outside the preservation window (yomi pattern).
+    /// Returns None if nothing to clear.
     pub fn micro_compact(&self, messages: &[ChatMessage]) -> Option<Vec<ChatMessage>> {
         let keep_start = messages
             .len()
@@ -109,12 +123,18 @@ impl Compactor {
         let mut result = Vec::with_capacity(messages.len());
 
         for (idx, msg) in messages.iter().enumerate() {
-            // Only clear old tool-result-like messages outside the preservation window
-            if idx < keep_start
-                && (msg.content.starts_with("[RECON RESULT]")
-                    || msg.content.starts_with("[FILE CONTENTS]"))
+            // Clear old messages outside the preservation window that contain
+            // tool output (identified by role or content prefix patterns).
+            // This covers all recon results, file contents, and any other
+            // tool output that bloats the context.
+            let is_clearable = idx < keep_start
                 && msg.content != CLEARED_MARKER
-            {
+                && (msg.role == ChatRole::Tool
+                    || msg.content.starts_with("[RECON RESULT]")
+                    || msg.content.starts_with("[FILE CONTENTS]")
+                    || msg.content.starts_with("[TOOL OUTPUT]"));
+
+            if is_clearable {
                 let mut cleared = msg.clone();
                 cleared.content = CLEARED_MARKER.to_string();
                 result.push(cleared);
@@ -326,5 +346,51 @@ mod tests {
         assert_eq!(collected.len(), 2);
         assert_eq!(collected[0], "real question");
         assert_eq!(collected[1], "another real question");
+    }
+
+    #[test]
+    fn micro_compact_clears_tool_role_messages() {
+        let config = CompactorConfig {
+            preservation_turns: 1,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::tool_result("tc-1", "Big tool output that bloats context..."),
+            ChatMessage::user("latest question"),
+        ];
+        let result = compactor.micro_compact(&messages).unwrap();
+        assert_eq!(result[0].content, CLEARED_MARKER);
+        assert_eq!(result[1].content, "latest question");
+    }
+
+    #[test]
+    fn micro_compact_preserves_recent_tool_results() {
+        let config = CompactorConfig {
+            preservation_turns: 2,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::tool_result("tc-old", "old result"),
+            ChatMessage::tool_result("tc-recent", "recent result"),
+        ];
+        // Both messages are within preservation window (2 turns)
+        assert!(compactor.micro_compact(&messages).is_none());
+    }
+
+    #[test]
+    fn micro_compact_skips_already_cleared() {
+        let config = CompactorConfig {
+            preservation_turns: 1,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::tool_result("tc-1", CLEARED_MARKER),
+            ChatMessage::user("latest question"),
+        ];
+        // Already cleared — no modification needed
+        assert!(compactor.micro_compact(&messages).is_none());
     }
 }

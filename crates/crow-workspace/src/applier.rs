@@ -397,13 +397,14 @@ pub async fn apply_sandbox_to_workspace(
     let git_manager = crate::sandbox::GitWorkspaceManager::new(workspace_root).await?;
 
     // 2. Hydrate plan directly against the live workspace
-    let hydrated_plan = match crate::PlanHydrator::hydrate(plan, &plan.base_snapshot_id, workspace_root) {
-        Ok(p) => p,
-        Err(e) => {
-            git_manager.rollback().await?;
-            anyhow::bail!("Failed to hydrate plan for live workspace: {e}");
-        }
-    };
+    let hydrated_plan =
+        match crate::PlanHydrator::hydrate(plan, &plan.base_snapshot_id, workspace_root) {
+            Ok(p) => p,
+            Err(e) => {
+                git_manager.rollback().await?;
+                anyhow::bail!("Failed to hydrate plan for live workspace: {e}");
+            }
+        };
 
     let live_view = crow_materialize::SandboxHandle::non_owning_view_from(
         workspace_root.to_path_buf(),

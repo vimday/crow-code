@@ -234,19 +234,19 @@ impl<'a> Component for ComposerComponent<'a> {
             .split(composer_area);
 
         use crate::tui::theme::{chars, spinner_char, Styles};
-        
+
         let prompt_text = if state.is_task_running() {
             format!("{} ", spinner_char(state.spinner_idx))
         } else {
             format!("{} ", chars::INPUT_PROMPT)
         };
-        
+
         let prompt_style = if state.is_task_running() {
             Styles::spinner()
         } else {
             Styles::input_prompt()
         };
-        
+
         let prompt_widget = ratatui::widgets::Paragraph::new(prompt_text).style(prompt_style);
 
         frame.render_widget(prompt_widget, composer_split[0]);
@@ -291,8 +291,12 @@ impl<'a> Component for ComposerComponent<'a> {
                         let abs_i = vis_i + scroll_offset;
                         let content = format!(" {cmd:18} {desc}");
                         if abs_i == selected_idx {
-                            ListItem::new(content)
-                                .style(ratatui::style::Style::new().bg(Color::Cyan).fg(Color::Black).bold())
+                            ListItem::new(content).style(
+                                ratatui::style::Style::new()
+                                    .bg(Color::Cyan)
+                                    .fg(Color::Black)
+                                    .bold(),
+                            )
                         } else {
                             ListItem::new(content)
                         }
@@ -345,9 +349,7 @@ fn render_approval_popup(frame: &mut Frame, area: Rect, cmd: &str, selected_idx:
     use ratatui::widgets::{List, ListItem, Paragraph};
 
     let composer_lines = vec![
-        Line::from(vec![
-            "⚠️  Security Approval Required".red().bold()
-        ]),
+        Line::from(vec!["⚠️  Security Approval Required".red().bold()]),
         Line::from(vec!["Command: ".dark_gray(), cmd.to_string().into()]),
         Line::from(vec![
             "  (y=Allow  a=Always  n=Reject  Esc=Cancel)".dark_gray()

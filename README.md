@@ -210,6 +210,8 @@ Crates may only depend on crates in equal or lower layers. `cargo check` catches
 ### Key Design Patterns
 
 - **Snapshot Safety** — The workspace is frozen before planning. The epistemic loop and crucible both operate against the same immutable snapshot.
+- **Turn Diff Tracking** — Real-time baseline snapshots provide precise unified diffs at the end of each turn, ensuring complete transparency of agent mutations.
+- **Micro-Compaction** — A fast, non-API context pruning mechanism that strips intermediate tool outputs to aggressively save token budget.
 - **Role Alternation** — `ConversationManager::fix_role_alternation()` ensures strict User→Assistant→User ordering after compaction.
 - **Hallucination Guard** — The epistemic loop rejects `Modify` operations on files the agent hasn't read during the current turn.
 - **Delegation Depth Limiting** — Subagent delegation is capped at 3 levels to prevent infinite recursion.

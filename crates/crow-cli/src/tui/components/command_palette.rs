@@ -1,4 +1,3 @@
-
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;

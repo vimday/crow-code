@@ -76,11 +76,7 @@ pub fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
 }
 
 /// Produce shimmer spans with a custom base and highlight color.
-pub fn shimmer_spans_colored(
-    text: &str,
-    base: Color,
-    highlight: Color,
-) -> Vec<Span<'static>> {
+pub fn shimmer_spans_colored(text: &str, base: Color, highlight: Color) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();

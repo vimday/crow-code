@@ -173,7 +173,7 @@ pub async fn explore_round(
             if delay.as_millis() > 0 {
                 tokio::time::sleep(delay).await;
             }
-            
+
             match tokio::time::timeout(
                 timeout,
                 run_branch(
@@ -196,7 +196,10 @@ pub async fn explore_round(
                     plan: empty_plan(),
                     sandbox: dummy_sandbox(),
                     passed: false,
-                    log: format!("Branch {branch_id} timed out after {}s (likely network hang)", timeout.as_secs()),
+                    log: format!(
+                        "Branch {branch_id} timed out after {}s (likely network hang)",
+                        timeout.as_secs()
+                    ),
                 },
             }
         });

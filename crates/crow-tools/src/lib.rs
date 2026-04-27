@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! Tool Registry and Permission Enforcement.
 //!
 //! This crate provides the unified execution layer for all Agent tools (bash, files,
@@ -17,19 +18,24 @@
 
 pub mod background;
 pub mod bash;
+pub mod bash_validation;
 pub mod diff_utils;
 pub mod file_edit;
+pub mod file_lock;
+pub mod file_safety;
 pub mod file_state;
 pub mod file_write;
 pub mod glob;
 pub mod grep;
+pub mod parallel;
 pub mod permission;
 pub mod recon;
 pub mod subagent;
+pub mod truncation;
 
 pub use background::BackgroundProcessManager;
 pub use file_state::FileStateStore;
-pub use permission::{PermissionEnforcer, WriteMode};
+pub use permission::{PermissionEnforcer, PermissionMode, WriteMode};
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -70,11 +76,17 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     pub fn success(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: false }
+        Self {
+            content: content.into(),
+            is_error: false,
+        }
     }
 
     pub fn error(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: true }
+        Self {
+            content: content.into(),
+            is_error: true,
+        }
     }
 }
 
@@ -106,7 +118,7 @@ pub trait Tool: Send + Sync {
 /// A dynamic registry of available tools.
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -114,29 +126,47 @@ impl ToolRegistry {
         Self::default()
     }
 
-    pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.tools.insert(tool.name().to_string(), tool);
+    pub fn register(&mut self, tool: impl Tool + 'static) {
+        let name = tool.name().to_string();
+        self.tools.insert(name, Arc::new(tool));
     }
 
-    pub async fn execute(&self, name: &str, args: serde_json::Value, ctx: &ToolContext<'_>) -> Result<ToolOutput> {
-        let tool = self.tools.get(name).ok_or_else(|| anyhow::anyhow!("Tool not found: {name}"))?;
+    /// Get a tool by name (returns Arc for cheap cloning in parallel execution).
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.get(name).cloned()
+    }
+
+    pub async fn execute(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        ctx: &ToolContext<'_>,
+    ) -> Result<ToolOutput> {
+        let tool = self
+            .tools
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("Tool not found: {name}"))?;
         tool.execute(args, ctx).await
     }
 
     /// Return OpenAI-compatible tool definitions for all registered tools.
     /// Sorted by name for deterministic output.
     pub fn tool_definitions(&self) -> Vec<serde_json::Value> {
-        let mut defs: Vec<_> = self.tools.values().map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": tool.name(),
-                    "description": tool.description(),
-                    "parameters": tool.parameters(),
-                    "strict": false
-                }
+        let mut defs: Vec<_> = self
+            .tools
+            .values()
+            .map(|tool| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name(),
+                        "description": tool.description(),
+                        "parameters": tool.parameters(),
+                        "strict": false
+                    }
+                })
             })
-        }).collect();
+            .collect();
         defs.sort_by(|a, b| {
             let name_a = a["function"]["name"].as_str().unwrap_or("");
             let name_b = b["function"]["name"].as_str().unwrap_or("");

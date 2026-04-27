@@ -100,4 +100,4 @@ cargo build -p crow-cli
 - **Step 13** ✅ Phase 3 Sub-Agent Swarms & Non-Blocking TUI: Asynchronous Task Queuing, isolated `SubagentWorker` execution paths, interior mutability across `SessionRuntime` and `ConversationManager` for zero-lock ThreadManager scheduling.
 - **Step 14** ✅ Yomi Alignment & Codebase Hardening: CancellationToken docs (arc-swap rotation pattern), AgentEvent taxonomy documentation, dead code removal (dashboard.rs, duplicate Component trait, scratch files), AGENTS.md/README.md comprehensive sync with actual implementation state.
 - **Step 15** ✅ Smart LLM Configuration: Multi-Vendor LLM Configuration (Global/Chinese flagships) with dynamic `/model <provider>` TUI hot-switching and auto-serialization to `.crow/config.json`.
-
+- **Step 16** ✅ Deep Architecture Refactoring (Codex & Yomi Pattern Assimilation): Migrated to unified `TurnDiffTracker`, Parallel `JoinSet` execution with cancellation, native `glob`, cross-process file locking, micro-compaction logic, and strict multi-pass bash validation pipelines.

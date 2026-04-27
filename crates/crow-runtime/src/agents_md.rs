@@ -21,11 +21,7 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";
 
 /// Filenames to search for in each directory (checked in order).
-pub const AGENTS_MD_FILENAMES: &[&str] = &[
-    "AGENTS.md",
-    "AGENTS.override.md",
-    ".agents.md",
-];
+pub const AGENTS_MD_FILENAMES: &[&str] = &["AGENTS.md", "AGENTS.override.md", ".agents.md"];
 
 /// Separator between AGENTS.md sections from different directories.
 const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
@@ -74,8 +70,7 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
 /// files found along the path. Returns the concatenated content with
 /// separator markers, or `None` if no files are found.
 pub fn discover_agents_md(cwd: &Path) -> Option<AgentsMdResult> {
-    let project_root = find_project_root(cwd)
-        .unwrap_or_else(|| cwd.to_path_buf());
+    let project_root = find_project_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
 
     // Build the path chain from project root to cwd
     let mut path_chain = Vec::new();
@@ -101,13 +96,8 @@ pub fn discover_agents_md(cwd: &Path) -> Option<AgentsMdResult> {
                 let trimmed = content.trim();
                 if !trimmed.is_empty() {
                     // Add a header indicating which file this section came from
-                    let relative = candidate
-                        .strip_prefix(&project_root)
-                        .unwrap_or(&candidate);
-                    sections.push(format!(
-                        "# From: {}\n\n{trimmed}",
-                        relative.display()
-                    ));
+                    let relative = candidate.strip_prefix(&project_root).unwrap_or(&candidate);
+                    sections.push(format!("# From: {}\n\n{trimmed}", relative.display()));
                     sources.push(candidate);
                     // Only use the first matching filename per directory
                     break;

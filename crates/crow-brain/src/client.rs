@@ -547,36 +547,42 @@ impl LlmClient for ReqwestLlmClient {
         let url = format!("{base}/chat/completions");
 
         // Build message array with proper tool message support
-        let api_messages: Vec<serde_json::Value> = messages.iter().map(|m| {
-            let mut msg = if self.prompt_caching && m.role == crate::ChatRole::System {
-                let block = json!({"type": "text", "text": m.content});
-                json!({"role": "system", "content": [block]})
-            } else {
-                json!({"role": m.role, "content": m.content})
-            };
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                let mut msg = if self.prompt_caching && m.role == crate::ChatRole::System {
+                    let block = json!({"type": "text", "text": m.content});
+                    json!({"role": "system", "content": [block]})
+                } else {
+                    json!({"role": m.role, "content": m.content})
+                };
 
-            // Add tool_call_id for tool result messages
-            if let Some(ref tc_id) = m.tool_call_id {
-                msg["tool_call_id"] = json!(tc_id);
-            }
+                // Add tool_call_id for tool result messages
+                if let Some(ref tc_id) = m.tool_call_id {
+                    msg["tool_call_id"] = json!(tc_id);
+                }
 
-            // Add tool_calls for assistant messages that requested them
-            if let Some(ref tcs) = m.tool_calls {
-                let tc_array: Vec<serde_json::Value> = tcs.iter().map(|tc| {
-                    json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": tc.arguments.to_string()
-                        }
-                    })
-                }).collect();
-                msg["tool_calls"] = json!(tc_array);
-            }
+                // Add tool_calls for assistant messages that requested them
+                if let Some(ref tcs) = m.tool_calls {
+                    let tc_array: Vec<serde_json::Value> = tcs
+                        .iter()
+                        .map(|tc| {
+                            json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments.to_string()
+                                }
+                            })
+                        })
+                        .collect();
+                    msg["tool_calls"] = json!(tc_array);
+                }
 
-            msg
-        }).collect();
+                msg
+            })
+            .collect();
 
         let mut body = json!({
             "model": self.model,
@@ -622,7 +628,10 @@ impl LlmClient for ReqwestLlmClient {
                         continue;
                     }
                     let raw_text = r.text().await.unwrap_or_default();
-                    return Err(BrainError::ApiError { status: code, body: raw_text });
+                    return Err(BrainError::ApiError {
+                        status: code,
+                        body: raw_text,
+                    });
                 }
                 Err(e) => {
                     if retries < max_retries {
@@ -656,7 +665,9 @@ impl LlmClient for ReqwestLlmClient {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
                                     // Handle text content deltas
-                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                    if let Some(content) =
+                                        delta.get("content").and_then(|c| c.as_str())
+                                    {
                                         if !content.is_empty() {
                                             full_text.push_str(content);
                                             if let Some(ref mut obs) = observer {
@@ -666,15 +677,21 @@ impl LlmClient for ReqwestLlmClient {
                                     }
 
                                     // Handle tool call deltas
-                                    if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                                    if let Some(tcs) =
+                                        delta.get("tool_calls").and_then(|t| t.as_array())
+                                    {
                                         for tc in tcs {
-                                            let index = tc.get("index")
+                                            let index = tc
+                                                .get("index")
                                                 .and_then(serde_json::Value::as_u64)
-                                                .unwrap_or(0) as u32;
+                                                .unwrap_or(0)
+                                                as u32;
 
                                             // New tool call start
-                                            if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
-                                                let name = tc.get("function")
+                                            if let Some(id) = tc.get("id").and_then(|i| i.as_str())
+                                            {
+                                                let name = tc
+                                                    .get("function")
                                                     .and_then(|f| f.get("name"))
                                                     .and_then(|n| n.as_str())
                                                     .unwrap_or("")
@@ -689,14 +706,17 @@ impl LlmClient for ReqwestLlmClient {
                                             }
 
                                             // Tool call arguments delta
-                                            if let Some(args_chunk) = tc.get("function")
+                                            if let Some(args_chunk) = tc
+                                                .get("function")
                                                 .and_then(|f| f.get("arguments"))
                                                 .and_then(|a| a.as_str())
                                             {
                                                 if let Some(entry) = tool_calls.get_mut(&index) {
                                                     entry.2.push_str(args_chunk);
                                                     if let Some(ref mut obs) = observer {
-                                                        obs.on_tool_call_args_chunk(&entry.0, args_chunk);
+                                                        obs.on_tool_call_args_chunk(
+                                                            &entry.0, args_chunk,
+                                                        );
                                                     }
                                                 }
                                             }
@@ -720,21 +740,26 @@ impl LlmClient for ReqwestLlmClient {
         }
 
         // Sort tool calls by index and add to response
-        let mut sorted_calls: Vec<(u32, (String, String, String))> = tool_calls.into_iter().collect();
+        let mut sorted_calls: Vec<(u32, (String, String, String))> =
+            tool_calls.into_iter().collect();
         sorted_calls.sort_by_key(|(idx, _)| *idx);
 
         for (_, (id, name, args_str)) in sorted_calls {
             let arguments: serde_json::Value = serde_json::from_str(&args_str)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-            blocks.push(crate::AgentResponseBlock::ToolCall(crate::ToolCallRequest {
-                id,
-                name,
-                arguments,
-            }));
+            blocks.push(crate::AgentResponseBlock::ToolCall(
+                crate::ToolCallRequest {
+                    id,
+                    name,
+                    arguments,
+                },
+            ));
         }
 
         if blocks.is_empty() {
-            return Err(BrainError::MissingField("Empty stream response with no tool calls".into()));
+            return Err(BrainError::MissingField(
+                "Empty stream response with no tool calls".into(),
+            ));
         }
 
         Ok(crate::AgentResponse { blocks })

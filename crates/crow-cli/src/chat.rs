@@ -1,8 +1,8 @@
 use crate::config::CrowConfig;
 use crate::render::{ColorTheme, TerminalRenderer};
-use crow_runtime::session::{Session, SessionStore};
 use anyhow::Result;
 use crossterm::style::{Color, Stylize};
+use crow_runtime::session::{Session, SessionStore};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;

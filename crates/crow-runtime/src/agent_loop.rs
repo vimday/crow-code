@@ -102,7 +102,8 @@ impl TurnTiming {
         let total_ms = self.total_elapsed.as_millis();
         let tool_ms = self.tool_execution_time.as_millis();
         let llm_ms = total_ms.saturating_sub(tool_ms);
-        let ttft = self.time_to_first_token
+        let ttft = self
+            .time_to_first_token
             .map(|d| format!("{}ms", d.as_millis()))
             .unwrap_or_else(|| "n/a".to_string());
         format!(
@@ -148,7 +149,10 @@ pub async fn run_agent_loop(
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
     let turn_start = std::time::Instant::now();
-    let mut timing = TurnTiming { started_at: Some(turn_start), ..TurnTiming::default() };
+    let mut timing = TurnTiming {
+        started_at: Some(turn_start),
+        ..TurnTiming::default()
+    };
     let mut first_token_recorded = false;
     let mut step = 0;
     let mut total_tool_calls = 0usize;
@@ -164,9 +168,7 @@ pub async fn run_agent_loop(
     loop {
         step += 1;
         if step > max_steps {
-            anyhow::bail!(
-                "Agent loop exceeded {max_steps} steps without completing. Aborting."
-            );
+            anyhow::bail!("Agent loop exceeded {max_steps} steps without completing. Aborting.");
         }
 
         // ── Cancellation check ──────────────────────────────────────
@@ -212,12 +214,12 @@ pub async fn run_agent_loop(
             struct ToolObserverAdapter<'a>(&'a mut dyn EventHandler);
             impl crow_brain::ToolStreamObserver for ToolObserverAdapter<'_> {
                 fn on_text_chunk(&mut self, chunk: &str) {
-                    self.0.handle_event(AgentEvent::StreamChunk(chunk.to_string()));
+                    self.0
+                        .handle_event(AgentEvent::StreamChunk(chunk.to_string()));
                 }
                 fn on_tool_call_start(&mut self, _id: &str, name: &str) {
-                    self.0.handle_event(AgentEvent::ActionStart(
-                        format!("Calling tool: {name}"),
-                    ));
+                    self.0
+                        .handle_event(AgentEvent::ActionStart(format!("Calling tool: {name}")));
                 }
                 fn on_tool_call_args_chunk(&mut self, _id: &str, _chunk: &str) {
                     // Tool call argument streaming — handled internally by the client
@@ -234,7 +236,9 @@ pub async fn run_agent_loop(
                     break Err(crow_brain::BrainError::Config("Turn cancelled".into()));
                 }
 
-                match config.compiler.client()
+                match config
+                    .compiler
+                    .client()
                     .generate_streaming_with_tools(
                         &messages.as_messages(),
                         &tool_defs,
@@ -256,9 +260,13 @@ pub async fn run_agent_loop(
                         adapter.0.handle_event(AgentEvent::Log(
                             "    🔄 Context window exceeded, compacting and retrying...".into(),
                         ));
-                        adapter.0.handle_event(AgentEvent::Compacting { active: true });
+                        adapter
+                            .0
+                            .handle_event(AgentEvent::Compacting { active: true });
                         let compact_result = messages.compact_history(&config.compiler).await;
-                        adapter.0.handle_event(AgentEvent::Compacting { active: false });
+                        adapter
+                            .0
+                            .handle_event(AgentEvent::Compacting { active: false });
 
                         if compact_result.is_err() || retry_count >= 1 {
                             break Err(crow_brain::BrainError::Config(
@@ -268,7 +276,9 @@ pub async fn run_agent_loop(
                         retry_count += 1;
                         continue;
                     }
-                    Err(ref brain_err) if brain_err.is_retryable() && retry_count < MAX_LLM_RETRIES => {
+                    Err(ref brain_err)
+                        if brain_err.is_retryable() && retry_count < MAX_LLM_RETRIES =>
+                    {
                         retry_count += 1;
                         let backoff_secs = 2u64.pow(retry_count);
 
@@ -429,8 +439,7 @@ pub async fn run_agent_loop(
                     let mut content = output.content;
                     if content.len() > MAX_TOOL_OUTPUT_BYTES {
                         // Safe truncation at a char boundary
-                        let truncated =
-                            crow_patch::safe_truncate(&content, MAX_TOOL_OUTPUT_BYTES);
+                        let truncated = crow_patch::safe_truncate(&content, MAX_TOOL_OUTPUT_BYTES);
                         content = format!(
                             "{truncated}\n\n[SYSTEM WARNING: Tool output truncated to 100KB]"
                         );
@@ -438,9 +447,8 @@ pub async fn run_agent_loop(
 
                     // Safe preview for the event (avoid UTF-8 boundary panics)
                     let preview = crow_patch::safe_truncate(&content, 120);
-                    observer.handle_event(AgentEvent::ActionComplete(format!(
-                        "{tc_name}: {preview}"
-                    )));
+                    observer
+                        .handle_event(AgentEvent::ActionComplete(format!("{tc_name}: {preview}")));
 
                     if output.is_error {
                         observer.handle_event(AgentEvent::Log(format!(
@@ -452,9 +460,8 @@ pub async fn run_agent_loop(
                     messages.push_tool_result(&tc_id, &content);
                 }
                 Err(e) => {
-                    observer.handle_event(AgentEvent::Error(format!(
-                        "Tool execution panicked: {e}"
-                    )));
+                    observer
+                        .handle_event(AgentEvent::Error(format!("Tool execution panicked: {e}")));
                 }
             }
         }

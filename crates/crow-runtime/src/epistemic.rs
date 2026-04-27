@@ -204,15 +204,14 @@ pub async fn run_epistemic_loop(
                     background_manager: None,
                     subagent_delegator: None,
                 };
-                
+
                 // Read each file and concatenate results
                 let mut file_contents = String::new();
                 for p in &paths {
-                    match tool_registry.execute(
-                        "read_file",
-                        serde_json::json!({ "path": p.as_str() }),
-                        &ctx,
-                    ).await {
+                    match tool_registry
+                        .execute("read_file", serde_json::json!({ "path": p.as_str() }), &ctx)
+                        .await
+                    {
                         Ok(res) => {
                             if !file_contents.is_empty() {
                                 file_contents.push_str("\n\n---\n\n");
@@ -220,7 +219,8 @@ pub async fn run_epistemic_loop(
                             file_contents.push_str(&res.content);
                         }
                         Err(e) => {
-                            file_contents.push_str(&format!("[READ ERROR for {}]: {e:?}\n", p.as_str()));
+                            file_contents
+                                .push_str(&format!("[READ ERROR for {}]: {e:?}\n", p.as_str()));
                         }
                     }
                 }
@@ -249,7 +249,12 @@ pub async fn run_epistemic_loop(
                     ReconAction::McpCall { .. } => "mcp_call",
                 };
                 // MCP is still handled via manager for now
-                if let ReconAction::McpCall { server_name, tool_name: mcp_tool, arguments } = &tool {
+                if let ReconAction::McpCall {
+                    server_name,
+                    tool_name: mcp_tool,
+                    arguments,
+                } = &tool
+                {
                     if let Some(mcp) = mcp_manager {
                         match mcp.call(server_name, mcp_tool, arguments.clone()).await {
                             Ok(res) => {
@@ -272,7 +277,8 @@ pub async fn run_epistemic_loop(
                         }
                     } else {
                         messages.push_user(
-                            "[MCP ERROR]\nMCP is not enabled or MCP manager unavailable".to_string()
+                            "[MCP ERROR]\nMCP is not enabled or MCP manager unavailable"
+                                .to_string(),
                         );
                     }
                     continue;
@@ -288,10 +294,16 @@ pub async fn run_epistemic_loop(
 
                 let args = match tool {
                     ReconAction::ListDir { path } => serde_json::json!({ "path": path }),
-                    ReconAction::Search { pattern, path, glob } => serde_json::json!({ "pattern": pattern, "path": path, "glob": glob }),
+                    ReconAction::Search {
+                        pattern,
+                        path,
+                        glob,
+                    } => serde_json::json!({ "pattern": pattern, "path": path, "glob": glob }),
                     ReconAction::FileInfo { path } => serde_json::json!({ "path": path }),
                     ReconAction::WordCount { path } => serde_json::json!({ "path": path }),
-                    ReconAction::DirTree { path, max_depth } => serde_json::json!({ "path": path, "max_depth": max_depth }),
+                    ReconAction::DirTree { path, max_depth } => {
+                        serde_json::json!({ "path": path, "max_depth": max_depth })
+                    }
                     ReconAction::FetchUrl { url } => serde_json::json!({ "url": url }),
                     ReconAction::McpCall { .. } => unreachable!(),
                 };
@@ -337,8 +349,8 @@ pub async fn run_epistemic_loop(
                 ));
 
                 let subagent = crate::subagent::SubagentWorker::new(
-                    crate::subagent::AgentRole::Explorer, 
-                    compiler.clone(), 
+                    crate::subagent::AgentRole::Explorer,
+                    compiler.clone(),
                     crate::registry::TaskRegistry::new(),
                     tool_registry.clone(),
                     permissions.clone(),
@@ -413,4 +425,3 @@ fn action_dedup_key(action: &AgentAction) -> String {
         }
     }
 }
-

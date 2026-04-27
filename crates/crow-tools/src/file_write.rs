@@ -49,13 +49,26 @@ impl Tool for FileWriteTool {
         let parsed: Args = serde_json::from_value(args)?;
 
         // Path traversal guard
-        let abs_path = match crate::file_edit::validate_workspace_path(ctx.workspace_root, &parsed.path) {
-            Ok(p) => p,
-            Err(e) => return Ok(e),
-        };
+        let abs_path =
+            match crate::file_edit::validate_workspace_path(ctx.workspace_root, &parsed.path) {
+                Ok(p) => p,
+                Err(e) => return Ok(e),
+            };
 
         // Permission check
         ctx.permissions.check_file_write(&abs_path)?;
+
+        // ── File Safety Preflight (claw-code pattern) ─────────────────
+        // Validate workspace boundary (belt-and-suspenders with the
+        // validate_workspace_path above) and content size limit.
+        if let Err(reason) =
+            crate::file_safety::preflight_write(&abs_path, parsed.content.len(), ctx.workspace_root)
+        {
+            return Ok(ToolOutput::error(format!(
+                "Cannot write '{}': {reason}",
+                parsed.path
+            )));
+        }
 
         let file_exists = abs_path.exists();
 

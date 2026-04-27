@@ -49,22 +49,39 @@ impl TaskRegistry {
 
     pub fn register(&self, task: AgentTask) -> String {
         let id = task.id.clone();
-        self.tasks.write().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id.clone(), task);
+        self.tasks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone(), task);
         id
     }
 
     pub fn get(&self, id: &str) -> Option<AgentTask> {
-        self.tasks.read().unwrap_or_else(std::sync::PoisonError::into_inner).get(id).cloned()
+        self.tasks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .cloned()
     }
 
     pub fn update_status(&self, id: &str, status: TaskStatus) {
-        if let Some(task) = self.tasks.write().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(id) {
+        if let Some(task) = self
+            .tasks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(id)
+        {
             task.status = status;
         }
     }
 
     pub fn list(&self) -> Vec<AgentTask> {
-        self.tasks.read().unwrap_or_else(std::sync::PoisonError::into_inner).values().cloned().collect()
+        self.tasks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect()
     }
 }
 
@@ -93,7 +110,10 @@ impl TeamRegistry {
             members: Vec::new(),
         };
         let id = team.id.clone();
-        self.teams.write().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id.clone(), team);
+        self.teams
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone(), team);
         id
     }
 }

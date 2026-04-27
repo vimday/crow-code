@@ -69,13 +69,25 @@ pub enum AgentEvent {
     ReconStart(String),
     DelegateStart(String, String),
     DelegateComplete(String, bool),
-    StateChanged { from: String, to: String },
-    Retrying { attempt: u32, max_attempts: u32, reason: String },
+    StateChanged {
+        from: String,
+        to: String,
+    },
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        reason: String,
+    },
     Error(String),
     Log(String),
     Markdown(String),
-    Compacting { active: bool },
-    ToolProgress { tool_id: String, message: String },
+    Compacting {
+        active: bool,
+    },
+    ToolProgress {
+        tool_id: String,
+        message: String,
+    },
     TokenUsage {
         prompt_tokens: u32,
         completion_tokens: u32,
@@ -127,14 +139,20 @@ pub struct ChannelEventHandler {
 
 impl ChannelEventHandler {
     pub fn new(tx: tokio::sync::mpsc::UnboundedSender<EngineEvent>) -> Self {
-        Self { tx, cancellation: None }
+        Self {
+            tx,
+            cancellation: None,
+        }
     }
 
     pub fn with_cancellation(
         tx: tokio::sync::mpsc::UnboundedSender<EngineEvent>,
         token: crate::cancel::CancellationToken,
     ) -> Self {
-        Self { tx, cancellation: Some(token) }
+        Self {
+            tx,
+            cancellation: Some(token),
+        }
     }
 }
 

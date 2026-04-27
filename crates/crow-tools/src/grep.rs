@@ -125,7 +125,9 @@ impl GrepTool {
 
         let mut result = limited.join("\n");
         if was_truncated {
-            result.push_str("\n\n(Results truncated. Use a more specific pattern, or increase limit.)");
+            result.push_str(
+                "\n\n(Results truncated. Use a more specific pattern, or increase limit.)",
+            );
         }
         (result, was_truncated)
     }
@@ -143,7 +145,9 @@ impl Tool for GrepTool {
          Always searches hidden files. Use this instead of bash grep/rg for structured results."
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -218,16 +222,25 @@ impl Tool for GrepTool {
         let output_mode = args["output_mode"].as_str().unwrap_or("content");
         let case_insensitive = args["case_insensitive"].as_bool().unwrap_or(false);
         let multiline = args["multiline"].as_bool().unwrap_or(false);
-        let limit = args["limit"].as_u64().map(|n| n as usize).unwrap_or(DEFAULT_LIMIT);
+        let limit = args["limit"]
+            .as_u64()
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_LIMIT);
         let offset = args["offset"].as_u64().map(|n| n as usize).unwrap_or(0);
 
         // Context lines
         let context = args["context"].as_u64().map(|n| n as usize);
         let context_before = context.unwrap_or_else(|| {
-            args["context_before"].as_u64().map(|n| n as usize).unwrap_or(0)
+            args["context_before"]
+                .as_u64()
+                .map(|n| n as usize)
+                .unwrap_or(0)
         });
         let context_after = context.unwrap_or_else(|| {
-            args["context_after"].as_u64().map(|n| n as usize).unwrap_or(0)
+            args["context_after"]
+                .as_u64()
+                .map(|n| n as usize)
+                .unwrap_or(0)
         });
 
         // Resolve search path
@@ -306,13 +319,16 @@ impl Tool for GrepTool {
 
         // Add count summary for count mode
         let response = if output_mode == "count" {
-            let total_matches: usize = lines.iter().filter_map(|line| {
-                line.rsplit(':').next().and_then(|n| n.parse::<usize>().ok())
-            }).sum();
+            let total_matches: usize = lines
+                .iter()
+                .filter_map(|line| {
+                    line.rsplit(':')
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                })
+                .sum();
             let file_count = lines.len();
-            format!(
-                "{result}\n\nFound {total_matches} total matches across {file_count} files"
-            )
+            format!("{result}\n\nFound {total_matches} total matches across {file_count} files")
         } else {
             result
         };

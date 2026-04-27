@@ -140,7 +140,8 @@ pub(crate) async fn apply_winning_plan(
                     .into(),
             ));
             if let Err(e) =
-                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan).await
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
+                    .await
             {
                 observer.handle_event(crate::event::AgentEvent::Log(format!(
                     "  ❌ Failed to apply to workspace: {e:?}"
@@ -172,7 +173,8 @@ pub(crate) async fn apply_winning_plan(
                     .into(),
             ));
             if let Err(e) =
-                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan).await
+                crow_workspace::applier::apply_sandbox_to_workspace(&cfg.workspace, hydrated_plan)
+                    .await
             {
                 observer.handle_event(crate::event::AgentEvent::Log(format!(
                     "  ❌ Failed to apply to workspace: {e:?}"
@@ -236,8 +238,10 @@ pub(crate) async fn run_mcts_crucible(
             mcp_manager,
             observer,
             file_state_store,
-                std::sync::Arc::new(crow_tools::ToolRegistry::new()),
-                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
+            std::sync::Arc::new(crow_tools::ToolRegistry::new()),
+            std::sync::Arc::new(crow_tools::PermissionEnforcer::new(
+                crow_tools::WriteMode::Sandbox,
+            )),
         ),
     )
     .await
@@ -337,23 +341,27 @@ pub(crate) async fn run_mcts_crucible(
                 compiler.clone(),
                 crow_runtime::registry::TaskRegistry::new(),
                 std::sync::Arc::new(crow_tools::ToolRegistry::new()),
-                std::sync::Arc::new(crow_tools::PermissionEnforcer { mode: crow_tools::WriteMode::Sandbox }),
+                std::sync::Arc::new(crow_tools::PermissionEnforcer::new(
+                    crow_tools::WriteMode::Sandbox,
+                )),
             );
 
             let review_task = format!(
                 "Review the following patch for logical errors, security issues, or architectural flaws:\n\n{:?}", 
                 winner.plan.operations
             );
-            
-            let review_result = reviewer.execute(
-                &review_task,
-                &[], // no specific focus
-                "We need to ensure this code is production-ready.",
-                vec![], // no extra sys msgs
-                frozen_root,
-                mcp_manager,
-                observer
-            ).await;
+
+            let review_result = reviewer
+                .execute(
+                    &review_task,
+                    &[], // no specific focus
+                    "We need to ensure this code is production-ready.",
+                    vec![], // no extra sys msgs
+                    frozen_root,
+                    mcp_manager,
+                    observer,
+                )
+                .await;
 
             match review_result {
                 Ok(review_plan) => {

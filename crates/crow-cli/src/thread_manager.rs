@@ -1,11 +1,11 @@
 use crate::config::CrowConfig;
-use crow_runtime::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler, TurnEvent, TurnPhase};
 use crate::runtime::SessionRuntime;
-use crow_runtime::session::{Session, SessionStore};
-use crow_runtime::cancel::CancellationToken;
-use crow_runtime::event::EngineEvent;
 use crow_patch::SnapshotId;
+use crow_runtime::cancel::CancellationToken;
+use crow_runtime::context::ConversationManager;
+use crow_runtime::event::EngineEvent;
+use crow_runtime::session::{Session, SessionStore};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
@@ -20,6 +20,13 @@ pub enum TurnStatus {
     Failed(String),
 }
 
+/// Allows spawning alternative agent timelines.
+#[derive(Debug, Clone)]
+pub enum ForkSnapshot {
+    TruncateBeforeNthUserMessage(usize),
+    Interrupted,
+}
+
 /// A specific operational command sent to the Thread Manager.
 pub enum Op {
     Input(String),
@@ -27,6 +34,7 @@ pub enum Op {
     Clear,
     Compact(CancellationToken),
     SwarmRun(String),
+    Fork(ForkSnapshot),
 }
 
 /// The state tracking for the active thread, with phase-level granularity.
@@ -123,6 +131,25 @@ impl ThreadManager {
                 let mut sid = self.session_id.lock().await;
                 *sid = None;
             }
+            Op::Fork(snapshot) => {
+                let state = self.thread_state.lock().await;
+                if state.status == TurnStatus::InProgress {
+                    // Refuse if actively processing
+                    return;
+                }
+                
+                let mut msgs = self.messages.lock().await;
+                match snapshot {
+                    ForkSnapshot::TruncateBeforeNthUserMessage(n) => {
+                        msgs.truncate_before_nth_user_message(n);
+                    }
+                    ForkSnapshot::Interrupted => {
+                        // Simply creates a new timeline branch without altering current bounds
+                    }
+                }
+                // Issue a generic Turn Complete to trigger TUI re-render of the updated history
+                let _ = self.ui_tx.send(EngineEvent::SessionComplete);
+            }
             Op::Compact(token) => {
                 let mut state = self.thread_state.lock().await;
                 if state.status == TurnStatus::InProgress {
@@ -136,16 +163,18 @@ impl ThreadManager {
                 let compiler = self.runtime.compiler.clone();
                 let tx = self.ui_tx.clone();
                 let thread_state = self.thread_state.clone();
-                
+
                 tokio::spawn(async move {
                     let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
                         "    🔄 Starting explicit context compaction...".into(),
                     )));
-                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: true }));
-                    
+                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting {
+                        active: true,
+                    }));
+
                     let mut locked_msgs = msgs.lock().await;
                     let cancel_token = token.runtime_token();
-                    
+
                     tokio::select! {
                         res = locked_msgs.compact_history(&compiler) => {
                             if let Err(e) = res {
@@ -164,9 +193,11 @@ impl ThreadManager {
                             )));
                         }
                     }
-                    
-                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting { active: false }));
-                    
+
+                    let _ = tx.send(EngineEvent::AgentEvent(AgentEvent::Compacting {
+                        active: false,
+                    }));
+
                     // Reset state back to Idle
                     let mut ts = thread_state.lock().await;
                     ts.status = TurnStatus::Idle;
@@ -192,8 +223,10 @@ impl ThreadManager {
         let prompt_clone = prompt.clone();
 
         tokio::spawn(async move {
-            let mut observer =
-                crow_runtime::event::ChannelEventHandler::with_cancellation(ui_tx.clone(), token.clone());
+            let mut observer = crow_runtime::event::ChannelEventHandler::with_cancellation(
+                ui_tx.clone(),
+                token.clone(),
+            );
 
             // Clone messages to prevent locking ConversationManager for the duration of the run
             let mut local_msgs = msgs_clone.lock().await.clone();
@@ -314,8 +347,10 @@ impl ThreadManager {
         let _ = ui_tx.send(EngineEvent::SwarmStarted(id.clone(), task_desc));
 
         tokio::spawn(async move {
-            let mut observer =
-                crow_runtime::event::ChannelEventHandler::with_cancellation(ui_tx.clone(), token.clone());
+            let mut observer = crow_runtime::event::ChannelEventHandler::with_cancellation(
+                ui_tx.clone(),
+                token.clone(),
+            );
 
             let (compiler, root, mcp, sys_msgs) = {
                 let msgs_guard = msgs_clone.lock().await;
@@ -330,8 +365,8 @@ impl ThreadManager {
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
             let mut worker = crow_runtime::subagent::SubagentWorker::new(
-                crow_runtime::subagent::AgentRole::Generic, 
-                compiler_instance.clone(), 
+                crow_runtime::subagent::AgentRole::Generic,
+                compiler_instance.clone(),
                 crow_runtime::registry::TaskRegistry::new(),
                 std::sync::Arc::new(crow_tools::ToolRegistry::new()),
                 std::sync::Arc::clone(&rt_clone.permissions),
@@ -399,7 +434,8 @@ impl ThreadManager {
                     };
 
                     let mcts_config = crate::mcts::MctsConfig::from_env();
-                    let mut messages_dup = crow_runtime::context::ConversationManager::new(sys_msgs);
+                    let mut messages_dup =
+                        crow_runtime::context::ConversationManager::new(sys_msgs);
                     messages_dup.push_user(prompt_clone.clone());
 
                     let snapshot_id = crate::snapshot::resolve_snapshot_id(&frozen_root);
@@ -437,8 +473,8 @@ impl ThreadManager {
                                 .await
                                 {
                                     Ok(_) => {
-                                        let _ =
-                                            ui_tx.send(EngineEvent::SwarmComplete(id.clone(), true));
+                                        let _ = ui_tx
+                                            .send(EngineEvent::SwarmComplete(id.clone(), true));
                                     }
                                     Err(_) => {
                                         let _ = ui_tx

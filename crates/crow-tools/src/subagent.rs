@@ -50,15 +50,23 @@ impl Tool for SubagentTool {
 
         let delegator = match &ctx.subagent_delegator {
             Some(d) => d,
-            None => return Ok(ToolOutput::error("Subagent delegation is not available in this context.")),
+            None => {
+                return Ok(ToolOutput::error(
+                    "Subagent delegation is not available in this context.",
+                ))
+            }
         };
 
         let role = parsed.role.unwrap_or_else(|| "Generic".to_string());
         let paths = parsed.focus_paths.unwrap_or_default();
 
         match delegator.delegate(parsed.task, role, paths).await {
-            Ok(result) => Ok(ToolOutput::success(format!("Subagent completed successfully.\n\nResults:\n{result}"))),
-            Err(e) => Ok(ToolOutput::error(format!("Subagent failed or aborted: {e}"))),
+            Ok(result) => Ok(ToolOutput::success(format!(
+                "Subagent completed successfully.\n\nResults:\n{result}"
+            ))),
+            Err(e) => Ok(ToolOutput::error(format!(
+                "Subagent failed or aborted: {e}"
+            ))),
         }
     }
 }
