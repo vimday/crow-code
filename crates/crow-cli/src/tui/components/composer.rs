@@ -225,13 +225,21 @@ impl<'a> Component for ComposerComponent<'a> {
         let popup_area = split[0];
         let composer_area = split[1];
 
+        // Give the entire composer area a top border to separate it from history/status
+        let composer_block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(ratatui::style::Style::new().fg(ratatui::style::Color::DarkGray));
+        
+        let inner_composer_area = composer_block.inner(composer_area);
+        frame.render_widget(composer_block, composer_area);
+
         let composer_split = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Horizontal)
             .constraints([
                 ratatui::layout::Constraint::Length(2),
                 ratatui::layout::Constraint::Min(0),
             ])
-            .split(composer_area);
+            .split(inner_composer_area);
 
         use crate::tui::theme::{chars, spinner_char, Styles};
 

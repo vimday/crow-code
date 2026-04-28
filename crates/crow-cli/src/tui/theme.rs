@@ -114,21 +114,21 @@ impl ThemeConfig {
 
 // ── Terminal Color Detection (Codex-inspired) ────────────────────────────────
 
-/// Returns true if the given RGB background color is "light" (codex pattern).
-/// Uses ITU-R BT.601 luminance formula.
-pub fn is_light_background(bg: (u8, u8, u8)) -> bool {
-    let (r, g, b) = bg;
-    let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    y > 128.0
-}
+use crate::tui::terminal_palette;
+use crate::tui::color;
 
-/// Alpha-blend a foreground color over a background (codex pattern).
-#[allow(dead_code)]
-pub fn blend(fg: (u8, u8, u8), bg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
-    let r = (fg.0 as f32 * alpha + bg.0 as f32 * (1.0 - alpha)) as u8;
-    let g = (fg.1 as f32 * alpha + bg.1 as f32 * (1.0 - alpha)) as u8;
-    let b = (fg.2 as f32 * alpha + bg.2 as f32 * (1.0 - alpha)) as u8;
-    (r, g, b)
+pub fn user_message_bg() -> ratatui::style::Color {
+    if let Some(bg) = terminal_palette::default_bg() {
+        let (top, alpha) = if color::is_light(bg) {
+            ((0, 0, 0), 0.04)
+        } else {
+            ((255, 255, 255), 0.12)
+        };
+        terminal_palette::best_color(color::blend(top, bg, alpha))
+    } else {
+        // Fallback if background cannot be determined
+        current_theme().user_msg_bg
+    }
 }
 
 /// Auto-detect the terminal background color and select an appropriate theme.
@@ -251,7 +251,7 @@ pub mod colors {
         current_theme().divider
     }
     pub fn user_msg_bg() -> Color {
-        current_theme().user_msg_bg
+        crate::tui::theme::user_message_bg()
     }
 }
 

@@ -164,7 +164,7 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
     let tx_tick = tx.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_millis(120)).await;
+            tokio::time::sleep(Duration::from_millis(33)).await;
             if tx_tick.send(TuiMessage::Tick).is_err() {
                 break;
             }
