@@ -10,16 +10,7 @@ use super::theme::{chars, colors, Styles};
 /// Left gutter width matching Codex's LIVE_PREFIX_COLS.
 const GUTTER: &str = "  ";
 
-// ── Color aliases from theme (backwards compat for cells) ────────────────────
-fn dim_gray() -> Color {
-    colors::text_muted()
-}
-fn accent_cyan() -> Color {
-    colors::accent_system()
-}
-fn accent_red() -> Color {
-    colors::accent_error()
-}
+
 
 // ── Spinner frames from theme ────────────────────────────────────────────────
 const SPINNER: &[&str] = chars::SPINNER;
@@ -60,12 +51,22 @@ pub fn render_app(
     let main_area = main_split[0];
     let side_area = main_split[1];
 
+    let status_lines = if state.is_streaming || state.active_action.is_some() || state.status_indicator.is_some() {
+        if state.status_indicator.as_ref().is_some_and(|i| i.details.is_some()) {
+            4 // Status header + 3 details lines max
+        } else {
+            1
+        }
+    } else {
+        1 // just the right side context
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),                 // Conversation pane
             Constraint::Length(swarm_lines),    // Swarm bar
-            Constraint::Length(1),              // Status bar
+            Constraint::Length(status_lines),   // Status indicator
             Constraint::Length(footer_lines),   // Footer hints
             Constraint::Length(popup_lines),    // Dynamic Command Palette Popup
             Constraint::Length(composer_lines), // Composer
@@ -80,7 +81,8 @@ pub fn render_app(
         render_swarm_bar(f, state, chunks[1]);
     }
 
-    render_status_bar(f, state, chunks[2]);
+    use ratatui::widgets::Widget;
+    crate::tui::components::status::StatusIndicatorWidget::new(state).render(chunks[2], f.buffer_mut());
     render_footer_hints(f, state, chunks[3]);
 
     // Group the bottom areas for passing to composer
@@ -167,22 +169,31 @@ impl<'a> HistoryCell for UserCell<'a> {
         let mut lines = Vec::new();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let wrapped = textwrap::wrap(self.0, wrap_width);
+        
+        let style = Styles::user_content().bg(colors::user_msg_bg());
+        let prefix_style = Styles::user_header().bg(colors::user_msg_bg());
+
+        // Add an empty line before for padding, tinted
+        lines.push(Line::from("").style(style));
+
         for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if wrapped.len() == 1 {
-                format!("{} ", chars::USER_BAR).set_style(Styles::user_header())
-            } else if i == 0 {
-                format!("{} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header())
-            } else if i == wrapped.len() - 1 {
-                format!("{} ", chars::CODE_BOTTOM_LEFT).set_style(Styles::user_header())
+            let prefix = if i == 0 {
+                "› ".set_style(prefix_style)
             } else {
-                format!("{} ", chars::USER_BAR).set_style(Styles::user_header())
+                "  ".set_style(prefix_style)
             };
             lines.push(Line::from(vec![
                 prefix,
-                line.to_string().set_style(Styles::user_content()),
-            ]));
+                line.to_string().set_style(style),
+            ]).style(style)); // tint the whole line
         }
+        
+        // Add an empty line after for padding, tinted
+        lines.push(Line::from("").style(style));
+        
+        // And an untinted spacer line between blocks
         lines.push(Line::from(""));
+        
         lines
     }
 }
@@ -195,14 +206,10 @@ impl<'a> HistoryCell for AgentMessageCell<'a> {
         let md_lines = renderer.set_content(self.0.to_string());
         let mut out = Vec::new();
         for (i, line) in md_lines.iter().enumerate() {
-            let prefix = if md_lines.len() == 1 {
-                format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content())
-            } else if i == 0 {
-                format!("{} ", chars::CODE_TOP_LEFT).set_style(Styles::assistant_content())
-            } else if i == md_lines.len() - 1 {
-                format!("{} ", chars::CODE_BOTTOM_LEFT).set_style(Styles::assistant_content())
+            let prefix = if i == 0 {
+                "• ".set_style(Styles::assistant_content().dim())
             } else {
-                format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content())
+                "  ".set_style(Styles::assistant_content())
             };
 
             let mut new_spans = vec![prefix];
@@ -214,7 +221,7 @@ impl<'a> HistoryCell for AgentMessageCell<'a> {
         if out.is_empty() {
             // Fallback for empty content
             out.push(Line::from(vec![
-                format!("{} ", chars::USER_BAR).set_style(Styles::assistant_content()),
+                "• ".set_style(Styles::assistant_content().dim()),
                 self.0.to_string().set_style(Styles::assistant_content()),
             ]));
         }
@@ -251,7 +258,7 @@ impl<'a> HistoryCell for ActionCell<'a> {
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
             let prefix = if i == 0 {
-                format!("{GUTTER}▶ ")
+                format!("{GUTTER}↳ ")
             } else {
                 format!("{GUTTER}  ")
             };
@@ -293,7 +300,7 @@ impl<'a> HistoryCell for LogCell<'a> {
         let wrapped = textwrap::wrap(self.0, wrap_width);
         for (i, line) in wrapped.iter().enumerate() {
             let prefix = if i == 0 {
-                format!("{GUTTER}{} ", chars::BULLET)
+                format!("{GUTTER}· ")
             } else {
                 format!("{GUTTER}  ")
             };
@@ -367,35 +374,6 @@ pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
                 to_take -= 1;
             }
         };
-    }
-
-    // 1. Active spinner is at the very bottom (with shimmer animation)
-    if let Some(action) = &state.active_action {
-        let frame = SPINNER[state.spinner_idx % SPINNER.len()];
-        let mut lines = Vec::new();
-        let wrap_width = area.width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(action, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}{frame} ")
-            } else {
-                format!("{GUTTER}  ")
-            };
-            // Use shimmer animation for the first line (active action)
-            if i == 0 {
-                let mut spans = vec![prefix.fg(accent_cyan())];
-                spans.extend(crate::tui::shimmer::shimmer_spans(line));
-                lines.push(Line::from(spans));
-            } else {
-                lines.push(Line::from(vec![
-                    prefix.fg(accent_cyan()),
-                    line.to_string().fg(accent_cyan()),
-                ]));
-            }
-        }
-        for item in lines.into_iter().rev() {
-            push_item!(ListItem::new(item));
-        }
     }
 
     // 1.5 Active streaming cell (Codex pattern)
@@ -558,177 +536,6 @@ fn render_footer_hints(f: &mut Frame, state: &AppState, area: Rect) {
 
     let p = Paragraph::new(lines).style(Style::new());
     f.render_widget(p, area);
-}
-
-// ── Status Bar ───────────────────────────────────────────────────────────────
-// Codex pattern: left-side hints, right-side context joined by ` · `,
-// connected by `─` fill.
-
-fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
-    if area.width < 4 {
-        return;
-    }
-
-    // ── LEFT: Mode + Git + Streaming indicator ──────────────────────
-    let left = if state.is_streaming {
-        let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
-
-        let (elapsed_str, tps_str) = if let Some(start_time) = state.streaming_start_time {
-            let elapsed_secs_f64 = start_time.elapsed().as_secs_f64();
-            let elapsed_secs = start_time.elapsed().as_secs();
-
-            let elapsed_fmt = if elapsed_secs < 60 {
-                format!("{elapsed_secs}s")
-            } else {
-                format!("{}m{}s", elapsed_secs / 60, elapsed_secs % 60)
-            };
-
-            let tps = if elapsed_secs_f64 > 0.5 {
-                state.streaming_token_estimate / elapsed_secs_f64
-            } else {
-                0.0
-            };
-
-            (elapsed_fmt, format!("{tps:.1} tok/s"))
-        } else {
-            ("0s".to_string(), "0.0 tok/s".to_string())
-        };
-
-        let tokens = state.streaming_token_estimate;
-        let token_display = if tokens < 1000.0 {
-            format!("{tokens:.0}")
-        } else {
-            format!("{:.1}k", tokens / 1000.0)
-        };
-        format!(" {spinner} {token_display} tok · {tps_str} · {elapsed_str} ")
-    } else {
-        " ".to_string()
-    };
-
-    let git_info = if state.is_dirty {
-        format!(" {}*", state.git_branch)
-    } else {
-        format!(" {}", state.git_branch)
-    };
-
-    let risk_color = if state.is_dirty {
-        accent_red()
-    } else {
-        dim_gray()
-    };
-
-    // ── CENTER: Timed status messages or active action ──────────────
-    let center = if let Some(ref msg) = state.status_message {
-        let color = match msg.level {
-            crate::tui::state::StatusLevel::Info => accent_cyan(),
-            crate::tui::state::StatusLevel::Warn => colors::accent_warning(),
-            crate::tui::state::StatusLevel::Error => colors::accent_error(),
-            crate::tui::state::StatusLevel::Tip => dim_gray(),
-        };
-        (msg.content.clone(), color)
-    } else if let Some(ref indicator) = state.status_indicator {
-        let text = if let Some(ref details) = indicator.details {
-            let mut det = details.clone();
-            if det.len() > 20 {
-                det = format!("{}…", &det[..19]);
-            }
-            format!("{}: {}", indicator.header, det)
-        } else {
-            indicator.header.clone()
-        };
-        (text, accent_cyan())
-    } else if let Some(ref action) = state.active_action {
-        let action_display = if action.len() > 30 {
-            format!("{}…", &action[..29])
-        } else {
-            action.clone()
-        };
-        (action_display, accent_cyan())
-    } else {
-        (String::new(), dim_gray())
-    };
-
-    // ── RIGHT: Model · Context usage (Yomi pattern) ────────────────
-    let mut right_parts: Vec<String> = Vec::new();
-    right_parts.push(state.model_info.clone());
-
-    // Context window usage (color-coded like Yomi)
-    #[allow(clippy::cast_precision_loss)]
-    if let Some((tokens, context_window)) = state.ctx_usage {
-        if context_window > 0 {
-            let pct = tokens as f32 / context_window as f32;
-            let cw_k = context_window / 1000;
-            right_parts.push(format!("{:.1}% ({cw_k}K)", pct * 100.0));
-        }
-    }
-
-    right_parts.push(format!("{:?}", state.view_mode));
-    let right = format!(" {} ", right_parts.join(" · "));
-
-    let left_span = Line::from(vec![
-        if state.is_streaming {
-            left.fg(accent_cyan())
-        } else {
-            left.fg(dim_gray())
-        },
-        git_info.fg(risk_color),
-    ]);
-
-    let left_w = left_span.width().min(area.width as usize);
-    let right_w = right.chars().count().min(area.width as usize);
-
-    let status_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(left_w as u16 + 2),
-            Constraint::Min(0),
-            Constraint::Length(right_w as u16),
-        ])
-        .split(area);
-
-    let left_widget = Paragraph::new(left_span);
-
-    // Context window usage color
-    #[allow(clippy::cast_precision_loss)]
-    let right_color = state
-        .ctx_usage
-        .map(|(tokens, cw)| {
-            if cw == 0 {
-                return dim_gray();
-            }
-            let pct = tokens as f32 / cw as f32;
-            if pct >= 0.9 {
-                accent_red()
-            } else if pct >= 0.7 {
-                colors::accent_warning()
-            } else {
-                dim_gray()
-            }
-        })
-        .unwrap_or(dim_gray());
-    let right_widget = Paragraph::new(right.fg(right_color));
-
-    // Center section: status message or divider fill
-    let mid_w = status_chunks[1].width as usize;
-    let (center_text, center_color) = center;
-    let mid_widget = if !center_text.is_empty() && center_text.len() <= mid_w {
-        let pad_left = (mid_w.saturating_sub(center_text.len())) / 2;
-        let pad_right = mid_w
-            .saturating_sub(center_text.len())
-            .saturating_sub(pad_left);
-        Paragraph::new(Line::from(vec![
-            "─".repeat(pad_left).fg(colors::divider()),
-            center_text.fg(center_color),
-            "─".repeat(pad_right).fg(colors::divider()),
-        ]))
-    } else {
-        let mid_fill = "─".repeat(mid_w);
-        Paragraph::new(mid_fill.fg(colors::divider()))
-    };
-
-    f.render_widget(left_widget, status_chunks[0]);
-    f.render_widget(mid_widget, status_chunks[1]);
-    f.render_widget(right_widget, status_chunks[2]);
 }
 
 // ── Composer ─────────────────────────────────────────────────────────────────

@@ -6,3 +6,4 @@ pub mod command_palette;
 pub mod composer;
 pub mod history;
 pub mod info_bar;
+pub mod status;
