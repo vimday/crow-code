@@ -3,6 +3,7 @@
 //! This crate contains the main conversation loop, epistemic reasoning,
 //! subagent task management, and task registries.
 pub mod agent_loop;
+pub mod agent_status;
 pub mod agents_md;
 pub mod budget;
 pub mod cancel;
@@ -15,3 +16,4 @@ pub mod registry;
 pub mod session;
 pub mod subagent;
 pub mod turn_diff;
+pub mod turn_timing;

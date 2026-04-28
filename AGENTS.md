@@ -143,6 +143,27 @@ Tool execution leverages `tokio::task::JoinSet` combined with `CancellationToken
 ### Recon Output Capping
 Recon tool output is capped at 100KB before entering the conversation context (`MAX_RECON_CONTEXT_BYTES`), separate from the 512KB execution-level cap in the verifier. This prevents a single oversized tool result from consuming the entire context budget.
 
+### TurnTimingState (TTFT/TTFM Tracking)
+The `TurnTimingState` (`turn_timing.rs`, ported from Codex) tracks fine-grained timing metrics for each agent turn:
+- **Time to First Token (TTFT)**: How long until the first LLM token arrives after turn start
+- **Time to First Message (TTFM)**: How long until the first complete message is available
+- **Total duration**: Wall-clock time from turn start to completion
+
+All state is behind a `tokio::sync::Mutex` so metrics can be recorded from any async context. The `snapshot()` method captures all metrics at turn completion for display in the InfoBar.
+
+### Backoff with Jitter
+The `backoff_with_jitter()` utility (ported from Codex) replaces crude `2^n` second delays with proper exponential backoff using a 200ms base and ±10% random jitter. This decorrelates retry storms when multiple agents hit rate limits simultaneously.
+
+### AgentStatus (Observable State Machine)
+The `AgentStatusTracker` (`agent_status.rs`, ported from Codex) provides a proper lifecycle state machine using `tokio::sync::watch`:
+- States: `PendingInit` → `Running` → `Completed`/`Interrupted`/`Errored`/`Shutdown`
+- `subscribe()` returns a `watch::Receiver` for `select!`-based observation
+- `agent_status_from_event()` maps `AgentEvent` variants to status transitions
+- `is_final()` indicates terminal states for cleanup/GC decisions
+
+### Tool Call Output Synthesis
+The `ensure_tool_call_outputs()` method (Codex `ensure_call_outputs_present` pattern) synthesizes missing tool responses for interrupted tool calls. When an Assistant message has `tool_calls` but subsequent Tool messages are missing (due to cancellation), synthetic `[aborted]` responses are inserted to maintain valid tool_call → tool_result pairing.
+
 ## 5. TUI Component Architecture
 
 Crow's TUI uses an Elm-inspired component model defined in `crate::tui::component`:

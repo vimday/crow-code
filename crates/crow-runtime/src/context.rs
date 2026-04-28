@@ -197,16 +197,18 @@ impl ConversationManager {
 
     /// Proactively sanitize the conversation buffer (yomi pattern).
     ///
-    /// Combines three validation passes in the correct order:
-    /// 1. Remove orphan/broken tool-call chains
-    /// 2. Ensure the first message is a User message
-    /// 3. Fix strict role alternation
+    /// Combines four validation passes in the correct order:
+    /// 1. Synthesize missing tool outputs for orphan tool calls (codex pattern)
+    /// 2. Remove orphan/broken tool-call chains
+    /// 3. Ensure the first message is a User message
+    /// 4. Fix strict role alternation
     ///
     /// Call this at turn boundaries, after cancellation recovery, or
     /// whenever the conversation may have drifted into an invalid state.
     /// Returns true if any modifications were made.
     pub fn sanitize(&mut self) -> bool {
         let before_len = self.conversation.len();
+        self.ensure_tool_call_outputs();
         self.remove_orphan_tool_results();
         self.ensure_first_message_is_user();
         self.fix_role_alternation();
@@ -279,6 +281,91 @@ impl ConversationManager {
     /// 2. **Interrupted chains** — assistant→user→tool (user interrupted).
     /// 3. **Incomplete chains** — assistant expects 2 tool results but only 1
     ///    appears.
+    ///
+    /// Synthesize missing tool outputs for orphan tool calls (Codex pattern).
+    ///
+    /// When an Assistant message contains `tool_calls` but the subsequent
+    /// Tool response messages are missing (e.g., due to cancellation mid-turn),
+    /// this inserts synthetic "aborted" responses to maintain a valid
+    /// tool_call → tool_result pairing.
+    fn ensure_tool_call_outputs(&mut self) {
+        use std::collections::HashSet;
+
+        // Collect indices where we need to insert synthetic outputs.
+        // We iterate in reverse to avoid index invalidation during insertion.
+        let mut insertions: Vec<(usize, Vec<Memory>)> = Vec::new();
+
+        let n = self.conversation.len();
+        let mut i = 0;
+
+        while i < n {
+            let role = &self.conversation[i].message.role;
+            if *role != ChatRole::Assistant {
+                i += 1;
+                continue;
+            }
+
+            let Some(ref calls) = self.conversation[i].message.tool_calls else {
+                i += 1;
+                continue;
+            };
+
+            // Collect which call IDs already have responses
+            let call_ids: Vec<String> = calls.iter().map(|c| c.id.clone()).collect();
+            let mut present_ids: HashSet<String> = HashSet::new();
+
+            for look_ahead in (i + 1)..n {
+                let mem = &self.conversation[look_ahead];
+                if mem.message.role != ChatRole::Tool {
+                    break;
+                }
+                if let Some(ref tc_id) = mem.message.tool_call_id {
+                    present_ids.insert(tc_id.clone());
+                }
+            }
+
+            // Synthesize missing outputs
+            let missing: Vec<Memory> = call_ids
+                .iter()
+                .filter(|id| !present_ids.contains(*id))
+                .map(|id| Memory {
+                    message: ChatMessage {
+                        role: ChatRole::Tool,
+                        content: "[aborted]".to_string(),
+                        tool_calls: None,
+                        tool_call_id: Some(id.clone()),
+                    },
+                    summary: None,
+                })
+                .collect();
+
+            if !missing.is_empty() {
+                // Insert after the last existing tool response for this call,
+                // or directly after the assistant message.
+                let insert_pos = {
+                    let mut pos = i + 1;
+                    while pos < n && self.conversation[pos].message.role == ChatRole::Tool {
+                        pos += 1;
+                    }
+                    pos
+                };
+                insertions.push((insert_pos, missing));
+            }
+
+            // Skip past this assistant + its tool responses
+            i += 1 + call_ids.len();
+        }
+
+        // Apply insertions in reverse order to preserve indices
+        for (pos, memories) in insertions.into_iter().rev() {
+            for (offset, mem) in memories.into_iter().enumerate() {
+                let insert_at = std::cmp::min(pos + offset, self.conversation.len());
+                self.conversation.insert(insert_at, mem);
+            }
+        }
+    }
+
+    /// Remove orphan/broken tool-result chains.
     ///
     /// This prevents API 400 errors from providers that enforce strict
     /// tool_call ↔ tool_result pairing.

@@ -221,3 +221,37 @@ impl EventHandler for ChannelEventHandler {
             .unwrap_or(false)
     }
 }
+
+/// Derive the next `AgentStatus` from a single emitted event (Codex pattern).
+///
+/// Returns `None` when the event does not affect status tracking.
+/// This allows consumers to selectively update their status tracker
+/// only when meaningful transitions occur.
+pub fn agent_status_from_event(event: &AgentEvent) -> Option<crate::agent_status::AgentStatus> {
+    use crate::agent_status::AgentStatus;
+
+    match event {
+        AgentEvent::Turn(TurnEvent::Started { .. }) => Some(AgentStatus::Running),
+        AgentEvent::Turn(TurnEvent::Completed { success, .. }) => {
+            if *success {
+                Some(AgentStatus::Completed(None))
+            } else {
+                Some(AgentStatus::Errored("turn failed".to_string()))
+            }
+        }
+        AgentEvent::Turn(TurnEvent::Aborted { reason, .. }) => {
+            if reason.contains("cancel") || reason.contains("interrupt") {
+                Some(AgentStatus::Interrupted)
+            } else {
+                Some(AgentStatus::Errored(reason.clone()))
+            }
+        }
+        AgentEvent::PhasedError {
+            is_recoverable: false,
+            error,
+            ..
+        } => Some(AgentStatus::Errored(error.clone())),
+        AgentEvent::Error(msg) => Some(AgentStatus::Errored(msg.clone())),
+        _ => None,
+    }
+}

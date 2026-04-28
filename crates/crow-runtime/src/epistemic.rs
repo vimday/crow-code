@@ -120,7 +120,6 @@ pub async fn run_epistemic_loop(
                         if brain_err.is_retryable() && retry_count < MAX_LLM_RETRIES =>
                     {
                         retry_count += 1;
-                        let backoff_secs = 2u64.pow(retry_count);
                         let obs = &mut *adapter.0;
                         obs.handle_event(AgentEvent::PhasedError {
                             phase: crate::event::ErrorPhase::Streaming,
@@ -132,7 +131,8 @@ pub async fn run_epistemic_loop(
                             max_attempts: MAX_LLM_RETRIES,
                             reason: format!("Transient LLM error: {brain_err}"),
                         });
-                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                        let delay = crate::turn_timing::backoff_with_jitter(retry_count);
+                        tokio::time::sleep(delay).await;
                     }
                     Err(e) => {
                         adapter.0.handle_event(AgentEvent::PhasedError {
