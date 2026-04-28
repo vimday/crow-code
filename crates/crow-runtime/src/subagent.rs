@@ -248,6 +248,16 @@ impl EventHandler for SubagentEventHandler<'_> {
             }
             // Forward structured turn lifecycle events to parent as-is
             AgentEvent::Turn(ev) => self.parent.handle_event(AgentEvent::Turn(ev)),
+            // Forward phased errors with subagent context prefix
+            AgentEvent::PhasedError {
+                phase,
+                error,
+                is_recoverable,
+            } => self.parent.handle_event(AgentEvent::PhasedError {
+                phase,
+                error: format!("[{}:{}] {}", self.role, self.id, error),
+                is_recoverable,
+            }),
         }
     }
 }

@@ -195,6 +195,29 @@ impl ConversationManager {
         self.enforce_budget();
     }
 
+    /// Proactively sanitize the conversation buffer (yomi pattern).
+    ///
+    /// Combines three validation passes in the correct order:
+    /// 1. Remove orphan/broken tool-call chains
+    /// 2. Ensure the first message is a User message
+    /// 3. Fix strict role alternation
+    ///
+    /// Call this at turn boundaries, after cancellation recovery, or
+    /// whenever the conversation may have drifted into an invalid state.
+    /// Returns true if any modifications were made.
+    pub fn sanitize(&mut self) -> bool {
+        let before_len = self.conversation.len();
+        self.remove_orphan_tool_results();
+        self.ensure_first_message_is_user();
+        self.fix_role_alternation();
+
+        let modified = self.conversation.len() != before_len;
+        if modified {
+            self.history_version = self.history_version.saturating_add(1);
+        }
+        modified
+    }
+
     /// Evaluates if the current conversation history threatens the token limit,
     /// and if so, runs a semantic LLM compaction on older messages.
     /// Returns true if compaction occurred.

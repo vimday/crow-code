@@ -43,12 +43,15 @@ Our TUI is built on `ratatui` and relies on semantic, extension-driven styling t
 ## 4. Agent Architecture Patterns
 
 ### CancellationToken (arc-swap rotation)
-The TUI uses `CancellationToken` (`state.rs`) for safe, resettable cancellation. The design is identical to yomi's `CancelToken`:
+The TUI uses `CancellationToken` (`cancel.rs`) for safe, resettable cancellation. The design is identical to yomi's `CancelToken`:
 - Wraps `Arc<ArcSwap<tokio_util::sync::CancellationToken>>`
 - `cancel()` cancels the current token via `ArcSwap::load().cancel()`
 - `reset_if_cancelled()` atomically swaps in a fresh token if the current one is cancelled
 - `force_reset()` unconditionally replaces the token (stale listeners fall off gracefully)
 - `runtime_token()` extracts the underlying tokio token for native `select!` integration
+- `cancelled()` returns a Future that completes when cancellation is requested (yomi pattern for `tokio::select!` integration without polling)
+
+The `cancelled()` method snapshots the current token via `load_full()` to prevent select!-race conditions when a reset occurs between obtaining the future and awaiting it.
 
 This enables safe interruption of agent turns without deadlocking ongoing async tasks.
 
@@ -85,7 +88,17 @@ The `AgentEvent` enum (`event.rs`) covers five conceptual domains:
 | **Streaming** | `StreamChunk`, `Markdown` | StreamController, HistoryComponent |
 | **Tool execution** | `ActionStart/Complete`, `ReconStart`, `ReadFiles`, `DelegateStart` | InfoBar (spinner), History |
 | **Metrics** | `TokenUsage`, `Compacting`, `ToolProgress` | InfoBar (gauge), StatusBar |
-| **Diagnostics** | `StateChanged`, `Retrying`, `Error`, `Log` | History, StatusMessage |
+| **Diagnostics** | `StateChanged`, `Retrying`, `Error`, `PhasedError`, `Log` | History, StatusMessage |
+
+### Structured Error Reporting (ErrorPhase)
+Errors emitted from the epistemic loop carry structured phase metadata via `PhasedError` (yomi pattern):
+- **`ErrorPhase::Streaming`** — LLM API call failures (HTTP errors, timeouts, parse failures)
+- **`ErrorPhase::ToolExecution`** — Tool execution failures (file not found, permission denied)
+- **`ErrorPhase::Compaction`** — Context compaction failures
+- **`ErrorPhase::WaitForInput`** — Input channel errors
+- **`ErrorPhase::Unknown`** — Fallback for unclassified errors
+
+Each `PhasedError` carries an `is_recoverable` flag. Recoverable errors show as transient status bar warnings, while non-recoverable ones are displayed as error cells in the history pane.
 
 ### Subagent Delegation
 Subagent workers (`subagent.rs`) are bounded by:
@@ -98,10 +111,25 @@ Subagent workers (`subagent.rs`) are bounded by:
 - **Transient** (retryable): HTTP 429, 500, 502, 503, 529, transport errors
 - **Permanent** (fatal): Auth errors (401/403), parse errors, config errors
 
-The epistemic loop retries transient errors up to 3 times with exponential backoff (2s, 4s, 8s).
+The epistemic loop retries transient errors up to 3 times with exponential backoff (2s, 4s, 8s). Each retry emits both a `PhasedError` (for TUI status display) and a `Retrying` event (for progress tracking).
 
-### Role Alternation
+### Role Alternation & Proactive Sanitization
 The `ConversationManager` enforces strict User→Assistant→User role alternation required by providers like Anthropic. After compaction, `fix_role_alternation()` inserts minimal placeholder messages to repair any violations.
+
+The `sanitize()` method (yomi `MessageBuffer::santinize()` pattern) combines three validation passes in order:
+1. Remove orphan/broken tool-call chains
+2. Ensure the first message is a User message
+3. Fix strict role alternation
+
+This is called proactively at the start of every epistemic loop iteration and after cancellation recovery, preventing API 400 errors from accumulated conversation drift.
+
+### SystemPromptBuilder
+The `SystemPromptBuilder` (yomi pattern, `prompt.rs`) composes the base system prompt with:
+- Available skills metadata (triggers, descriptions, source paths)
+- Project memory sections (from AGENTS.md, CLAUDE.md, etc.)
+- Base persona instructions
+
+This replaces ad-hoc string concatenation with a structured builder that ensures consistent prompt composition across the main agent and subagents.
 
 ### Micro-Compaction
 To save context budget and API latency, the `Compactor` performs a fast, local "micro-compaction" pass. It clears all intermediate `ChatRole::Tool` messages and `[TOOL OUTPUT]` prefixed responses, trimming the conversation down to its essential skeleton before resorting to a full API-based summarization pass.

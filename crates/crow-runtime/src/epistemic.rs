@@ -55,7 +55,16 @@ pub async fn run_epistemic_loop(
     let mut seen_actions: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut consecutive_dupes = 0u32;
     // Track subagent delegation depth structurally (codex pattern) instead of via prompt text.
+    // Delegation depth tracking (codex pattern)
     let mut delegation_count = 0usize;
+
+    // Proactive sanitization: repair any tool-call chain or role
+    // alternation violations before the first LLM call (yomi pattern).
+    if messages.sanitize() {
+        observer.handle_event(AgentEvent::Log(
+            "Sanitized conversation buffer (repaired tool-call chains)".into(),
+        ));
+    }
 
     loop {
         epistemic_step += 1;
@@ -113,6 +122,11 @@ pub async fn run_epistemic_loop(
                         retry_count += 1;
                         let backoff_secs = 2u64.pow(retry_count);
                         let obs = &mut *adapter.0;
+                        obs.handle_event(AgentEvent::PhasedError {
+                            phase: crate::event::ErrorPhase::Streaming,
+                            error: format!("Transient LLM error: {brain_err}"),
+                            is_recoverable: true,
+                        });
                         obs.handle_event(AgentEvent::Retrying {
                             attempt: retry_count,
                             max_attempts: MAX_LLM_RETRIES,
@@ -120,7 +134,14 @@ pub async fn run_epistemic_loop(
                         });
                         tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
                     }
-                    Err(e) => break Err(e),
+                    Err(e) => {
+                        adapter.0.handle_event(AgentEvent::PhasedError {
+                            phase: crate::event::ErrorPhase::Streaming,
+                            error: format!("{e:?}"),
+                            is_recoverable: false,
+                        });
+                        break Err(e);
+                    }
                 }
             }
         };

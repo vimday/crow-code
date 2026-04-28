@@ -3,7 +3,9 @@ use crossterm::style::{Color, Stylize};
 
 // ── Structured Protocol Layer (SQ/EQ Pattern) ──────────────────────
 
-pub use crow_runtime::event::{AgentEvent, EventHandler, TokenUsageSummary, TurnEvent, TurnPhase};
+pub use crow_runtime::event::{
+    AgentEvent, ErrorPhase, EventHandler, TokenUsageSummary, TurnEvent, TurnPhase,
+};
 
 /// The level of detail provided to the user during the autonomous loop.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +265,26 @@ impl EventHandler for CliEventHandler {
                         err.with(Color::AnsiValue(203))
                     );
                 });
+            }
+            AgentEvent::PhasedError {
+                phase,
+                error,
+                is_recoverable,
+            } => {
+                if is_recoverable {
+                    self.update_spinner(format!("{phase} error (will retry): {error}"));
+                } else {
+                    self.stop_spinner();
+                    self.sync_print(|| {
+                        eprintln!(
+                            "  {} {} {} {}",
+                            "│ ".with(Color::DarkGrey),
+                            "✘".bold().with(Color::AnsiValue(203)),
+                            format!("[{phase}]").with(Color::AnsiValue(245)),
+                            error.with(Color::AnsiValue(203))
+                        );
+                    });
+                }
             }
             AgentEvent::Markdown(md) => {
                 let renderer = crate::render::TerminalRenderer::new();

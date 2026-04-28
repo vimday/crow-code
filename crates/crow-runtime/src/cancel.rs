@@ -57,6 +57,19 @@ impl CancellationToken {
         ));
     }
 
+    /// Return a Future that completes when cancellation is requested.
+    ///
+    /// Snapshots the current token via `load_full()` so that even if the
+    /// token is later reset, the future continues waiting on the original.
+    /// This prevents select!-race conditions when a reset happens between
+    /// obtaining the future and awaiting it (yomi `CancelToken` pattern).
+    pub fn cancelled(&self) -> impl std::future::Future<Output = ()> {
+        let token = self.inner.load_full();
+        async move {
+            token.cancelled().await;
+        }
+    }
+
     /// Get a snapshot of the underlying tokio cancellation token.
     pub fn runtime_token(&self) -> tokio_util::sync::CancellationToken {
         (**self.inner.load()).clone()

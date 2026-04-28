@@ -536,6 +536,27 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.active_action = None;
             state.task_start_time = None;
         }
+        AgentEvent::PhasedError {
+            phase,
+            error,
+            is_recoverable,
+        } => {
+            if is_recoverable {
+                // Recoverable errors: show as transient status (yomi pattern)
+                state.show_status(
+                    state::StatusMessage::warn(format!("{phase} error (will retry): {error}")),
+                    5000,
+                );
+            } else {
+                // Non-recoverable: add to history and stop
+                state.history.push(Cell {
+                    kind: CellKind::Error,
+                    payload: format!("[{phase}] {error}"),
+                });
+                state.active_action = None;
+                state.task_start_time = None;
+            }
+        }
         // ── High-granularity events (Yomi-inspired) ─────────────────────
         AgentEvent::TokenUsage {
             total_tokens,

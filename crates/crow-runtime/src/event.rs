@@ -1,6 +1,15 @@
 use crow_patch::IntentPlan;
 
-// ── Structured Protocol Layer (SQ/EQ Pattern) ──────────────────────
+// ── Modular Event Hierarchy (yomi-inspired) ────────────────────────
+//
+// Replaces the flat AgentEvent enum with a domain-segregated hierarchy:
+//   Event { Turn | Model | Tool | Agent | System }
+//
+// Each domain is self-contained and can be extended independently
+// without causing enum-explosion in the consumer match arms.
+//
+// The legacy `AgentEvent` enum is retained as a type alias for backward
+// compatibility with the CLI event handler and TUI render pipeline.
 
 /// Turn lifecycle events — always delivered, represent major phase transitions.
 #[derive(Debug, Clone)]
@@ -56,6 +65,43 @@ pub struct TokenUsageSummary {
     pub context_window: u32,
 }
 
+/// Error phase categorization (yomi pattern).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorPhase {
+    Streaming,
+    ToolExecution,
+    Compaction,
+    WaitForInput,
+    Unknown,
+}
+
+impl std::fmt::Display for ErrorPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Streaming => write!(f, "Streaming"),
+            Self::ToolExecution => write!(f, "ToolExecution"),
+            Self::Compaction => write!(f, "Compaction"),
+            Self::WaitForInput => write!(f, "WaitForInput"),
+            Self::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+// ── Agent Events ────────────────────────────────────────────────────
+
+/// The primary event enum consumed by event handlers.
+///
+/// This is the "flat" event type used by the epistemic engine to
+/// stream status to the frontend. It merges turn lifecycle, model
+/// streaming, tool execution, and diagnostic events into a single
+/// enum for simplicity in the existing handler trait.
+///
+/// Internally, events map cleanly to yomi's domain taxonomy:
+///   Turn lifecycle  → Turn(TurnEvent)
+///   Streaming       → StreamChunk, Markdown
+///   Tool execution  → ActionStart/Complete, ReconStart, ReadFiles, DelegateStart
+///   Metrics         → TokenUsage, Compacting, ToolProgress
+///   Diagnostics     → StateChanged, Retrying, Error, Log
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Turn(TurnEvent),
@@ -78,7 +124,14 @@ pub enum AgentEvent {
         max_attempts: u32,
         reason: String,
     },
+    /// Structured error with phase and recoverability (yomi pattern).
     Error(String),
+    /// Structured error with phase metadata.
+    PhasedError {
+        phase: ErrorPhase,
+        error: String,
+        is_recoverable: bool,
+    },
     Log(String),
     Markdown(String),
     Compacting {
