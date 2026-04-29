@@ -1,12 +1,13 @@
-use crate::tui::state::{Cell, CellKind};
+//! Legacy chat view component — superseded by the trait-based `HistoryCell` system
+//! in `history_cell.rs` + `render.rs`. Kept for reference but all methods are dead code.
+
+use crate::tui::history_cell::HistoryCell;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem};
 use ratatui::Frame;
 
 pub struct ChatView {
-    pub cells: Vec<Cell>,
+    pub cells: Vec<Box<dyn HistoryCell>>,
     pub scroll_offset: usize,
 }
 
@@ -21,65 +22,9 @@ impl ChatView {
         let mut list_items = Vec::new();
 
         for cell in &self.cells {
-            match cell.kind {
-                CellKind::User => {
-                    list_items.push(ListItem::new(Line::from("")));
-                    for (i, line) in cell.payload.lines().enumerate() {
-                        let prefix = if i == 0 { "› " } else { "  " };
-                        list_items.push(ListItem::new(Line::from(vec![
-                            prefix.cyan().bold(),
-                            line.white(),
-                        ])));
-                    }
-                    list_items.push(ListItem::new(Line::from("")));
-                }
-                CellKind::AgentMessage => {
-                    for (i, line) in cell.payload.lines().enumerate() {
-                        let prefix = if i == 0 { "• " } else { "  " };
-                        list_items.push(ListItem::new(Line::from(vec![
-                            prefix.dark_gray(),
-                            line.into(),
-                        ])));
-                    }
-                }
-                CellKind::Action => {
-                    list_items.push(ListItem::new(Line::from(vec![
-                        "  ▰ ".green(),
-                        cell.payload.clone().green(),
-                    ])));
-                }
-                CellKind::Result => {
-                    list_items.push(ListItem::new(Line::from(vec![
-                        "  ✓ ".blue(),
-                        cell.payload.clone().blue(),
-                    ])));
-                }
-                CellKind::Log => {
-                    for line in cell.payload.lines() {
-                        list_items.push(ListItem::new(Line::from(vec![
-                            "  • ".dark_gray(),
-                            line.gray(),
-                        ])));
-                    }
-                }
-                CellKind::Error => {
-                    list_items.push(ListItem::new(Line::from(vec![
-                        "  ✘ ".red(),
-                        cell.payload.clone().red(),
-                    ])));
-                }
-                CellKind::Evidence => {
-                    list_items.push(ListItem::new(Line::from(vec![
-                        "  ◎ ".dark_gray(),
-                        cell.payload.clone().dark_gray(),
-                    ])));
-                }
-                CellKind::Debate => {
-                    list_items.push(ListItem::new(Line::from(vec![
-                        "  ⚖ ".magenta(),
-                        cell.payload.clone().magenta(),
-                    ])));
-                }
+            let lines = cell.display_lines(area.width);
+            for line in lines {
+                list_items.push(ListItem::new(line));
             }
         }
 

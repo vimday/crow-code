@@ -2,8 +2,9 @@ use crate::config::CrowConfig;
 use crate::event::{AgentEvent, ViewMode};
 use crate::tui::commands::{execute_shell_command, handle_enter};
 use crate::tui::components::{composer::ComposerComponent, history::HistoryComponent};
+use crate::tui::history_cell;
 use crate::tui::render::render_app;
-use crate::tui::state::{self, AppState, Cell, CellKind, TuiMessage};
+use crate::tui::state::{self, AppState, TuiMessage};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -37,7 +38,7 @@ pub async fn run_tui_loop(
             } else {
                 "Ready"
             };
-            let title = format!("🦅 Crow · {} · {}", state.workspace_name, title_state);
+            let title = format!("🦅 Crow · {} · {title_state}", state.workspace_name);
             let _ = crate::tui::terminal_title::set_terminal_title(&title);
         }
 
@@ -61,10 +62,7 @@ pub async fn run_tui_loop(
                                 token.cancel();
                             }
                             state.active_action = None;
-                            state.history.push(Cell {
-                                kind: CellKind::Log,
-                                payload: "Interrupted.".into(),
-                            });
+                            state.push_log("Interrupted.");
                             state.last_ctrl_c = Some(Instant::now());
                         } else if let Some(last) = state.last_ctrl_c {
                             if last.elapsed() < CTRL_C_QUIT_WINDOW {
@@ -95,10 +93,7 @@ pub async fn run_tui_loop(
                                 token.cancel();
                             }
                             state.active_action = None;
-                            state.history.push(Cell {
-                                kind: CellKind::Log,
-                                payload: "Interrupted.".into(),
-                            });
+                            state.push_log("Interrupted.");
                         }
                         // When idle, ESC does nothing (no quit).
                         continue;
@@ -129,10 +124,7 @@ pub async fn run_tui_loop(
                             // Single-key shortcuts: y=Allow Once, a=Allow Always, n=Reject
                             KeyCode::Char('y') => {
                                 state.approval_state = crate::tui::state::ApprovalState::None;
-                                state.history.push(Cell {
-                                    kind: CellKind::User,
-                                    payload: format!("!{cmd}"),
-                                });
+                                state.push_user(format!("!{cmd}"));
                                 state.active_action = Some(format!("$ {cmd}"));
                                 execute_shell_command(cmd, tx.clone());
                             }
@@ -141,33 +133,21 @@ pub async fn run_tui_loop(
                                 let prefix =
                                     cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
                                 state.allowed_safe_patterns.insert(prefix.clone());
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: format!("Whitelist updated: '{prefix}' will auto-execute for this session."),
-                                });
-                                state.history.push(Cell {
-                                    kind: CellKind::User,
-                                    payload: format!("!{cmd}"),
-                                });
+                                state.push_log(format!("Whitelist updated: '{prefix}' will auto-execute for this session."));
+                                state.push_user(format!("!{cmd}"));
                                 state.active_action = Some(format!("$ {cmd}"));
                                 execute_shell_command(cmd, tx.clone());
                             }
                             KeyCode::Char('n') | KeyCode::Esc => {
                                 state.approval_state = crate::tui::state::ApprovalState::None;
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: format!("Command cancelled: {cmd}"),
-                                });
+                                state.push_log(format!("Command cancelled: {cmd}"));
                             }
                             KeyCode::Enter => {
                                 match selected_idx {
                                     0 => {
                                         // Allow Once
                                         state.approval_state = crate::tui::state::ApprovalState::None;
-                                        state.history.push(Cell {
-                                            kind: CellKind::User,
-                                            payload: format!("!{cmd}"),
-                                        });
+                                        state.push_user(format!("!{cmd}"));
                                         state.active_action = Some(format!("$ {cmd}"));
                                         execute_shell_command(cmd, tx.clone());
                                     }
@@ -177,24 +157,15 @@ pub async fn run_tui_loop(
                                         let prefix =
                                             cmd.split_whitespace().next().unwrap_or(&cmd).to_string();
                                         state.allowed_safe_patterns.insert(prefix.clone());
-                                        state.history.push(Cell {
-                                            kind: CellKind::Log,
-                                            payload: format!("Whitelist updated: '{prefix}' will auto-execute for this session."),
-                                        });
-                                        state.history.push(Cell {
-                                            kind: CellKind::User,
-                                            payload: format!("!{cmd}"),
-                                        });
+                                        state.push_log(format!("Whitelist updated: '{prefix}' will auto-execute for this session."));
+                                        state.push_user(format!("!{cmd}"));
                                         state.active_action = Some(format!("$ {cmd}"));
                                         execute_shell_command(cmd, tx.clone());
                                     }
                                     _ => {
                                         // Reject
                                         state.approval_state = crate::tui::state::ApprovalState::None;
-                                        state.history.push(Cell {
-                                            kind: CellKind::Log,
-                                            payload: format!("Command cancelled: {cmd}"),
-                                        });
+                                        state.push_log(format!("Command cancelled: {cmd}"));
                                     }
                                 }
                             }
@@ -304,7 +275,7 @@ pub async fn run_tui_loop(
                             let tps_display = if total_s > 0.0 && final_tokens > 0.0 {
                                 format!(", {:.1} tok/s", final_tokens / total_s)
                             } else {
-                                "".to_string()
+                                String::new()
                             };
                             format!(
                                 "Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft}{tps_display})",
@@ -313,10 +284,7 @@ pub async fn run_tui_loop(
                         } else {
                             "Done".to_string()
                         };
-                        state.history.push(Cell {
-                            kind: CellKind::Result,
-                            payload: timing_label,
-                        });
+                        state.push_result(timing_label);
 
                         if let Some(next_task) = state.task_queue.pop_front() {
                             crate::tui::commands::execute_command_string(
@@ -330,12 +298,9 @@ pub async fn run_tui_loop(
                     } else if !state.task_queue.is_empty() {
                         let drop_count = state.task_queue.len();
                         state.task_queue.clear();
-                        state.history.push(Cell {
-                            kind: CellKind::Error,
-                            payload: format!(
-                                "Pipeline halted. Dropped {drop_count} queued queries."
-                            ),
-                        });
+                        state.push_error(format!(
+                            "Pipeline halted. Dropped {drop_count} queued queries."
+                        ));
                     }
 
                     // Refresh git state post-turn in case files were modified
@@ -361,14 +326,11 @@ pub async fn run_tui_loop(
                     state
                         .active_swarms
                         .retain(|(active_id, _)| active_id != &id);
-                    state.history.push(Cell {
-                        kind: if success {
-                            CellKind::Result
-                        } else {
-                            CellKind::Error
-                        },
-                        payload: format!("Swarm worker [{id}] finished."),
-                    });
+                    if success {
+                        state.push_result(format!("Swarm worker [{id}] finished."));
+                    } else {
+                        state.push_error(format!("Swarm worker [{id}] finished."));
+                    }
                 }
                 TuiMessage::Tick => {
                     state.spinner_idx = state.spinner_idx.wrapping_add(1);
@@ -386,10 +348,7 @@ pub async fn run_tui_loop(
 
                     if let Some(start) = state.task_start_time {
                         if start.elapsed() > Duration::from_secs(180) {
-                            state.history.push(Cell {
-                                kind: CellKind::Error,
-                                payload: "Network response or task execution is taking over 3 minutes. Is it hanging? Press ESC to force-interrupt.".into(),
-                            });
+                            state.push_error("Network response or task execution is taking over 3 minutes. Is it hanging? Press ESC to force-interrupt.");
                             // Reset timer to warn again in 3 minutes if still stuck
                             state.task_start_time = Some(Instant::now());
                         }
@@ -422,10 +381,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             match turn_ev {
                 TurnEvent::Started { turn_id } => {
                     if state.view_mode == ViewMode::Audit {
-                        state.history.push(Cell {
-                            kind: CellKind::Log,
-                            payload: format!("Turn started: {turn_id}"),
-                        });
+                        state.push_log(format!("Turn started: {turn_id}"));
                     }
                 }
                 TurnEvent::Completed {
@@ -433,17 +389,11 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 } => {
                     if state.view_mode == ViewMode::Audit {
                         let status = if success { "✓" } else { "✘" };
-                        state.history.push(Cell {
-                            kind: CellKind::Log,
-                            payload: format!("{status} Turn completed: {turn_id}"),
-                        });
+                        state.push_log(format!("{status} Turn completed: {turn_id}"));
                     }
                 }
                 TurnEvent::Aborted { turn_id, reason } => {
-                    state.history.push(Cell {
-                        kind: CellKind::Error,
-                        payload: format!("Turn aborted [{turn_id}]: {reason}"),
-                    });
+                    state.push_error(format!("Turn aborted [{turn_id}]: {reason}"));
                 }
                 TurnEvent::PhaseChanged { phase, .. } => {
                     state.active_action = Some(format!("{phase}"));
@@ -460,35 +410,38 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             });
             // Start a fresh streaming session for this turn
             state.stream_controller.start();
+            // Reset streaming buffer for the new turn
+            state.streaming_buffer.clear();
             // Start streaming metrics (Yomi InfoBar pattern)
             state.is_streaming = true;
             state.streaming_token_estimate = 0.0;
             state.streaming_start_time = Some(Instant::now());
         }
         AgentEvent::StreamChunk(chunk) => {
-            if let Some(cell) = &mut state.active_cell {
-                cell.payload.push_str(&chunk);
-            } else {
-                state.active_cell = Some(Cell {
-                    kind: CellKind::AgentMessage,
-                    payload: chunk.clone(),
-                });
-            }
+            // Accumulate into streaming buffer and rebuild the active cell
+            state.streaming_buffer.push_str(&chunk);
+            state.active_cell = Some(Box::new(history_cell::AgentMessageCell {
+                payload: state.streaming_buffer.clone(),
+                is_continuation: false,
+            }));
             state.streaming_token_estimate += AppState::estimate_tokens(&chunk);
             state.scroll_offset = 0; // Force scroll to bottom on new content
         }
         AgentEvent::Markdown(md) => {
-            state.active_cell = Some(Cell {
-                kind: CellKind::AgentMessage,
+            state.streaming_buffer = md.clone();
+            state.active_cell = Some(Box::new(history_cell::AgentMessageCell {
                 payload: md,
-            });
+                is_continuation: false,
+            }));
             state.scroll_offset = 0;
         }
         AgentEvent::Log(msg) => {
-            state.history.push(Cell {
-                kind: CellKind::Log,
-                payload: msg,
-            });
+            // Route diff output to DiffCell for syntax-highlighted rendering
+            if let Some(diff_content) = msg.strip_prefix("__DIFF__") {
+                state.push_diff(diff_content);
+            } else {
+                state.push_log(msg);
+            }
         }
         AgentEvent::ActionStart(desc) => {
             state.active_action = Some(desc.clone());
@@ -499,10 +452,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             });
         }
         AgentEvent::ActionComplete(desc) => {
-            state.history.push(Cell {
-                kind: CellKind::Action,
-                payload: desc,
-            });
+            state.push_action(desc);
         }
         AgentEvent::ReadFiles(paths) => {
             if state.view_mode != ViewMode::Focus {
@@ -511,10 +461,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 } else {
                     format!("{}, ... ({} files)", paths[..2].join(", "), paths.len())
                 };
-                state.history.push(Cell {
-                    kind: CellKind::Evidence,
-                    payload: format!("Read {display}"),
-                });
+                state.push_evidence(format!("Read {display}"));
             }
         }
         AgentEvent::ReconStart(desc) => {
@@ -537,20 +484,14 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         }
         AgentEvent::PlanSubmitted(plan) => {
             if !plan.operations.is_empty() {
-                state.history.push(Cell {
-                    kind: CellKind::Action,
-                    payload: format!("{} operations planned", plan.operations.len()),
-                });
+                state.push_action(format!("{} operations planned", plan.operations.len()));
             }
         }
         AgentEvent::CruciblePreflight(msg) => {
             state.active_action = Some(format!("Verifying: {msg}"));
         }
         AgentEvent::Error(err) => {
-            state.history.push(Cell {
-                kind: CellKind::Error,
-                payload: err,
-            });
+            state.push_error(err);
             state.active_action = None;
             state.task_start_time = None;
             state.status_indicator = None;
@@ -568,10 +509,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 );
             } else {
                 // Non-recoverable: add to history and stop
-                state.history.push(Cell {
-                    kind: CellKind::Error,
-                    payload: format!("[{phase}] {error}"),
-                });
+                state.push_error(format!("[{phase}] {error}"));
                 state.active_action = None;
                 state.task_start_time = None;
             }
@@ -587,10 +525,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         }
         AgentEvent::StateChanged { from, to } => {
             if state.view_mode == ViewMode::Audit {
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: format!("State: {from} → {to}"),
-                });
+                state.push_log(format!("State: {from} → {to}"));
             }
         }
         AgentEvent::Retrying {
@@ -612,10 +547,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 state.active_action = Some("Compacting context…".into());
             } else {
                 state.active_action = None;
-                state.history.push(Cell {
-                    kind: CellKind::Action,
-                    payload: "Context compaction complete".into(),
-                });
+                state.push_action("Context compaction complete");
             }
         }
         AgentEvent::ToolProgress {

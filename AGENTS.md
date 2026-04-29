@@ -143,6 +143,10 @@ Tool execution leverages `tokio::task::JoinSet` combined with `CancellationToken
 ### Recon Output Capping
 Recon tool output is capped at 100KB before entering the conversation context (`MAX_RECON_CONTEXT_BYTES`), separate from the 512KB execution-level cap in the verifier. This prevents a single oversized tool result from consuming the entire context budget.
 
+
+
+
+
 ### TurnTimingState (TTFT/TTFM Tracking)
 The `TurnTimingState` (`turn_timing.rs`, ported from Codex) tracks fine-grained timing metrics for each agent turn:
 - **Time to First Token (TTFT)**: How long until the first LLM token arrives after turn start
@@ -184,6 +188,30 @@ pub trait Component {
 - `SubmitCommand(String)` — User submitted text
 - `FocusNext` — Tab to next component
 - `Dismiss` — Close an overlay
+
+### Polymorphic HistoryCell System (Codex pattern)
+The conversation history uses a trait-based polymorphic cell system (`history_cell.rs`) instead of a flat `Cell { kind, payload }` struct. Each cell type owns its data and controls its own rendering:
+
+```rust
+pub trait HistoryCell: Debug + Send + Sync {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+    fn desired_height(&self, width: u16) -> u16;
+    fn is_stream_continuation(&self) -> bool;
+    fn kind_label(&self) -> &'static str;
+    fn raw_text(&self) -> &str;
+}
+```
+
+**Concrete cell types**: `UserMessageCell`, `AgentMessageCell`, `EvidenceCell`, `ActionCell`, `ResultCell`, `LogCell`, `ErrorCell`, `DebateCell`, `DiffCell`.
+
+`AppState` stores `Vec<Box<dyn HistoryCell>>` and exposes convenience methods (`push_user()`, `push_agent()`, `push_log()`, `push_error()`, `push_diff()`, etc.) for ergonomic cell creation. Streaming uses a `streaming_buffer: String` to accumulate LLM delta tokens and rebuilds the `active_cell` on each chunk, avoiding trait-object downcasting.
+
+### Syntax-Highlighted Diff Rendering
+The `DiffCell` type (`diff_render.rs`) provides Codex-quality diff visualization:
+- Parses unified diffs via the `diffy` crate
+- Renders line numbers, gutter signs (`+`/`-`/` `), and theme-aware colors
+- Falls back to heuristic line-by-line coloring for unparseable output
+- Invoked automatically by the `/diff` command
 
 ## 6. MCP Integration
 MCP servers are configured via `CrowConfig.mcp_servers` and managed by the `crow-mcp` crate. The crate implements JSON-RPC 2.0 full-duplex protocol over `tokio::process::Command` stdio. MCP tool calls are intercepted in the epistemic loop and routed through `McpClient`. Results are subject to the same 100KB context cap as other recon tools.

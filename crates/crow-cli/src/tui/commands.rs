@@ -1,6 +1,6 @@
 use crate::config::CrowConfig;
 use crate::event::{AgentEvent, ViewMode};
-use crate::tui::state::{AppState, Cell, CellKind, TuiMessage};
+use crate::tui::state::{AppState, TuiMessage};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -89,30 +89,20 @@ pub fn execute_command_string(
             "swarm" => {
                 let payload = parts.collect::<Vec<_>>().join(" ");
                 if payload.is_empty() {
-                    state.history.push(Cell {
-                        kind: CellKind::Error,
-                        payload: "Usage: /swarm <task description>".into(),
-                    });
+                    state.push_error("Usage: /swarm <task description>");
                 } else {
                     let tm = thread_manager.clone();
                     tokio::spawn(async move {
                         tm.submit(crate::thread_manager::Op::SwarmRun(payload))
                             .await;
                     });
-                    state.history.push(Cell {
-                        kind: CellKind::Log,
-                        payload: "Launched asynchronous Sub-Agent Swarm Worker.".into(),
-                    });
+                    state.push_log("Launched asynchronous Sub-Agent Swarm Worker.");
                 }
             }
             "help" | "?" => {
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: "/help".into(),
-                });
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: [
+                state.push_user("/help");
+                state.push_log(
+                    [
                         "Commands:",
                         "  /help          Show this message",
                         "  /status        Workspace health",
@@ -136,55 +126,31 @@ pub fn execute_command_string(
                         "  !<cmd>         Execute shell command",
                     ]
                     .join("\n"),
-                });
+                );
             }
             "status" => {
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: "/status".into(),
-                });
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: format!(
-                        "Model: {}\nWorkspace: {}\nWrite Mode: {}\nView: {:?}",
-                        state.model_info, state.workspace_name, state.write_mode, state.view_mode,
-                    ),
-                });
+                state.push_user("/status");
+                state.push_log(format!(
+                    "Model: {}\nWorkspace: {}\nWrite Mode: {}\nView: {:?}",
+                    state.model_info, state.workspace_name, state.write_mode, state.view_mode,
+                ));
             }
             "model" => {
                 if let Some(provider) = parts.next() {
                     let provider = provider.trim();
                     match crate::config::CrowConfig::set_llm_provider(&cfg.workspace, provider) {
                         Ok(_) => {
-                            state.history.push(Cell {
-                                kind: CellKind::User,
-                                payload: format!("/model {provider}"),
-                            });
-                            state.history.push(Cell {
-                                kind: CellKind::Log,
-                                payload: format!("✅ Model provider updated to '{provider}'. Restart crow or create a new turn to take effect."),
-                            });
+                            state.push_user(format!("/model {provider}"));
+                            state.push_log(format!("✅ Model provider updated to '{provider}'. Restart crow or create a new turn to take effect."));
                         }
                         Err(e) => {
-                            state.history.push(Cell {
-                                kind: CellKind::User,
-                                payload: format!("/model {provider}"),
-                            });
-                            state.history.push(Cell {
-                                kind: CellKind::Error,
-                                payload: format!("Failed to set model: {e}"),
-                            });
+                            state.push_user(format!("/model {provider}"));
+                            state.push_error(format!("Failed to set model: {e}"));
                         }
                     }
                 } else {
-                    state.history.push(Cell {
-                        kind: CellKind::User,
-                        payload: "/model".into(),
-                    });
-                    state.history.push(Cell {
-                        kind: CellKind::Log,
-                        payload: format!("Current model: {}\nUsage: /model <provider> (e.g. /model kimi, /model claude, /model qwen)", state.model_info),
-                    });
+                    state.push_user("/model");
+                    state.push_log(format!("Current model: {}\nUsage: /model <provider> (e.g. /model kimi, /model claude, /model qwen)", state.model_info));
                 }
             }
             "view" => {
@@ -194,16 +160,10 @@ pub fn execute_command_string(
                     "audit" => ViewMode::Audit,
                     _ => ViewMode::Evidence,
                 };
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: format!("View mode: {:?}", state.view_mode),
-                });
+                state.push_log(format!("View mode: {:?}", state.view_mode));
             }
             "compact" => {
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: "/compact".into(),
-                });
+                state.push_user("/compact");
                 // Actually trigger compaction through the thread manager
                 let tm = thread_manager.clone();
                 let token = crate::tui::state::CancellationToken::new();
@@ -213,11 +173,8 @@ pub fn execute_command_string(
                 });
             }
             "diff" => {
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: "/diff".into(),
-                });
-                // Show actual git diff content (not just --stat summary)
+                state.push_user("/diff");
+                // Show actual git diff content with syntax-highlighted rendering
                 let workspace = cfg.workspace.clone();
                 let tx_diff = tx.clone();
                 tokio::spawn(async move {
@@ -276,8 +233,9 @@ pub fn execute_command_string(
                         diff_output = "Working tree is clean.".into();
                     }
 
+                    // Send as a special diff event so we can render it with DiffCell
                     let _ = tx_diff.send(TuiMessage::AgentEvent(crate::event::AgentEvent::Log(
-                        diff_output,
+                        format!("__DIFF__{diff_output}"),
                     )));
                 });
             }
@@ -290,10 +248,7 @@ pub fn execute_command_string(
                     format!("/memory {}", rest_args.join(" "))
                 };
 
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: display_payload,
-                });
+                state.push_user(display_payload);
 
                 let action = rest_args.first().copied().unwrap_or("show");
 
@@ -301,15 +256,9 @@ pub fn execute_command_string(
                     "add" => {
                         let text = rest_args[1..].join(" ");
                         if text.is_empty() {
-                            state.history.push(Cell {
-                                kind: CellKind::Error,
-                                payload: "Usage: /memory add <text>".into(),
-                            });
+                            state.push_error("Usage: /memory add <text>");
                         } else if let Err(e) = std::fs::create_dir_all(".crow") {
-                            state.history.push(Cell {
-                                kind: CellKind::Error,
-                                payload: format!("Failed to create .crow directory: {e}"),
-                            });
+                            state.push_error(format!("Failed to create .crow directory: {e}"));
                         } else {
                             use std::io::Write;
                             match std::fs::OpenOptions::new()
@@ -319,55 +268,38 @@ pub fn execute_command_string(
                             {
                                 Ok(mut f) => {
                                     if let Err(e) = writeln!(f, "- {text}") {
-                                        state.history.push(Cell {
-                                            kind: CellKind::Error,
-                                            payload: format!("Failed to write to memory: {e}"),
-                                        });
+                                        state.push_error(format!(
+                                            "Failed to write to memory: {e}"
+                                        ));
                                     } else {
-                                        state.history.push(Cell {
-                                            kind: CellKind::Log,
-                                            payload: "Memory added successfully.".into(),
-                                        });
+                                        state.push_log("Memory added successfully.");
                                     }
                                 }
                                 Err(e) => {
-                                    state.history.push(Cell {
-                                        kind: CellKind::Error,
-                                        payload: format!("Failed to open memory file: {e}"),
-                                    });
+                                    state.push_error(format!(
+                                        "Failed to open memory file: {e}"
+                                    ));
                                 }
                             }
                         }
                     }
                     "clear" => {
                         let _ = std::fs::remove_file(&memory_file);
-                        state.history.push(Cell {
-                            kind: CellKind::Log,
-                            payload: "Persistent memory cleared.".into(),
-                        });
+                        state.push_log("Persistent memory cleared.");
                     }
                     _ => match std::fs::read_to_string(&memory_file) {
                         Ok(content) if !content.trim().is_empty() => {
-                            state.history.push(Cell {
-                                kind: CellKind::Log,
-                                payload: format!("Persistent Memory:\n{content}"),
-                            });
+                            state.push_log(format!("Persistent Memory:\n{content}"));
                         }
                         _ => {
-                            state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: "Memory is empty. Use '/memory add <text>' to store persistent context.".into(),
-                                });
+                            state.push_log("Memory is empty. Use '/memory add <text>' to store persistent context.");
                         }
                     },
                 }
             }
             "session" => {
                 let action = parts.next().unwrap_or("list");
-                state.history.push(Cell {
-                    kind: CellKind::User,
-                    payload: format!("/session {action}"),
-                });
+                state.push_user(format!("/session {action}"));
 
                 if action == "list" {
                     match crow_runtime::session::SessionStore::open() {
@@ -377,47 +309,31 @@ pub fn execute_command_string(
                                 for summary in summaries.into_iter().take(10) {
                                     out.push_str(&format!("{summary}\n"));
                                 }
-                                state.history.push(Cell {
-                                    kind: CellKind::Log,
-                                    payload: out,
-                                });
+                                state.push_log(out);
                             }
                             Err(e) => {
-                                state.history.push(Cell {
-                                    kind: CellKind::Error,
-                                    payload: format!("Failed to list sessions: {e}"),
-                                });
+                                state.push_error(format!("Failed to list sessions: {e}"));
                             }
                         },
                         Err(e) => {
-                            state.history.push(Cell {
-                                kind: CellKind::Error,
-                                payload: format!("Failed to open session store: {e}"),
-                            });
+                            state.push_error(format!("Failed to open session store: {e}"));
                         }
                     }
                 } else if action == "resume" {
                     let maybe_id = parts.next();
-                    if let Some(_id) = maybe_id {
-                        state.history.push(Cell {
-                            kind: CellKind::Log,
-                            payload: "To resume a session, restart crow using: crow -r <id>".into(),
-                        });
+                    if maybe_id.is_some() {
+                        state.push_log(
+                            "To resume a session, restart crow using: crow -r <id>",
+                        );
                     } else {
-                        state.history.push(Cell {
-                            kind: CellKind::Error,
-                            payload: "Usage: /session resume <id>".into(),
-                        });
+                        state.push_error("Usage: /session resume <id>");
                     }
                 }
             }
             other => {
-                state.history.push(Cell {
-                    kind: CellKind::Error,
-                    payload: format!(
-                        "Unknown command: /{other}. Type /help for available commands."
-                    ),
-                });
+                state.push_error(format!(
+                    "Unknown command: /{other}. Type /help for available commands."
+                ));
             }
         }
         state.composer.clear();
@@ -428,14 +344,8 @@ pub fn execute_command_string(
     // ── Pre-execution Queue Check ────────────────────────────────────
     if state.is_task_running() {
         state.task_queue.push_back(prompt.clone());
-        state.history.push(Cell {
-            kind: CellKind::User,
-            payload: prompt.clone(),
-        });
-        state.history.push(Cell {
-            kind: CellKind::Log,
-            payload: "Queued for execution...".into(),
-        });
+        state.push_user(prompt.clone());
+        state.push_log("Queued for execution...");
         state.composer.clear();
         state.composer_cursor = 0;
         return;
@@ -486,10 +396,7 @@ pub fn execute_command_string(
         let is_safe = prefix_matches && !has_metacharacters;
 
         if is_safe {
-            state.history.push(Cell {
-                kind: CellKind::User,
-                payload: format!("!{bash_cmd}"),
-            });
+            state.push_user(format!("!{bash_cmd}"));
             execute_shell_command(bash_cmd, tx.clone());
         } else {
             state.approval_state = crate::tui::state::ApprovalState::PendingCommand(bash_cmd, 0);
@@ -501,10 +408,7 @@ pub fn execute_command_string(
     }
 
     // ── Normal prompt: send to agent ─────────────────────────────────
-    state.history.push(Cell {
-        kind: CellKind::User,
-        payload: prompt.clone(),
-    });
+    state.push_user(prompt.clone());
 
     state.active_action = Some("Thinking...".into());
     state.task_start_time = Some(Instant::now());

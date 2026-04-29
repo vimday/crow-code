@@ -18,7 +18,13 @@
 //! - Exit CatchUp: depth ≤ 2 AND age ≤ 40ms, held for 250ms
 //! - Re-entry hold: 250ms cooldown after exit (bypassed for severe backlog ≥ 64)
 
-use super::state::{Cell, CellKind};
+/// Internal cell type for stream controller buffering.
+/// This is a local equivalent of the old `Cell` — it never leaves this module.
+#[derive(Debug, Clone)]
+pub struct StreamCell {
+    pub payload: String,
+}
+
 use std::time::{Duration, Instant};
 
 // ─── Adaptive Chunking Constants (Codex parity) ────────────────────
@@ -62,7 +68,7 @@ pub enum ChunkingMode {
 #[derive(Debug, Default)]
 pub struct StreamController {
     /// Lines waiting to be committed to history.
-    pending: Vec<Cell>,
+    pending: Vec<StreamCell>,
     /// Whether the stream is actively receiving chunks.
     active: bool,
     /// Accumulated raw text for the current streaming markdown pass.
@@ -119,8 +125,8 @@ impl StreamController {
         if let Some(rendered) = self.stream_state.push(&renderer, chunk) {
             let now = Instant::now();
             for line in rendered.lines() {
-                self.pending.push(Cell {
-                    kind: CellKind::AgentMessage,
+                self.pending.push(StreamCell {
+                    
                     payload: line.to_string(),
                 });
                 self.enqueue_times.push(now);
@@ -139,8 +145,8 @@ impl StreamController {
         // Flush any remaining stream buffer
         if let Some(flushed) = self.stream_state.flush(&renderer) {
             for line in flushed.lines() {
-                self.pending.push(Cell {
-                    kind: CellKind::AgentMessage,
+                self.pending.push(StreamCell {
+                    
                     payload: line.to_string(),
                 });
                 self.enqueue_times.push(now);
@@ -150,8 +156,8 @@ impl StreamController {
         // Render the final markdown block
         let rendered = renderer.render_markdown(md);
         for line in rendered.lines() {
-            self.pending.push(Cell {
-                kind: CellKind::AgentMessage,
+            self.pending.push(StreamCell {
+                
                 payload: line.to_string(),
             });
             self.enqueue_times.push(now);
@@ -168,8 +174,8 @@ impl StreamController {
         let now = Instant::now();
         if let Some(flushed) = self.stream_state.flush(&renderer) {
             for line in flushed.lines() {
-                self.pending.push(Cell {
-                    kind: CellKind::AgentMessage,
+                self.pending.push(StreamCell {
+                    
                     payload: line.to_string(),
                 });
                 self.enqueue_times.push(now);
@@ -191,7 +197,7 @@ impl StreamController {
     /// - Smooth mode: 1 line per tick
     /// - CatchUp mode: all queued lines per tick
     /// - Stream ended + pending: flush all remaining immediately
-    pub fn drain_tick(&mut self) -> Vec<Cell> {
+    pub fn drain_tick(&mut self) -> Vec<StreamCell> {
         if self.pending.is_empty() {
             // Reset to smooth when queue is empty
             self.note_catch_up_exit();
@@ -236,7 +242,7 @@ impl StreamController {
 
     /// Force-drain all pending content immediately. Used when the turn
     /// is interrupted or on error recovery.
-    pub fn drain_all(&mut self) -> Vec<Cell> {
+    pub fn drain_all(&mut self) -> Vec<StreamCell> {
         self.active = false;
         self.enqueue_times.clear();
         self.pending.drain(..).collect()
@@ -321,8 +327,8 @@ mod tests {
         let now = Instant::now();
         // Simulate 5 buffered lines
         for i in 0..5 {
-            ctrl.pending.push(Cell {
-                kind: CellKind::AgentMessage,
+            ctrl.pending.push(StreamCell {
+                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);
@@ -343,8 +349,8 @@ mod tests {
         let now = Instant::now();
         // Simulate 10 lines (above ENTER_QUEUE_DEPTH_LINES = 8)
         for i in 0..10 {
-            ctrl.pending.push(Cell {
-                kind: CellKind::AgentMessage,
+            ctrl.pending.push(StreamCell {
+                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);
@@ -363,8 +369,8 @@ mod tests {
 
         let now = Instant::now();
         for i in 0..10 {
-            ctrl.pending.push(Cell {
-                kind: CellKind::AgentMessage,
+            ctrl.pending.push(StreamCell {
+                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);
@@ -385,8 +391,8 @@ mod tests {
 
         let now = Instant::now();
         for i in 0..8 {
-            ctrl.pending.push(Cell {
-                kind: CellKind::AgentMessage,
+            ctrl.pending.push(StreamCell {
+                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);

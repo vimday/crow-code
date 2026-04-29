@@ -1,15 +1,14 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Styled, Stylize};
+use ratatui::style::{Styled, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use super::state::{AppState, CellKind};
+use super::state::AppState;
 use super::theme::{chars, colors, Styles};
 
-/// Left gutter width matching Codex's LIVE_PREFIX_COLS.
-const GUTTER: &str = "  ";
-
+// Re-export MarkdownStreamState for state.rs
+pub use crate::render::MarkdownStreamState;
 
 
 // ── Spinner frames from theme ────────────────────────────────────────────────
@@ -157,203 +156,7 @@ fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
     f.render_widget(p, area);
 }
 
-// ── Conversation Pane ────────────────────────────────────────────────────────
-
-pub trait HistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
-}
-
-struct UserCell<'a>(&'a str);
-impl<'a> HistoryCell for UserCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(4).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        
-        let style = Styles::user_content().bg(colors::user_msg_bg());
-        let prefix_style = Styles::user_header().bg(colors::user_msg_bg());
-
-        // Add an empty line before for padding, tinted
-        lines.push(Line::from("").style(style));
-
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                "› ".set_style(prefix_style)
-            } else {
-                "  ".set_style(prefix_style)
-            };
-            lines.push(Line::from(vec![
-                prefix,
-                line.to_string().set_style(style),
-            ]).style(style)); // tint the whole line
-        }
-        
-        // Add an empty line after for padding, tinted
-        lines.push(Line::from("").style(style));
-        
-        // And an untinted spacer line between blocks
-        lines.push(Line::from(""));
-        
-        lines
-    }
-}
-
-struct AgentMessageCell<'a>(&'a str);
-impl<'a> HistoryCell for AgentMessageCell<'a> {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        // Use the streaming markdown renderer for rich output
-        let mut renderer = super::markdown_stream::StreamingMarkdownRenderer::new();
-        let md_lines = renderer.set_content(self.0.to_string());
-        let mut out = Vec::new();
-        for (i, line) in md_lines.iter().enumerate() {
-            let prefix = if i == 0 {
-                "• ".set_style(Styles::assistant_content().dim())
-            } else {
-                "  ".set_style(Styles::assistant_content())
-            };
-
-            let mut new_spans = vec![prefix];
-            for span in line.spans.iter() {
-                new_spans.push(span.clone());
-            }
-            out.push(Line::from(new_spans));
-        }
-        if out.is_empty() {
-            // Fallback for empty content
-            out.push(Line::from(vec![
-                "• ".set_style(Styles::assistant_content().dim()),
-                self.0.to_string().set_style(Styles::assistant_content()),
-            ]));
-        }
-        out
-    }
-}
-
-struct EvidenceCell<'a>(&'a str);
-impl<'a> HistoryCell for EvidenceCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}{} ", chars::BULLET)
-            } else {
-                format!("{GUTTER}  ")
-            };
-            lines.push(Line::from(vec![
-                prefix.set_style(Styles::evidence()),
-                line.to_string().set_style(Styles::evidence()),
-            ]));
-        }
-        lines
-    }
-}
-
-struct ActionCell<'a>(&'a str);
-impl<'a> HistoryCell for ActionCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}↳ ")
-            } else {
-                format!("{GUTTER}  ")
-            };
-            lines.push(Line::from(vec![
-                prefix.set_style(Styles::success()),
-                line.to_string().set_style(Styles::success()),
-            ]));
-        }
-        lines
-    }
-}
-
-struct ResultCell<'a>(&'a str);
-impl<'a> HistoryCell for ResultCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}✓ ")
-            } else {
-                format!("{GUTTER}  ")
-            };
-            lines.push(Line::from(vec![
-                prefix.set_style(Styles::tool_header()),
-                line.to_string().set_style(Styles::tool_header()),
-            ]));
-        }
-        lines
-    }
-}
-
-struct LogCell<'a>(&'a str);
-impl<'a> HistoryCell for LogCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}· ")
-            } else {
-                format!("{GUTTER}  ")
-            };
-            lines.push(Line::from(vec![
-                prefix.set_style(Styles::evidence()),
-                line.to_string().set_style(Styles::evidence()),
-            ]));
-        }
-        lines
-    }
-}
-
-struct ErrorCell<'a>(&'a str);
-impl<'a> HistoryCell for ErrorCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}✘ ")
-            } else {
-                format!("{GUTTER}  ")
-            };
-            lines.push(Line::from(vec![
-                prefix.set_style(Styles::error()),
-                line.to_string().set_style(Styles::error()),
-            ]));
-        }
-        lines
-    }
-}
-
-struct DebateCell<'a>(&'a str);
-impl<'a> HistoryCell for DebateCell<'a> {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
-        let wrapped = textwrap::wrap(self.0, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}⚖ ")
-            } else {
-                format!("{GUTTER}  ")
-            };
-            lines.push(Line::from(vec![
-                prefix.fg(Color::Magenta),
-                line.to_string().fg(Color::Magenta),
-            ]));
-        }
-        lines
-    }
-}
+// ── Conversation Pane (trait-based rendering) ────────────────────────────────
 
 pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
     let viewport = area.height as usize;
@@ -376,45 +179,23 @@ pub fn render_history_pane(f: &mut Frame, state: &AppState, area: Rect) {
         };
     }
 
-    // 1.5 Active streaming cell (Codex pattern)
-    if let Some(cell) = &state.active_cell {
+    // 1. Active streaming cell (trait-based)
+    if let Some(ref cell) = state.active_cell {
         if to_take > 0 {
-            let history_cell: Box<dyn HistoryCell> = match cell.kind {
-                CellKind::User => Box::new(UserCell(&cell.payload)),
-                CellKind::AgentMessage => Box::new(AgentMessageCell(&cell.payload)),
-                CellKind::Evidence => Box::new(EvidenceCell(&cell.payload)),
-                CellKind::Action => Box::new(ActionCell(&cell.payload)),
-                CellKind::Result => Box::new(ResultCell(&cell.payload)),
-                CellKind::Log => Box::new(LogCell(&cell.payload)),
-                CellKind::Error => Box::new(ErrorCell(&cell.payload)),
-                CellKind::Debate => Box::new(DebateCell(&cell.payload)),
-            };
-
-            let lines = history_cell.display_lines(area.width);
+            let lines = cell.display_lines(area.width);
             for item in lines.into_iter().rev() {
                 push_item!(ListItem::new(item));
             }
         }
     }
 
-    // 2. Iterate history backwards using HistoryCell implementations
+    // 2. Iterate history backwards using HistoryCell trait dispatch
     for cell in state.history.iter().rev() {
         if to_take == 0 {
             break;
         }
 
-        let history_cell: Box<dyn HistoryCell> = match cell.kind {
-            CellKind::User => Box::new(UserCell(&cell.payload)),
-            CellKind::AgentMessage => Box::new(AgentMessageCell(&cell.payload)),
-            CellKind::Evidence => Box::new(EvidenceCell(&cell.payload)),
-            CellKind::Action => Box::new(ActionCell(&cell.payload)),
-            CellKind::Result => Box::new(ResultCell(&cell.payload)),
-            CellKind::Log => Box::new(LogCell(&cell.payload)),
-            CellKind::Error => Box::new(ErrorCell(&cell.payload)),
-            CellKind::Debate => Box::new(DebateCell(&cell.payload)),
-        };
-
-        let lines = history_cell.display_lines(area.width);
+        let lines = cell.display_lines(area.width);
 
         // Send this cell's lines backwards into our virtualized view
         for item in lines.into_iter().rev() {

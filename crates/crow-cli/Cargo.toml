@@ -45,6 +45,7 @@ crow-tools = { version = "0.1.0", path = "../crow-tools" }
 async-trait = "0.1"
 unicode-width = "0.2.2"
 supports-color = "3.0.2"
+diffy = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"

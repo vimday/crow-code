@@ -1,6 +1,6 @@
 use crate::config::CrowConfig;
 use crate::tui::event_loop::run_tui_loop;
-use crate::tui::state::{AppState, Cell, CellKind, TuiMessage};
+use crate::tui::state::{AppState, TuiMessage};
 use anyhow::Result;
 use crossterm::{
     event::{DisableBracketedPaste, EnableBracketedPaste},
@@ -84,30 +84,20 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
             if let Ok(Some(session)) = store.find_latest_for_workspace(&cfg_val.workspace) {
                 loaded_messages = session.restore_messages();
                 loaded_session_id = Some(session.id.0.clone());
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: format!(
-                        "Resumed session {} ({} messages) from Task: {}",
-                        session.id.0,
-                        loaded_messages.len(),
-                        session.task
-                    ),
-                });
+                state.push_log(format!(
+                    "Resumed session {} ({} messages) from Task: {}",
+                    session.id.0,
+                    loaded_messages.len(),
+                    session.task
+                ));
                 for msg in &loaded_messages {
-                    let kind = match msg.role {
-                        crow_brain::ChatRole::User => CellKind::User,
-                        _ => CellKind::AgentMessage,
-                    };
-                    state.history.push(Cell {
-                        kind,
-                        payload: msg.content.clone(),
-                    });
+                    match msg.role {
+                        crow_brain::ChatRole::User => state.push_user(msg.content.clone()),
+                        _ => state.push_agent(msg.content.clone()),
+                    }
                 }
             } else {
-                state.history.push(Cell {
-                    kind: CellKind::Log,
-                    payload: "No previous session found for this workspace to resume.".into(),
-                });
+                state.push_log("No previous session found for this workspace to resume.");
             }
         }
     }

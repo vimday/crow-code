@@ -3,6 +3,8 @@ use crow_patch::SnapshotId;
 pub use crow_runtime::cancel::CancellationToken;
 use std::time::Instant;
 
+use super::history_cell;
+
 // ── TUI Message Bus ──────────────────────────────────────────────────────────
 
 pub enum TuiMessage {
@@ -16,33 +18,9 @@ pub enum TuiMessage {
     Quit,
 }
 
-// ── Typed History Cells (Codex-style) ────────────────────────────────────────
+// ── Re-export the HistoryCell trait for convenience ──────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CellKind {
-    /// User-authored prompt. Rendered with `› ` prefix and subtle background.
-    User,
-    /// Agent markdown response. Rendered with `• ` prefix.
-    AgentMessage,
-    /// Evidence trace (file reads, recon). Dim, secondary info.
-    Evidence,
-    /// Tool/action execution trace.
-    Action,
-    /// Final verdict for a turn.
-    Result,
-    /// System-level informational log.
-    Log,
-    /// Error.
-    Error,
-    /// Multi-agent debate convergence trace.
-    Debate,
-}
-
-#[derive(Debug, Clone)]
-pub struct Cell {
-    pub kind: CellKind,
-    pub payload: String,
-}
+pub use super::history_cell::HistoryCell;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusIndicatorState {
@@ -85,8 +63,12 @@ pub struct AppState {
 
     // View
     pub view_mode: ViewMode,
-    pub history: Vec<Cell>,
-    pub active_cell: Option<Cell>,
+    pub history: Vec<Box<dyn HistoryCell>>,
+    pub active_cell: Option<Box<dyn HistoryCell>>,
+    /// Raw streaming text buffer for the active agent message.
+    /// We accumulate deltas here and rebuild `active_cell` from it,
+    /// avoiding the need to downcast the trait object.
+    pub streaming_buffer: String,
     pub scroll_offset: usize,
 
     // Runtime
@@ -188,6 +170,65 @@ impl StatusMessage {
     }
 }
 
+// ── Convenience constructors for pushing cells ──────────────────────────────
+
+impl AppState {
+    pub fn push_user(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::UserMessageCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_agent(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::AgentMessageCell {
+            payload: payload.into(),
+            is_continuation: false,
+        }));
+    }
+
+    pub fn push_evidence(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::EvidenceCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_action(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::ActionCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_result(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::ResultCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_log(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::LogCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_error(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::ErrorCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_debate(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::DebateCell {
+            payload: payload.into(),
+        }));
+    }
+
+    pub fn push_diff(&mut self, payload: impl Into<String>) {
+        self.history.push(Box::new(history_cell::DiffCell {
+            payload: payload.into(),
+        }));
+    }
+}
+
 impl AppState {
     pub fn new(model_info: String, write_mode: String, workspace_name: String) -> Self {
         Self {
@@ -198,6 +239,7 @@ impl AppState {
             view_mode: ViewMode::default(),
             history: Vec::new(),
             active_cell: None,
+            streaming_buffer: String::new(),
             scroll_offset: 0,
             current_turn_id: None,
             active_action: None,
