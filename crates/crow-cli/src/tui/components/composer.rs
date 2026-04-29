@@ -140,10 +140,14 @@ impl<'a> Component for ComposerComponent<'a> {
                 return Ok(None);
             }
 
-            // ── Input history navigation: ↑/↓ when composer is empty ──
+            // ── Input history navigation: ↑/↓ ──────────────────────────
+            // Up works when composer is empty OR when already browsing history.
+            // This matches shell behavior: once you start cycling, you can
+            // keep going without clearing the input first.
             if key.code == KeyCode::Up
-                && self.textarea.lines().join("").trim().is_empty()
                 && !state.input_history.is_empty()
+                && (state.input_history_idx.is_some()
+                    || self.textarea.lines().join("").trim().is_empty())
             {
                 let idx = state
                     .input_history_idx

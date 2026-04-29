@@ -52,12 +52,8 @@ pub fn handle_enter(
         return;
     }
 
-    let trimmed = prompt.trim();
-
-    // Save to input history (skip slash commands)
-    if !trimmed.starts_with('/') {
-        state.input_history.push(prompt.clone());
-    }
+    // Save to input history (all commands, including slash commands)
+    state.input_history.push(prompt.clone());
     state.input_history_idx = None;
     state.scroll_offset = 0;
 
@@ -221,29 +217,28 @@ pub fn execute_command_string(
                     kind: CellKind::User,
                     payload: "/diff".into(),
                 });
-                // Show git diff including untracked files (Codex pattern)
+                // Show actual git diff content (not just --stat summary)
                 let workspace = cfg.workspace.clone();
                 let tx_diff = tx.clone();
                 tokio::spawn(async move {
                     let mut diff_output = String::new();
 
-                    // Tracked changes
+                    // Unstaged changes (full unified diff)
                     if let Ok(output) = tokio::process::Command::new("git")
-                        .args(["diff", "--stat", "HEAD"])
+                        .args(["diff", "HEAD"])
                         .current_dir(&workspace)
                         .output()
                         .await
                     {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         if !stdout.trim().is_empty() {
-                            diff_output.push_str("Changes (tracked):\n");
                             diff_output.push_str(&stdout);
                         }
                     }
 
-                    // Staged changes
+                    // Staged changes (full unified diff)
                     if let Ok(output) = tokio::process::Command::new("git")
-                        .args(["diff", "--stat", "--cached"])
+                        .args(["diff", "--cached"])
                         .current_dir(&workspace)
                         .output()
                         .await
@@ -253,7 +248,7 @@ pub fn execute_command_string(
                             if !diff_output.is_empty() {
                                 diff_output.push('\n');
                             }
-                            diff_output.push_str("Changes (staged):\n");
+                            diff_output.push_str("── Staged ──\n");
                             diff_output.push_str(&stdout);
                         }
                     }
@@ -270,7 +265,7 @@ pub fn execute_command_string(
                             if !diff_output.is_empty() {
                                 diff_output.push('\n');
                             }
-                            diff_output.push_str("Untracked files:\n");
+                            diff_output.push_str("── Untracked ──\n");
                             for file in stdout.lines() {
                                 diff_output.push_str(&format!("  + {file}\n"));
                             }

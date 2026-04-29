@@ -279,6 +279,7 @@ pub async fn run_tui_loop(
                     state.active_action = None;
                     state.task_start_time = None;
                     state.turn_phase = None;
+                    state.status_indicator = None;
 
                     let final_tokens = state.streaming_token_estimate;
 
@@ -350,6 +351,7 @@ pub async fn run_tui_loop(
                     state.streaming_token_estimate = 0.0;
                     state.streaming_start_time = None;
                     state.cancellation = None;
+                    state.status_indicator = None;
                     crate::tui::app::refresh_git_state(state, &cfg.workspace);
                 }
                 TuiMessage::SwarmStarted(id, task) => {
@@ -451,6 +453,11 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         }
         AgentEvent::Thinking(_, _) => {
             state.active_action = Some("Thinking...".into());
+            state.status_indicator = Some(state::StatusIndicatorState {
+                header: "Thinking...".into(),
+                details: None,
+                details_max_lines: 3,
+            });
             // Start a fresh streaming session for this turn
             state.stream_controller.start();
             // Start streaming metrics (Yomi InfoBar pattern)
@@ -484,7 +491,12 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             });
         }
         AgentEvent::ActionStart(desc) => {
-            state.active_action = Some(desc);
+            state.active_action = Some(desc.clone());
+            state.status_indicator = Some(state::StatusIndicatorState {
+                header: desc,
+                details: None,
+                details_max_lines: 3,
+            });
         }
         AgentEvent::ActionComplete(desc) => {
             state.history.push(Cell {
@@ -506,7 +518,13 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             }
         }
         AgentEvent::ReconStart(desc) => {
-            state.active_action = Some(format!("Recon: {desc}"));
+            let header = format!("Recon: {desc}");
+            state.active_action = Some(header.clone());
+            state.status_indicator = Some(state::StatusIndicatorState {
+                header,
+                details: Some(desc),
+                details_max_lines: 3,
+            });
         }
         AgentEvent::DelegateStart(id, task) => {
             state.active_action = Some(format!("Delegating: {task}"));
@@ -535,6 +553,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             });
             state.active_action = None;
             state.task_start_time = None;
+            state.status_indicator = None;
         }
         AgentEvent::PhasedError {
             phase,
