@@ -562,24 +562,38 @@ impl ConversationManager {
     }
 
     /// Checks if the auto-compaction threshold is reached.
-    /// Uses token-level estimation (Codex's ~4 chars/token heuristic)
-    /// in addition to byte-level checks.
+    ///
+    /// **Important**: This evaluates only the dynamic conversation history,
+    /// not system messages. System prompts are managed separately via
+    /// `MAX_SYSTEM_BYTES` truncation at construction time. Compaction can
+    /// only compress the conversation, so the trigger must measure the
+    /// same scope.
     pub fn needs_compaction(&self) -> bool {
-        let hist_bytes = self.history_bytes();
         let turns = self.conversation.len();
-        let estimated_tokens = self.estimate_token_count();
 
-        // Token-based: compact when history tokens exceed 30% of estimated
-        // context window (assuming ~192K token window → ~768KB / 4)
+        // Don't compact if there are too few messages — nothing to compress.
+        // This prevents spurious compaction on fresh conversations where the
+        // system prompt alone is large (the bug that triggered "context
+        // nearing limit" on a bare "hello").
+        if turns < 6 {
+            return false;
+        }
+
+        let hist_bytes = self.history_bytes();
+        let hist_tokens = self.estimate_history_token_count();
+
+        // Token-based: compact when **history** tokens exceed threshold.
+        // With max_bytes = 768KB, this gives ~57K tokens of history before
+        // compaction triggers.
         let token_threshold = (self.max_bytes / 4) * 3 / 10;
 
         hist_bytes > (self.max_bytes * 3) / 10
             || turns > (self.max_history_turns * 8) / 10
-            || estimated_tokens > token_threshold
+            || hist_tokens > token_threshold
     }
 
-    /// Approximate token count using Codex's ~4 chars/token heuristic.
-    /// This is a coarse lower bound, not a tokenizer-accurate count.
+    /// Approximate token count for the **entire** context (system + history).
+    /// Used for InfoBar display purposes only.
     pub fn estimate_token_count(&self) -> usize {
         let sys_chars: usize = self.system_messages.iter().map(|m| m.content.len()).sum();
         let hist_chars: usize = self
@@ -588,6 +602,17 @@ impl ConversationManager {
             .map(|m| m.message.content.len())
             .sum();
         (sys_chars + hist_chars) / 4
+    }
+
+    /// Approximate token count for **conversation history only** (excludes
+    /// system messages). This is the scope that compaction operates on.
+    fn estimate_history_token_count(&self) -> usize {
+        let hist_chars: usize = self
+            .conversation
+            .iter()
+            .map(|m| m.message.content.len())
+            .sum();
+        hist_chars / 4
     }
 
     /// History version counter — bumped on compaction, rollback, or clear.
