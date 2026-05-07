@@ -89,6 +89,16 @@ pub struct Compactor {
 const CLEARED_MARKER: &str = "[Old tool result content cleared]";
 const SUMMARY_PREFIX: &str = "[COMPACTED HISTORY SUMMARY]";
 
+/// Preamble injected into structured compaction summaries (claw-code pattern).
+const COMPACT_CONTINUATION_PREAMBLE: &str =
+    "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n";
+
+/// Instruction appended when recent messages are preserved.
+const COMPACT_RECENT_MESSAGES_NOTE: &str = "Recent messages are preserved verbatim.";
+
+/// Instruction to resume without acknowledging the summary.
+const COMPACT_DIRECT_RESUME: &str = "Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, and do not preface with continuation text.";
+
 impl Compactor {
     pub fn new(config: CompactorConfig) -> Self {
         Self { config }
@@ -151,7 +161,8 @@ impl Compactor {
         }
     }
 
-    /// Auto-compact: try micro-compaction first, then full LLM summarization.
+    /// Auto-compact: try micro-compaction first, then structured local
+    /// summarization, then full LLM summarization.
     /// Includes retry with exponential backoff (codex pattern).
     pub async fn compact(
         &self,
@@ -163,18 +174,79 @@ impl Compactor {
         }
 
         // Phase 1: Try micro-compaction (free)
-        if let Some(micro_compacted) = self.micro_compact(messages) {
+        let working = if let Some(micro_compacted) = self.micro_compact(messages) {
             if !self.should_compact(&micro_compacted) {
                 return Ok(micro_compacted);
             }
-            // Micro wasn't enough — fall through to full compaction on micro result
-            return self
-                .full_compact_with_retry(&micro_compacted, compiler)
-                .await;
+            micro_compacted
+        } else {
+            messages.to_vec()
+        };
+
+        // Phase 1.5: Structured local compaction (free, no API call)
+        // Extracts key files, pending work, tool usage, and timeline
+        // from the compacted-away messages. This is the claw-code pattern.
+        let local_result = self.structured_local_compact(&working);
+        if !self.should_compact(&local_result) {
+            return Ok(local_result);
         }
 
-        // Phase 2: Full LLM summarization with retry
-        self.full_compact_with_retry(messages, compiler).await
+        // Phase 2: Full LLM summarization with retry (expensive)
+        self.full_compact_with_retry(&local_result, compiler).await
+    }
+
+    /// Structured local compaction (claw-code pattern).
+    ///
+    /// Summarizes older messages into a structured summary without an API call.
+    /// Extracts key files, pending work, tool usage, and timeline.
+    /// Uses the tool-pair boundary guard to avoid splitting tool call/result pairs.
+    pub fn structured_local_compact(&self, messages: &[ChatMessage]) -> Vec<ChatMessage> {
+        let split_idx = self.find_safe_split_point(messages);
+        if split_idx == 0 {
+            return messages.to_vec();
+        }
+
+        let (old, recent) = messages.split_at(split_idx);
+        let summary = build_structured_summary(old);
+        let continuation = format_continuation_message(&summary, !recent.is_empty());
+
+        let mut result = Vec::with_capacity(1 + recent.len());
+        result.push(ChatMessage::user(continuation));
+        result.extend_from_slice(recent);
+        result
+    }
+
+    /// Find a safe split point that respects tool-pair boundaries.
+    ///
+    /// Walks backward from the naive split point to ensure we never split
+    /// an Assistant(tool_calls) / Tool(tool_result) pair. This prevents
+    /// API 400 errors from orphaned tool messages (claw-code regression fix).
+    fn find_safe_split_point(&self, messages: &[ChatMessage]) -> usize {
+        let naive_split = messages
+            .len()
+            .saturating_sub(self.config.preservation_turns);
+
+        if naive_split == 0 {
+            return 0;
+        }
+
+        let mut k = naive_split;
+        // Walk backward if the first preserved message is a Tool role
+        // (orphaned tool result), ensuring its paired assistant is preserved too.
+        while k > 0 {
+            if messages[k].role != ChatRole::Tool {
+                break;
+            }
+            // Check if preceding message is an assistant with tool_calls
+            if k > 0 && messages[k - 1].role == ChatRole::Assistant
+                && messages[k - 1].tool_calls.is_some()
+            {
+                k -= 1; // Include the assistant too
+                break;
+            }
+            k -= 1;
+        }
+        k
     }
 
     /// Full compaction with exponential backoff retry (codex pattern).
@@ -275,6 +347,168 @@ fn build_compacted_history(
     next_messages.extend_from_slice(recent_messages);
 
     Ok(next_messages)
+}
+
+// ─── Structured Local Summarization (Claw-Code Pattern) ─────────────
+
+/// Build a structured summary from compacted-away messages.
+///
+/// Extracts key metadata without an LLM call:
+/// - Message counts by role
+/// - Tool names mentioned
+/// - Recent user requests
+/// - Pending work (TODO/NEXT/PENDING keywords)
+/// - Key files referenced (paths with code extensions)
+/// - Timeline of message roles and truncated content
+fn build_structured_summary(messages: &[ChatMessage]) -> String {
+    let user_count = messages.iter().filter(|m| m.role == ChatRole::User).count();
+    let assistant_count = messages.iter().filter(|m| m.role == ChatRole::Assistant).count();
+    let tool_count = messages.iter().filter(|m| m.role == ChatRole::Tool).count();
+
+    // Collect tool names from tool_calls
+    let mut tool_names: Vec<String> = messages
+        .iter()
+        .filter_map(|m| m.tool_calls.as_ref())
+        .flat_map(|tcs| tcs.iter().map(|tc| tc.name.clone()))
+        .collect();
+    tool_names.sort();
+    tool_names.dedup();
+
+    // Collect recent user requests (last 3)
+    let recent_user_requests: Vec<String> = messages
+        .iter()
+        .filter(|m| m.role == ChatRole::User)
+        .rev()
+        .take(3)
+        .map(|m| truncate_summary(&m.content, 160))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    // Infer pending work
+    let pending_work: Vec<String> = messages
+        .iter()
+        .rev()
+        .filter(|m| {
+            let lower = m.content.to_ascii_lowercase();
+            lower.contains("todo")
+                || lower.contains("next")
+                || lower.contains("pending")
+                || lower.contains("follow up")
+                || lower.contains("remaining")
+        })
+        .take(3)
+        .map(|m| truncate_summary(&m.content, 160))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    // Extract key files
+    let key_files = collect_key_files(messages);
+
+    // Build summary
+    let mut lines = vec![
+        "<summary>".to_string(),
+        "Conversation summary:".to_string(),
+        format!(
+            "- Scope: {} earlier messages compacted (user={user_count}, assistant={assistant_count}, tool={tool_count}).",
+            messages.len()
+        ),
+    ];
+
+    if !tool_names.is_empty() {
+        lines.push(format!("- Tools mentioned: {}.", tool_names.join(", ")));
+    }
+
+    if !recent_user_requests.is_empty() {
+        lines.push("- Recent user requests:".to_string());
+        lines.extend(recent_user_requests.iter().map(|r| format!("  - {r}")));
+    }
+
+    if !pending_work.is_empty() {
+        lines.push("- Pending work:".to_string());
+        lines.extend(pending_work.iter().map(|w| format!("  - {w}")));
+    }
+
+    if !key_files.is_empty() {
+        lines.push(format!("- Key files referenced: {}.", key_files.join(", ")));
+    }
+
+    // Timeline
+    lines.push("- Key timeline:".to_string());
+    for msg in messages {
+        let role = match msg.role {
+            ChatRole::System => "system",
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+            ChatRole::Tool => "tool",
+        };
+        let content = truncate_summary(&msg.content, 120);
+        lines.push(format!("  - {role}: {content}"));
+    }
+    lines.push("</summary>".to_string());
+
+    lines.join("\n")
+}
+
+/// Format a structured compaction summary into a continuation message.
+fn format_continuation_message(summary: &str, has_recent: bool) -> String {
+    let mut base = format!("{COMPACT_CONTINUATION_PREAMBLE}{summary}");
+    if has_recent {
+        base.push_str("\n\n");
+        base.push_str(COMPACT_RECENT_MESSAGES_NOTE);
+    }
+    base.push('\n');
+    base.push_str(COMPACT_DIRECT_RESUME);
+    base
+}
+
+/// Extract file path candidates from messages (claw-code pattern).
+fn collect_key_files(messages: &[ChatMessage]) -> Vec<String> {
+    let mut files: Vec<String> = messages
+        .iter()
+        .flat_map(|m| extract_file_candidates(&m.content))
+        .collect();
+    files.sort();
+    files.dedup();
+    files.into_iter().take(8).collect()
+}
+
+/// Extract file path candidates from text content.
+fn extract_file_candidates(content: &str) -> Vec<String> {
+    let interesting_extensions = ["rs", "ts", "tsx", "js", "json", "md", "py", "go", "toml"];
+
+    content
+        .split_whitespace()
+        .filter_map(|token| {
+            let candidate = token.trim_matches(|c: char| {
+                matches!(c, ',' | '.' | ':' | ';' | ')' | '(' | '"' | '\'' | '`')
+            });
+            if !candidate.contains('/') {
+                return None;
+            }
+            let ext = std::path::Path::new(candidate)
+                .extension()
+                .and_then(|e| e.to_str())?;
+            if interesting_extensions.iter().any(|ie| ext.eq_ignore_ascii_case(ie)) {
+                Some(candidate.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Truncate content to a character budget, appending '…' if truncated.
+fn truncate_summary(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+    let mut truncated: String = content.chars().take(max_chars).collect();
+    truncated.push('…');
+    truncated
 }
 
 #[cfg(test)]
@@ -392,5 +626,70 @@ mod tests {
         ];
         // Already cleared — no modification needed
         assert!(compactor.micro_compact(&messages).is_none());
+    }
+
+    #[test]
+    fn structured_local_compact_produces_summary() {
+        let config = CompactorConfig {
+            preservation_turns: 1,
+            max_history_tokens: 10,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::user("Investigate src/main.rs"),
+            ChatMessage::assistant("I'll look at src/main.rs now."),
+            ChatMessage::user("Also fix crates/core/lib.rs"),
+            ChatMessage::assistant("Working on it."),
+            ChatMessage::user("What's the status?"),
+        ];
+        let result = compactor.structured_local_compact(&messages);
+        // Should preserve the last message and compact the rest
+        assert!(result.len() <= 3);
+        // First message should be the continuation
+        assert!(result[0].content.contains("session is being continued"));
+        assert!(result[0].content.contains("summary"));
+    }
+
+    #[test]
+    fn safe_split_point_respects_tool_pairs() {
+        let config = CompactorConfig {
+            preservation_turns: 1,
+            ..Default::default()
+        };
+        let compactor = Compactor::new(config);
+        let messages = vec![
+            ChatMessage::user("Search for files"),
+            ChatMessage::assistant_with_tool_calls(
+                "I'll search.",
+                vec![crate::ToolCallRequest {
+                    id: "tc-1".into(),
+                    name: "search".into(),
+                    arguments: "{}".into(),
+                }],
+            ),
+            ChatMessage::tool_result("tc-1", "found 5 files"),
+            ChatMessage::assistant("Here are the results."),
+        ];
+        let split = compactor.find_safe_split_point(&messages);
+        // Should NOT split between the assistant(tool_calls) and tool_result
+        // The split should be at or before index 1
+        assert!(split <= 1 || split >= 3, "split={split} would orphan a tool result");
+    }
+
+    #[test]
+    fn extract_file_candidates_finds_paths() {
+        let text = "Update src/main.rs and fix crates/core/lib.rs next.";
+        let files = extract_file_candidates(text);
+        assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(files.contains(&"crates/core/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn truncate_summary_truncates_long_text() {
+        let long = "x".repeat(300);
+        let result = truncate_summary(&long, 100);
+        assert!(result.ends_with('…'));
+        assert!(result.chars().count() <= 101);
     }
 }

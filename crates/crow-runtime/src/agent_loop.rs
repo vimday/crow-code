@@ -280,7 +280,6 @@ pub async fn run_agent_loop(
                         if brain_err.is_retryable() && retry_count < MAX_LLM_RETRIES =>
                     {
                         retry_count += 1;
-                        let backoff_secs = 2u64.pow(retry_count);
 
                         // Suppress first retry event to reduce UI noise (Codex pattern)
                         if retry_count > 1 {
@@ -291,7 +290,7 @@ pub async fn run_agent_loop(
                             });
                         }
 
-                        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                        tokio::time::sleep(backoff_with_jitter(retry_count)).await;
                     }
                     Err(e) => break Err(e),
                 }
@@ -499,3 +498,26 @@ fn is_context_overflow(err: &crow_brain::BrainError) -> bool {
         || msg.contains("maximum context length")
         || msg.contains("token limit")
 }
+
+/// Exponential backoff with ±10% random jitter (Codex pattern).
+///
+/// Base delay: 200ms, doubling per attempt. Jitter is ±10% of the computed
+/// delay, using system time nanos as entropy source to avoid a `rand` dependency.
+/// This decorrelates retry storms when multiple agents hit rate limits simultaneously.
+fn backoff_with_jitter(attempt: u32) -> std::time::Duration {
+    let base_ms = 200u64;
+    let exp_ms = base_ms.saturating_mul(2u64.saturating_pow(attempt));
+    // Cap at 30 seconds
+    let capped_ms = exp_ms.min(30_000);
+    // ±10% jitter using system time nanos as a cheap entropy source
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    // Map nanos to [-1.0, 1.0) range, then scale to ±10%
+    let jitter_factor = (nanos as f64 / u32::MAX as f64) * 2.0 - 1.0;
+    let jitter_ms = (capped_ms as f64 * 0.1 * jitter_factor) as i64;
+    let final_ms = (capped_ms as i64 + jitter_ms).max(100) as u64;
+    std::time::Duration::from_millis(final_ms)
+}
+

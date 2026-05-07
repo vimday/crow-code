@@ -519,6 +519,12 @@ impl SessionRuntime {
             prompt_builder = prompt_builder.with_developer_instructions(&agents_md.content);
         }
 
+        // ── Git context injection (claw-code pattern) ───────────────
+        // Auto-detect branch, status, recent commits, and diffs.
+        if let Some(git_ctx) = crow_runtime::git_context::GitContext::detect(&self.workspace) {
+            prompt_builder = prompt_builder.with_git_context(&git_ctx);
+        }
+
         // ── Persistent workspace memory ─────────────────────────────
         let memory_file = self.workspace.join(".crow").join("memory.md");
         if let Ok(memory_content) = std::fs::read_to_string(&memory_file) {

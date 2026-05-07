@@ -5,6 +5,7 @@ pub struct PromptBuilder {
     identity: String,
     project_context: String,
     developer_instructions: String,
+    git_context: String,
     skills: String,
     context_map: String,
     contract: String,
@@ -24,6 +25,7 @@ impl PromptBuilder {
             identity: DEFAULT_IDENTITY.to_string(),
             project_context: String::new(),
             developer_instructions: String::new(),
+            git_context: String::new(),
             skills: String::new(),
             context_map: String::new(),
             contract: String::new(),
@@ -46,6 +48,14 @@ impl PromptBuilder {
     /// These are project-level rules that supplement the base instructions.
     pub fn with_developer_instructions(mut self, instructions: &str) -> Self {
         self.developer_instructions = instructions.to_string();
+        self
+    }
+
+    /// Inject git context (branch, status, recent commits, diffs)
+    /// into the system prompt. Provides the agent with situational
+    /// awareness about the repository state (claw-code pattern).
+    pub fn with_git_context(mut self, git_ctx: &crow_runtime::git_context::GitContext) -> Self {
+        self.git_context = git_ctx.render();
         self
     }
 
@@ -129,6 +139,12 @@ impl PromptBuilder {
         if !self.developer_instructions.is_empty() {
             sys_prompt.push_str("--- developer instructions ---\n\n");
             sys_prompt.push_str(&self.developer_instructions);
+            sys_prompt.push_str("\n\n");
+        }
+
+        // Layer 3.5: Git context (claw-code pattern)
+        if !self.git_context.is_empty() {
+            sys_prompt.push_str(&self.git_context);
             sys_prompt.push_str("\n\n");
         }
 
