@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 
 /// The structure of a consolidated memory fragment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +46,7 @@ impl<'a> AutoDream<'a> {
 
     /// Run the background dream daemon
     pub async fn execute_dream_cycle(&self, client: &dyn crate::LlmClient) -> Result<()> {
-        println!("  🌙 [AutoDream] Initiating background memory consolidation...");
+        info!("[AutoDream] Initiating background memory consolidation...");
 
         // 1. Orient: Find all sessions and ledgers for this workspace
 
@@ -64,7 +65,7 @@ impl<'a> AutoDream<'a> {
             .join(format!("{hash}.jsonl"));
 
         if !ledger_path.exists() {
-            println!("  🌙 [AutoDream] No recent memories to consolidate.");
+            info!("[AutoDream] No recent memories to consolidate.");
             return Ok(());
         }
 
@@ -72,16 +73,16 @@ impl<'a> AutoDream<'a> {
         let ledger_content = std::fs::read_to_string(&ledger_path)?;
         let event_count = ledger_content.lines().count();
 
-        println!("  🌙 [AutoDream] Collected {event_count} raw events from the ledger.");
+        info!("[AutoDream] Collected {event_count} raw events from the ledger.");
 
         if event_count < 10 {
             // Not enough to justify an LLM call yet.
-            println!("  🌙 [AutoDream] Insufficient volume for deep sleep consolidation. Waiting for more data.");
+            info!("[AutoDream] Insufficient volume for deep sleep consolidation. Waiting for more data.");
             return Ok(());
         }
 
         // 3. Consolidate: Ask LLM to extract meta-knowledge
-        println!("  🌙 [AutoDream] Extracting high-value architectural invariants from traces...");
+        info!("[AutoDream] Extracting high-value architectural invariants from traces...");
 
         const PROMPT_TEMPLATE: &str = "\
 You are an AutoDream background worker running over `{workspace}`. 
@@ -99,7 +100,7 @@ Limit to 3 critical architectural or context insights.";
 
         match client.generate(&messages).await {
             Ok(response) => {
-                println!("  🌙 [AutoDream] Subconscious processing complete.");
+                info!("[AutoDream] Subconscious processing complete.");
 
                 // 4. Prune / Store
                 let cleaned = crate::compiler::extract_json_block(&response);
@@ -111,20 +112,20 @@ Limit to 3 critical architectural or context insights.";
                             .join(format!("memory_{}.json", chrono::Utc::now().timestamp()));
                         std::fs::write(&fragment_path, validated)?;
 
-                        println!(
-                            "  🌙 [AutoDream] Deep long-term memory written to: {}",
+                        info!(
+                            "[AutoDream] Deep long-term memory written to: {}",
                             fragment_path.display()
                         );
                     }
                     Err(e) => {
-                        eprintln!("  🌙 [AutoDream] Discarded malformed memory fragment: {e}");
+                        warn!("[AutoDream] Discarded malformed memory fragment: {e}");
                     }
                 }
 
                 // We would then truncate or rotate the ledger here to compress the log
             }
             Err(e) => {
-                eprintln!("  🌙 [AutoDream] Dream interrupted by error: {e}");
+                warn!("[AutoDream] Dream interrupted by error: {e}");
             }
         }
 

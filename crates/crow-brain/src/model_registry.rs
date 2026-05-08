@@ -27,6 +27,10 @@ pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
     let canonical = resolve_model_alias(model);
     match canonical.as_str() {
         // ── Anthropic ───────────────────────────────────────────
+        "claude-opus-4-7" => Some(ModelTokenLimit {
+            max_output_tokens: 64_000,
+            context_window_tokens: 1_000_000,
+        }),
         "claude-opus-4-6" => Some(ModelTokenLimit {
             max_output_tokens: 32_000,
             context_window_tokens: 200_000,
@@ -48,6 +52,11 @@ pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
         }),
 
         // ── OpenAI ──────────────────────────────────────────────
+        // GPT-5.x family (1M context window)
+        m if m.starts_with("gpt-5") => Some(ModelTokenLimit {
+            max_output_tokens: 64_000,
+            context_window_tokens: 1_000_000,
+        }),
         "gpt-4o" | "gpt-4o-2024-08-06" | "gpt-4o-2024-11-20" => Some(ModelTokenLimit {
             max_output_tokens: 16_384,
             context_window_tokens: 128_000,
@@ -109,6 +118,18 @@ pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
     }
 }
 
+/// Derive the context window size in bytes for a model.
+///
+/// Uses the model registry to look up the context window in tokens,
+/// then converts to bytes using the ~4 chars/token heuristic.
+/// Falls back to the provided default for unknown models.
+#[must_use]
+pub fn context_window_bytes(model: &str, default_bytes: usize) -> usize {
+    model_token_limit(model)
+        .map(|limit| limit.context_window_tokens as usize * 4) // ~4 bytes per token
+        .unwrap_or(default_bytes)
+}
+
 /// Get the max output tokens for a model, with sensible defaults for unknown models.
 #[must_use]
 pub fn max_tokens_for_model(model: &str) -> u32 {
@@ -144,7 +165,8 @@ pub fn resolve_model_alias(model: &str) -> String {
 
     match lower.as_str() {
         // Anthropic aliases
-        "opus" => "claude-opus-4-6".to_string(),
+        "opus" => "claude-opus-4-7".to_string(),
+        "opus-4-6" | "opus-4.6" => "claude-opus-4-6".to_string(),
         "sonnet" => "claude-sonnet-4-6".to_string(),
         "haiku" => "claude-haiku-4-5-20251213".to_string(),
 
@@ -279,7 +301,7 @@ mod tests {
     #[test]
     fn resolves_aliases() {
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
-        assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
+        assert_eq!(resolve_model_alias("opus"), "claude-opus-4-7");
         assert_eq!(resolve_model_alias("grok"), "grok-3");
         assert_eq!(resolve_model_alias("grok-mini"), "grok-3-mini");
         assert_eq!(resolve_model_alias("kimi"), "kimi-k2.5");

@@ -27,6 +27,7 @@ pub mod file_state;
 pub mod file_write;
 pub mod glob;
 pub mod grep;
+pub mod orchestrator;
 pub mod parallel;
 pub mod permission;
 pub mod recon;
@@ -35,6 +36,7 @@ pub mod truncation;
 
 pub use background::BackgroundProcessManager;
 pub use file_state::FileStateStore;
+pub use orchestrator::{ApprovalDecision, OrchestratorConfig, ToolOrchestrator, ToolResult};
 pub use permission::{PermissionEnforcer, PermissionMode, WriteMode};
 
 use anyhow::Result;

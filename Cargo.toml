@@ -29,6 +29,11 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+# Module size convention: 500 LoC target, 800 LoC hard limit.
+# Files exceeding 800 LoC should be split into focused submodules.
+# Current offenders (as of 2026-05): runtime.rs (1057), render.rs (1046),
+# bash_validation.rs (957), context.rs (837), client.rs (835).
+
 [workspace.lints.clippy]
 collapsible_if = "deny"
 collapsible_else_if = "deny"
@@ -67,3 +72,9 @@ unnecessary_to_owned = "deny"
 unwrap_used = "warn"
 too_many_arguments = "warn"
 large_enum_variant = "warn"
+# Codex pattern: library code must never print directly to stdout/stderr.
+# All output flows through the event system or TUI rendering pipeline.
+# Set to "warn" at workspace level; library crates opt into "deny" via
+# #![deny(clippy::print_stdout, clippy::print_stderr)] in their lib.rs.
+print_stdout = "warn"
+print_stderr = "warn"

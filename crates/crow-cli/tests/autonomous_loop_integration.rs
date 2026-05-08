@@ -3,7 +3,7 @@
 //! LlmClient. This pins the state machine behaviour so that future
 //! refactors cannot silently break the cognitive loop.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 use async_trait::async_trait;
 use crow_brain::{ChatMessage, IntentCompiler, LlmClient};
 use crow_materialize::{materialize, MaterializeConfig};

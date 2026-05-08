@@ -413,7 +413,7 @@ pub async fn apply_sandbox_to_workspace(
 
     // 3. Apply
     if let Err(e) = apply_plan_to_sandbox(&hydrated_plan, &live_view) {
-        eprintln!("\n🚨 Apply failed mid-flight. Executing zero-pollution rollback...");
+        tracing::error!("Apply failed mid-flight. Executing zero-pollution rollback...");
         git_manager.rollback().await?;
         anyhow::bail!("Transaction failed and rolled back. Cause: {e}");
     }

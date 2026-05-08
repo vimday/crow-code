@@ -4,6 +4,8 @@
 //! over its stdin and stdout using `tokio::process`. Handles request/response
 //! correlation via message IDs.
 
+#![allow(clippy::print_stderr)] // Transport tasks run in background — tracing not always available
+
 use crate::types::{Id, Request, Response};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
@@ -50,15 +52,15 @@ impl StdioTransport {
             async move {
                 while let Some(msg) = stdin_rx.recv().await {
                     if let Err(e) = stdin.write_all(msg.as_bytes()).await {
-                        eprintln!("[MCP Transport] Failed to write to stdin: {e}");
+                        tracing::error!("[MCP Transport] Failed to write to stdin: {e}");
                         break;
                     }
                     if let Err(e) = stdin.write_all(b"\n").await {
-                        eprintln!("[MCP Transport] Failed to write newline to stdin: {e}");
+                        tracing::error!("[MCP Transport] Failed to write newline to stdin: {e}");
                         break;
                     }
                     if let Err(e) = stdin.flush().await {
-                        eprintln!("[MCP Transport] Failed to flush stdin: {e}");
+                        tracing::error!("[MCP Transport] Failed to flush stdin: {e}");
                         break;
                     }
                 }
@@ -99,13 +101,13 @@ impl StdioTransport {
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("[MCP Transport] Failed to parse JSON-RPC: {e}");
-                                    eprintln!("[MCP Transport] Raw line: {trimmed}");
+                                    tracing::warn!("[MCP Transport] Failed to parse JSON-RPC: {e}");
+                                    tracing::debug!("[MCP Transport] Raw line: {trimmed}");
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("[MCP Transport] Read error: {e}");
+                            tracing::error!("[MCP Transport] Read error: {e}");
                             break;
                         }
                     }

@@ -112,7 +112,7 @@ pub async fn run_workbench(cfg_val: &CrowConfig, resume: bool) -> Result<()> {
         }
     }
 
-    let messages = ConversationManager::new(loaded_messages);
+    let messages = ConversationManager::new_for_model(loaded_messages, &cfg_val.llm.model);
     let runtime = SessionRuntime::boot(cfg_val).await?;
 
     let shared_runtime = Arc::new(runtime);

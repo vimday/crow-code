@@ -226,3 +226,71 @@ Crow supports dynamic, zero-config Smart Presets for various LLM providers (Open
 - **Inference logic (`config.rs`)**: Passing a recognized provider alias (e.g., `kimi`) automatically assigns its flagship `base_url` (e.g., `https://api.moonshot.cn/v1`) and `model` (e.g., `moonshot-v1-auto`), whilst checking provider-specific environment variables (`KIMI_API_KEY`).
 - **Interactive TUI Switching**: The TUI provides a `/model <provider>` command which dynamically updates the `.crow/config.json` configuration file.
 - **Custom Proxies**: When configuring non-standard gateways, the engine falls back to treating `custom` providers as standard OpenAI-compatible endpoints, requiring the user to explicitly define `base_url` and `model`.
+
+## 9. TurnContext (Immutable Per-Turn Snapshot)
+The `TurnContext` (`crow-runtime/src/turn_context.rs`, Codex `session/turn_context.rs` pattern) provides an immutable snapshot of all configuration needed for a single agent turn. Created once at turn start, it freezes:
+- Model identifier and provider
+- `ModelBudget` (context window limits)
+- Compiler (`IntentCompiler`) and tool registry
+- Permission enforcer and file state store
+- Cancellation token and timing state
+- Max steps and reasoning effort
+
+**Design rationale**: Before `TurnContext`, turn state was scattered across `TurnConfig`, `ModelBudget`, `AppState`, and bare function parameters. This caused configuration mutation mid-turn and required threading new state through the entire call chain. `TurnContext` solves both by freezing everything at turn start.
+
+**Usage**: Constructed via the builder pattern:
+```rust
+let ctx = TurnContext::builder()
+    .model("claude-sonnet-4-6")
+    .compiler(compiler)
+    .tool_registry(registry)
+    .permissions(perms)
+    .file_state(fs)
+    .background_manager(bgm)
+    .build();
+```
+
+## 10. ToolOrchestrator (Unified Tool Pipeline)
+The `ToolOrchestrator` (`crow-tools/src/orchestrator.rs`, Codex `tools/orchestrator.rs` pattern) provides a single entry point for all tool executions:
+
+```text
+ToolOrchestrator::execute_tool()
+  ├─ check_approval()         → PermissionDenied / Approved
+  ├─ acquire_lock()           → RwLock read (parallel) or write (exclusive)
+  ├─ execute_with_timeout()   → Per-tool timeout + cancellation
+  └─ truncate_output()        → Cap output at 100KB
+```
+
+Key features:
+- **Approval flow**: Checks `PermissionMode` before execution (DangerFullAccess auto-approves, ReadOnly blocks writes)
+- **RwLock dispatch**: Read-only tools get shared read locks (concurrent), write tools get exclusive write locks
+- **Timeout + cancellation**: Per-tool timeout via `tokio::time::timeout` + `CancellationToken` integration
+- **Output truncation**: Caps tool output at configurable limit (default 100KB) with `crow_patch::safe_truncate`
+
+## 11. Agent Role System
+The `AgentRole` (`crow-runtime/src/role.rs`, Codex `agent/role.rs` pattern) defines configurable agent personas:
+
+| Role | Permission | Reasoning | Can Delegate | Purpose |
+|------|-----------|-----------|-------------|---------|
+| `default` | WorkspaceWrite | Medium | Yes | General-purpose agent |
+| `explorer` | ReadOnly | Low | No | Read-only reconnaissance |
+| `worker` | WorkspaceWrite | Medium | No | Focused execution with file ownership |
+| `coder` | FullAccess | High | Yes | Code generation specialist |
+| `reviewer` | ReadOnly | High | No | Code review agent |
+
+Each role provides:
+- System prompt suffix (behavioral instructions)
+- Permission level override
+- Resource limits (max steps, tool calls, turn duration)
+- File ownership patterns (for worker roles)
+
+## 12. IO Boundary Enforcement
+Library crates (`crow-brain`, `crow-runtime`, `crow-mcp`, `crow-workspace`, `crow-tools`, etc.) must never use `println!`, `eprintln!`, or `print!` directly. All output flows through:
+- **`tracing::info!/warn!/error!`** — for structured logging
+- **`AgentEvent` emission** — for TUI display
+- **`StatusMessage` system** — for transient user notifications
+
+The workspace `Cargo.toml` enforces this via `print_stdout = "warn"` and `print_stderr = "warn"` clippy lints. Binary crates (`crow-cli`) are exempt since they legitimately print to stdout for the non-TUI chat mode.
+
+**Module size convention**: 500 LoC target, 800 LoC hard limit. Current offenders are documented in the workspace `Cargo.toml` header.
+

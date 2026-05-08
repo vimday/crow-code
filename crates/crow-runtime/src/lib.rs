@@ -14,9 +14,11 @@ pub mod file_state;
 pub mod git_context;
 pub mod mcp;
 pub mod registry;
+pub mod role;
 pub mod session;
 pub mod session_store;
 pub mod subagent;
+pub mod turn_context;
 pub mod turn_diff;
 pub mod turn_timing;
 

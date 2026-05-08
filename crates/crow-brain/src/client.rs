@@ -245,20 +245,20 @@ impl ReqwestLlmClient {
                             {
                                 break; // Not a transient error, move on
                             } else {
-                                println!(
-                                    "    ⚠️ API returned transient error ({final_status}). Retrying..."
+                                tracing::warn!(
+                                    "API returned transient error ({final_status}). Retrying..."
                                 );
                             }
                         }
                         Err(e) => {
-                            println!("    ⚠️ API stream text read failed (IncompleteMessage?): {e}. Retrying...");
+                            tracing::warn!("API stream text read failed (IncompleteMessage?): {e}. Retrying...");
                             final_status = status.as_u16();
                             last_error = Some(e);
                         }
                     }
                 }
                 Err(e) => {
-                    println!("    ⚠️ API connection transport failed: {e}. Retrying...");
+                    tracing::warn!("API connection transport failed: {e}. Retrying...");
                     last_error = Some(e);
                 }
             }

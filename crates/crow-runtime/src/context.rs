@@ -20,6 +20,8 @@ pub struct ConversationManager {
     /// Bumped whenever history is rewritten (compaction, rollback, clear).
     /// Mirrors Codex's `history_version` for staleness detection.
     history_version: u64,
+    /// Model identifier for model-aware compaction thresholds.
+    model: Option<String>,
 }
 
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
@@ -27,11 +29,32 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 }
 
 impl ConversationManager {
-    pub fn new(mut sys_msgs: Vec<ChatMessage>) -> Self {
-        use crate::budget::{MAX_CONTEXT_BYTES, MAX_HISTORY_TURNS, MAX_SYSTEM_BYTES};
+    pub fn new(sys_msgs: Vec<ChatMessage>) -> Self {
+        let budget = crate::budget::ModelBudget::default();
+        Self::new_with_budget(sys_msgs, budget)
+    }
+
+    /// Create a model-aware conversation manager.
+    ///
+    /// Scales the context budget based on the model's known context window.
+    /// GPT-5.x and Claude Opus 4.7 (1M tokens) get ~4MB budgets; unknown
+    /// models fall back to the default 768KB.
+    pub fn new_for_model(sys_msgs: Vec<ChatMessage>, model: &str) -> Self {
+        let budget = crate::budget::ModelBudget::for_model(model);
+        let mut mgr = Self::new_with_budget(sys_msgs, budget);
+        mgr.model = Some(model.to_string());
+        mgr
+    }
+
+    /// Internal constructor that accepts an explicit budget.
+    fn new_with_budget(
+        mut sys_msgs: Vec<ChatMessage>,
+        budget: crate::budget::ModelBudget,
+    ) -> Self {
+        let max_system_bytes = budget.max_system_bytes;
 
         let sys_bytes: usize = sys_msgs.iter().map(|s| s.content.len()).sum();
-        if sys_bytes > MAX_SYSTEM_BYTES {
+        if sys_bytes > max_system_bytes {
             // If system context is too large, truncate the largest message (typically the repo map)
             if let Some(largest) = sys_msgs.iter_mut().max_by_key(|s| s.content.len()) {
                 let orig_len = largest.content.len();
@@ -40,11 +63,11 @@ impl ConversationManager {
                 let other_bytes = sys_bytes - orig_len;
 
                 // Pre-compute the suffix so we can subtract its length from the content budget.
-                // This prevents the formatted result from overshooting MAX_SYSTEM_BYTES.
+                // This prevents the formatted result from overshooting max_system_bytes.
                 let suffix = format!(
                     "...\n\n[SYSTEM: Anchor context truncated (original size {orig_len} bytes) to preserve conversation budget]"
                 );
-                let content_budget = MAX_SYSTEM_BYTES
+                let content_budget = max_system_bytes
                     .saturating_sub(other_bytes)
                     .saturating_sub(suffix.len());
 
@@ -56,9 +79,10 @@ impl ConversationManager {
         Self {
             system_messages: sys_msgs,
             conversation: VecDeque::new(),
-            max_bytes: MAX_CONTEXT_BYTES,
-            max_history_turns: MAX_HISTORY_TURNS,
+            max_bytes: budget.max_context_bytes,
+            max_history_turns: budget.max_history_turns,
             history_version: 0,
+            model: None,
         }
     }
 
@@ -231,7 +255,10 @@ impl ConversationManager {
         // We only want to compress the dynamic conversation history.
         let dynamic_start = self.system_messages.len();
 
-        let compactor_config = crow_brain::compactor::CompactorConfig::default();
+        let compactor_config = match &self.model {
+            Some(model) => crow_brain::compactor::CompactorConfig::for_model(model),
+            None => crow_brain::compactor::CompactorConfig::default(),
+        };
         let compactor = crow_brain::compactor::Compactor::new(compactor_config);
 
         let dynamic_history = &messages[dynamic_start..];

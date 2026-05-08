@@ -4,6 +4,7 @@ use anyhow::Result;
 use crow_mcp::McpClient;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::warn;
 
 pub struct McpManager {
     clients: HashMap<String, Arc<McpClient>>,
@@ -37,7 +38,7 @@ impl McpManager {
             let client = match McpClient::spawn(&cfg.command, &args_refs) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("  ⚠️  Failed to spawn MCP server '{name}': {e}");
+                    warn!("Failed to spawn MCP server '{name}': {e}");
                     continue;
                 }
             };
@@ -46,7 +47,7 @@ impl McpManager {
             let init = match client.initialize().await {
                 Ok(i) => i,
                 Err(e) => {
-                    eprintln!("  ⚠️  Failed to initialize MCP server '{name}': {e}");
+                    warn!("Failed to initialize MCP server '{name}': {e}");
                     continue;
                 }
             };
@@ -59,7 +60,7 @@ impl McpManager {
             let tools_res = match client.list_tools().await {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("  ⚠️  Failed to list tools for MCP server '{name}': {e}");
+                    warn!("Failed to list tools for MCP server '{name}': {e}");
                     continue;
                 }
             };

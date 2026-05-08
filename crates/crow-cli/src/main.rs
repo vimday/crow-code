@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 pub mod chat;
 mod config;
 pub mod crucible;
@@ -176,7 +177,7 @@ async fn run_plan(args: &[String]) -> Result<()> {
 async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-    let mut messages = crow_runtime::context::ConversationManager::new(vec![]);
+    let mut messages = crow_runtime::context::ConversationManager::new_for_model(vec![], &cfg.llm.model);
     let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime
         .execute_turn(
@@ -192,7 +193,7 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 async fn run_yolo(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-    let mut messages = crow_runtime::context::ConversationManager::new(vec![]);
+    let mut messages = crow_runtime::context::ConversationManager::new_for_model(vec![], &cfg.llm.model);
     let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     let mut observer = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
     runtime
