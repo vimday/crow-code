@@ -26,7 +26,7 @@ use crate::budget::ModelBudget;
 /// # Design Rationale
 ///
 /// Before `TurnContext`, turn configuration was spread across:
-/// - `TurnConfig` (agent_loop.rs) — compiler, tools, permissions
+/// - `TurnContext` (now unified — previously `TurnConfig` in agent_loop.rs)
 /// - `ModelBudget` (budget.rs) — context limits
 /// - `AppState` (TUI) — model name, streaming state
 /// - Bare function parameters — workspace root, cancel token
@@ -90,6 +90,9 @@ pub struct TurnContext {
 
     /// Turn timing state for TTFT/TTFM/duration tracking.
     pub timing: Arc<crate::turn_timing::TurnTimingState>,
+
+    /// Agent role for this turn (controls permissions, prompt overlay, limits).
+    pub role: crate::role::AgentRole,
 }
 
 impl TurnContext {
@@ -138,6 +141,7 @@ pub struct TurnContextBuilder {
     cancel_token: Option<CancellationToken>,
     max_steps: Option<usize>,
     reasoning_effort: Option<String>,
+    role: Option<crate::role::AgentRole>,
 }
 
 
@@ -213,6 +217,11 @@ impl TurnContextBuilder {
         self
     }
 
+    pub fn role(mut self, role: crate::role::AgentRole) -> Self {
+        self.role = Some(role);
+        self
+    }
+
     /// Build the `TurnContext`, deriving defaults where possible.
     ///
     /// # Errors
@@ -254,6 +263,7 @@ impl TurnContextBuilder {
             started_at: Instant::now(),
             reasoning_effort: self.reasoning_effort,
             timing: Arc::new(crate::turn_timing::TurnTimingState::new()),
+            role: self.role.unwrap_or_default(),
         })
     }
 }

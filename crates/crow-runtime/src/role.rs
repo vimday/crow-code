@@ -99,6 +99,8 @@ impl AgentRole {
             "worker" => Self::worker(),
             "coder" => Self::coder(),
             "reviewer" => Self::reviewer(),
+            "architect" => Self::architect(),
+            "executor" => Self::executor(),
             _ => Self::default_role(),
         }
     }
@@ -191,6 +193,41 @@ impl AgentRole {
         }
     }
 
+    fn architect() -> Self {
+        Self {
+            name: "architect".to_string(),
+            description: "Orchestration agent. Plans and delegates work to sub-agents.".to_string(),
+            system_prompt_suffix: "You are an Architect agent. Your job is to plan the overall \
+                approach and delegate implementation tasks to Worker/Coder sub-agents. \
+                Focus on high-level design, task decomposition, and coordination.".to_string(),
+            permission_level: RolePermissionLevel::WorkspaceWrite,
+            max_turn_duration: Duration::from_secs(600),
+            reasoning_effort: ReasoningEffort::High,
+            max_tool_calls_per_turn: 15,
+            max_steps: 50,
+            can_delegate: true,
+            file_ownership: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
+    fn executor() -> Self {
+        Self {
+            name: "executor".to_string(),
+            description: "Direct execution agent. Applies plans and runs verification.".to_string(),
+            system_prompt_suffix: "You are an Executor agent. Apply the given plan precisely \
+                and verify the results. Report any issues encountered during execution.".to_string(),
+            permission_level: RolePermissionLevel::WorkspaceWrite,
+            max_turn_duration: Duration::from_secs(300),
+            reasoning_effort: ReasoningEffort::Medium,
+            max_tool_calls_per_turn: 20,
+            max_steps: 40,
+            can_delegate: false,
+            file_ownership: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
     /// Assign file ownership to this role (for worker agents).
     pub fn with_file_ownership(mut self, patterns: Vec<String>) -> Self {
         self.file_ownership = patterns;
@@ -211,7 +248,7 @@ impl AgentRole {
 
     /// List all available built-in role names.
     pub fn builtin_names() -> &'static [&'static str] {
-        &["default", "explorer", "worker", "coder", "reviewer"]
+        &["default", "explorer", "worker", "coder", "reviewer", "architect", "executor"]
     }
 }
 

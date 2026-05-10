@@ -28,14 +28,7 @@ impl crow_tools::SubagentDelegator for NativeSubagentDelegator {
         role_str: String,
         focus_paths_str: Vec<String>,
     ) -> anyhow::Result<String> {
-        let role = match role_str.to_lowercase().as_str() {
-            "explorer" => crow_runtime::subagent::AgentRole::Explorer,
-            "coder" => crow_runtime::subagent::AgentRole::Coder,
-            "reviewer" => crow_runtime::subagent::AgentRole::Reviewer,
-            "architect" => crow_runtime::subagent::AgentRole::Architect,
-            "executor" => crow_runtime::subagent::AgentRole::Executor,
-            _ => crow_runtime::subagent::AgentRole::Generic,
-        };
+        let role = crow_runtime::role::AgentRole::builtin(&role_str.to_lowercase());
 
         let focus_paths: Vec<crow_patch::WorkspacePath> = focus_paths_str
             .into_iter()
@@ -567,21 +560,23 @@ impl SessionRuntime {
             task_registry: self.task_registry.clone(),
         });
 
-        // Build TurnConfig (Codex TurnContext pattern — bundles all per-turn state)
-        let turn_config = crow_runtime::agent_loop::TurnConfig {
-            compiler: std::sync::Arc::clone(&self.compiler),
-            workspace_root: self.workspace.clone(),
-            tool_registry: std::sync::Arc::clone(&self.tool_registry),
-            permissions: std::sync::Arc::clone(&self.permissions),
-            file_state,
-            background_manager: std::sync::Arc::clone(&self.background_manager),
-            subagent_delegator: Some(subagent_delegator),
-            cancel_token: tokio_util::sync::CancellationToken::new(),
-            max_steps: None,
-        };
+        // Build TurnContext (immutable per-turn snapshot — Codex pattern)
+        let turn_ctx = crow_runtime::turn_context::TurnContext::builder()
+            .model(cfg.llm.model.clone())
+            .provider(cfg.describe_provider())
+            .compiler(std::sync::Arc::clone(&self.compiler))
+            .workspace_root(self.workspace.clone())
+            .tool_registry(std::sync::Arc::clone(&self.tool_registry))
+            .permissions(std::sync::Arc::clone(&self.permissions))
+            .file_state(file_state)
+            .background_manager(std::sync::Arc::clone(&self.background_manager))
+            .subagent_delegator(subagent_delegator)
+            .cancel_token(tokio_util::sync::CancellationToken::new())
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build TurnContext: {e}"))?;
 
         let result =
-            crow_runtime::agent_loop::run_agent_loop(turn_config, messages, observer).await?;
+            crow_runtime::agent_loop::run_agent_loop(&turn_ctx, messages, observer).await?;
 
         // Emit final text as markdown
         if !result.final_text.trim().is_empty() {

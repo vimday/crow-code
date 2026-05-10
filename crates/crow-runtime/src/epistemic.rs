@@ -370,7 +370,7 @@ pub async fn run_epistemic_loop(
                 ));
 
                 let subagent = crate::subagent::SubagentWorker::new(
-                    crate::subagent::AgentRole::Explorer,
+                    crate::role::AgentRole::builtin("explorer"),
                     compiler.clone(),
                     crate::registry::TaskRegistry::new(),
                     tool_registry.clone(),

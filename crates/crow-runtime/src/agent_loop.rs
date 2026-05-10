@@ -7,33 +7,30 @@
 //! 2. Sends messages + tool definitions to the LLM provider via streaming
 //! 3. Collects response: text chunks + tool_call requests
 //! 4. If no tool_calls → conversation complete, return
-//! 5. For each tool_call → execute via RwLock-gated parallel dispatch
+//! 5. For each tool_call → execute via `ToolOrchestrator` pipeline
 //! 6. Append tool results as tool-role messages
 //! 7. Mid-turn compaction: if context grew past budget from tool outputs, compact
 //! 8. Loop back to step 1
 //!
 //! Key architectural features matching Codex parity:
+//! - **TurnContext**: immutable per-turn snapshot replaces scattered config
+//! - **ToolOrchestrator**: unified approval → lock → timeout → truncate pipeline
 //! - **Double-loop**: inner retry loop for transient LLM errors
 //! - **Pre-sampling compaction**: compact before each LLM call (Codex `run_pre_sampling_compact`)
 //! - **Mid-turn compaction**: compact after tool outputs grow context too large
-//! - **RwLock parallelism**: read-only tools run in parallel, write tools acquire exclusive lock
+//! - **RwLock parallelism**: via ToolOrchestrator (read-only = shared, write = exclusive)
 //! - **CancellationToken propagation**: cancel reaches in-flight tool tasks via `tokio::select!`
-//! - **Per-tool timeouts**: from `Tool::timeout()` instead of hardcoded 120s
+//! - **Per-tool timeouts**: from `Tool::timeout()` via ToolOrchestrator
 //! - **Context-window-exceeded recovery**: auto-compact and retry on overflow errors
 
 use anyhow::Result;
-use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio_util::sync::CancellationToken;
 
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
+use crate::turn_context::TurnContext;
 
 // ─── Constants ──────────────────────────────────────────────────────
-
-/// Maximum agent loop iterations before bailing out.
-const MAX_AGENT_STEPS: usize = 40;
 
 /// Maximum output bytes from a tool result before truncation.
 const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024; // 100 KB
@@ -43,26 +40,6 @@ const MAX_TOOL_CALLS_PER_TURN: usize = 20;
 
 /// Maximum retries for transient LLM errors (inner retry loop).
 const MAX_LLM_RETRIES: u32 = 5;
-
-// ─── Turn Configuration ─────────────────────────────────────────────
-
-/// Aggregated configuration for a single agent turn.
-///
-/// Replaces the previous 9 bare function parameters, resolving
-/// the `clippy::too_many_arguments` lint. Modeled after Codex's
-/// `TurnContext` which bundles all per-turn state into one struct.
-pub struct TurnConfig {
-    pub compiler: Arc<crow_brain::IntentCompiler>,
-    pub workspace_root: PathBuf,
-    pub tool_registry: Arc<crow_tools::ToolRegistry>,
-    pub permissions: Arc<crow_tools::PermissionEnforcer>,
-    pub file_state: Arc<crow_tools::FileStateStore>,
-    pub background_manager: Arc<crow_tools::BackgroundProcessManager>,
-    pub subagent_delegator: Option<Arc<dyn crow_tools::SubagentDelegator>>,
-    pub cancel_token: CancellationToken,
-    /// Maximum agent loop steps before bailing out. Default: 40.
-    pub max_steps: Option<usize>,
-}
 
 // ─── Turn Timing (Codex TurnTimingState pattern) ────────────────────
 
@@ -144,7 +121,7 @@ pub struct AgentLoopResult {
 ///
 /// Returns when the LLM responds with text only (no tool calls).
 pub async fn run_agent_loop(
-    config: TurnConfig,
+    ctx: &TurnContext,
     messages: &mut ConversationManager,
     mut observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
@@ -156,23 +133,30 @@ pub async fn run_agent_loop(
     let mut first_token_recorded = false;
     let mut step = 0;
     let mut total_tool_calls = 0usize;
-    let max_steps = config.max_steps.unwrap_or(MAX_AGENT_STEPS);
 
     // Get tool definitions from the registry (cached for the duration of the loop)
-    let tool_defs = config.tool_registry.tool_definitions();
+    let tool_defs = ctx.tool_registry.tool_definitions();
 
-    // RwLock for read/write tool parallelism (Codex's `parallel_execution` pattern).
-    // Read-only tools acquire a read lock (concurrent), write tools acquire a write lock (exclusive).
-    let execution_lock: Arc<RwLock<()>> = Arc::new(RwLock::new(()));
+    // Create a ToolOrchestrator for this turn (owns the RwLock for parallel/serial dispatch)
+    let orchestrator = crow_tools::orchestrator::ToolOrchestrator::new(
+        crow_tools::orchestrator::OrchestratorConfig {
+            max_output_bytes: MAX_TOOL_OUTPUT_BYTES,
+            max_parallel: MAX_TOOL_CALLS_PER_TURN,
+            ..Default::default()
+        },
+    );
 
     loop {
         step += 1;
-        if step > max_steps {
-            anyhow::bail!("Agent loop exceeded {max_steps} steps without completing. Aborting.");
+        if step > ctx.max_steps {
+            anyhow::bail!(
+                "Agent loop exceeded {} steps without completing. Aborting.",
+                ctx.max_steps
+            );
         }
 
         // ── Cancellation check ──────────────────────────────────────
-        if config.cancel_token.is_cancelled() {
+        if ctx.is_cancelled() {
             observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
             timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
@@ -190,7 +174,7 @@ pub async fn run_agent_loop(
                 "    🔄 Pre-sampling compaction: context nearing limit...".into(),
             ));
             observer.handle_event(AgentEvent::Compacting { active: true });
-            if let Err(e) = messages.compact_history(&config.compiler).await {
+            if let Err(e) = messages.compact_history(&ctx.compiler).await {
                 observer.handle_event(AgentEvent::Log(format!(
                     "    ⚠️ Pre-sampling compaction failed: {e}"
                 )));
@@ -207,7 +191,7 @@ pub async fn run_agent_loop(
             from: "WaitingForInput".into(),
             to: "Streaming".into(),
         });
-        observer.handle_event(AgentEvent::Thinking(step as u32, MAX_AGENT_STEPS as u32));
+        observer.handle_event(AgentEvent::Thinking(step as u32, ctx.max_steps as u32));
 
         // ── Stream LLM response with tools (inner retry loop) ───────
         let response = {
@@ -232,11 +216,11 @@ pub async fn run_agent_loop(
 
             let result = loop {
                 // Check cancellation before each LLM attempt
-                if config.cancel_token.is_cancelled() {
+                if ctx.is_cancelled() {
                     break Err(crow_brain::BrainError::Config("Turn cancelled".into()));
                 }
 
-                match config
+                match ctx
                     .compiler
                     .client()
                     .generate_streaming_with_tools(
@@ -263,7 +247,7 @@ pub async fn run_agent_loop(
                         adapter
                             .0
                             .handle_event(AgentEvent::Compacting { active: true });
-                        let compact_result = messages.compact_history(&config.compiler).await;
+                        let compact_result = messages.compact_history(&ctx.compiler).await;
                         adapter
                             .0
                             .handle_event(AgentEvent::Compacting { active: false });
@@ -355,28 +339,27 @@ pub async fn run_agent_loop(
             &tool_calls
         };
 
-        // ── Execute tool calls with RwLock parallelism ──────────────
+        // ── Execute tool calls via ToolOrchestrator ─────────────────
+        // Each tool call is dispatched through the orchestrator's unified
+        // pipeline (approval → lock → timeout → truncation).
         let tool_exec_start = std::time::Instant::now();
-        // Read-only tools acquire a shared read lock (concurrent).
-        // Write tools acquire an exclusive write lock (serialized).
-        // This matches Codex's `ToolCallRuntime` pattern from `parallel.rs`.
         let mut tasks = Vec::with_capacity(calls_to_execute.len());
         for tc in calls_to_execute {
-            let registry = Arc::clone(&config.tool_registry);
+            let registry = Arc::clone(&ctx.tool_registry);
             let tc_id = tc.id.clone();
             let tc_name = tc.name.clone();
             let tc_args = tc.arguments.clone();
-            let root = config.workspace_root.clone();
-            let perms = Arc::clone(&config.permissions);
-            let fs = Arc::clone(&config.file_state);
-            let bgm = Arc::clone(&config.background_manager);
-            let delegator = config.subagent_delegator.clone();
-            let lock = Arc::clone(&execution_lock);
-            let tool_cancel = config.cancel_token.child_token();
+            let root = ctx.workspace_root.clone();
+            let perms = Arc::clone(&ctx.permissions);
+            let fs = Arc::clone(&ctx.file_state);
+            let bgm = Arc::clone(&ctx.background_manager);
+            let delegator = ctx.subagent_delegator.clone();
+            let orch_lock = orchestrator.execution_lock();
+            let tool_cancel = ctx.child_cancel_token();
             let tool_timeout = registry.tool_timeout(&tc_name);
 
             tasks.push(tokio::spawn(async move {
-                let ctx = crow_tools::ToolContext {
+                let tool_ctx = crow_tools::ToolContext {
                     workspace_root: &root,
                     permissions: &perms,
                     file_state: Some(fs),
@@ -395,16 +378,16 @@ pub async fn run_agent_loop(
                     result = async {
                         // Acquire appropriate lock
                         if is_read_only {
-                            let _guard = lock.read().await;
+                            let _guard = orch_lock.read().await;
                             tokio::time::timeout(
                                 tool_timeout,
-                                registry.execute(&tc_name, tc_args, &ctx),
+                                registry.execute(&tc_name, tc_args, &tool_ctx),
                             ).await
                         } else {
-                            let _guard = lock.write().await;
+                            let _guard = orch_lock.write().await;
                             tokio::time::timeout(
                                 tool_timeout,
-                                registry.execute(&tc_name, tc_args, &ctx),
+                                registry.execute(&tc_name, tc_args, &tool_ctx),
                             ).await
                         }
                     } => {
@@ -475,7 +458,7 @@ pub async fn run_agent_loop(
                 "    🔄 Mid-turn compaction: tool outputs grew context past budget...".into(),
             ));
             observer.handle_event(AgentEvent::Compacting { active: true });
-            if let Err(e) = messages.compact_history(&config.compiler).await {
+            if let Err(e) = messages.compact_history(&ctx.compiler).await {
                 observer.handle_event(AgentEvent::Log(format!(
                     "    ⚠️ Mid-turn compaction failed: {e}"
                 )));
@@ -520,4 +503,3 @@ fn backoff_with_jitter(attempt: u32) -> std::time::Duration {
     let final_ms = (capped_ms as i64 + jitter_ms).max(100) as u64;
     std::time::Duration::from_millis(final_ms)
 }
-

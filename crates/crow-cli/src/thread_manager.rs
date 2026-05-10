@@ -365,7 +365,7 @@ impl ThreadManager {
             // Reconstruct compiler instance since it clones easily
             let compiler_instance = (*compiler).clone();
             let mut worker = crow_runtime::subagent::SubagentWorker::new(
-                crow_runtime::subagent::AgentRole::Generic,
+                crow_runtime::role::AgentRole::builtin("default"),
                 compiler_instance.clone(),
                 crow_runtime::registry::TaskRegistry::new(),
                 std::sync::Arc::new(crow_tools::ToolRegistry::new()),

@@ -337,7 +337,7 @@ pub(crate) async fn run_mcts_crucible(
 
             // ─── 3. Swarm Intelligence: Reviewer Agent ───────────────────
             let reviewer = crow_runtime::subagent::SubagentWorker::new(
-                crow_runtime::subagent::AgentRole::Reviewer,
+                crow_runtime::role::AgentRole::builtin("reviewer"),
                 compiler.clone(),
                 crow_runtime::registry::TaskRegistry::new(),
                 std::sync::Arc::new(crow_tools::ToolRegistry::new()),
