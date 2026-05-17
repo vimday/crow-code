@@ -4,9 +4,6 @@
 **Objective:** To build a verified, timeline-rewindable, zero-leak refactoring engine for cross-file physical consistency.
 **Core Principle:** Evidence over rhetoric, Patches are first-class citizens, Never blindly write to disk.
 
-
-
-
 ## 1. Abstract
 Crow-Code is an intelligent coding agent architecture designed with extreme defensive engineering. It shifts the paradigm from simple "LLM text manipulation" to "Evidence-based materialization." The system operates on a dual-track proposal and MCTS search mechanism, generating atomic patches that must pass a rigorous crucible of local environment verification before finalizing a write to the physical workspace. 
 

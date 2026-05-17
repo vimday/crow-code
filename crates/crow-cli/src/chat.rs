@@ -237,13 +237,13 @@ pub async fn run_repl(cfg: &CrowConfig) -> Result<()> {
                     .execute_native_turn(cfg, input, &mut messages, &mut observer)
                     .await
                 {
-                    Ok(snapshot_id) => {
+                    Ok(native_result) => {
                         let elapsed = turn_start.elapsed();
                         state.total_duration_ms += elapsed.as_millis();
 
                         // Save session
                         session.save_messages(&messages.as_messages());
-                        session.push_snapshot(snapshot_id);
+                        session.push_snapshot(native_result.snapshot_id);
                         if let Some(store) = &store {
                             if let Err(e) = store.save(&session) {
                                 eprintln!(

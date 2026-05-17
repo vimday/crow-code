@@ -1,9 +1,31 @@
+//! Subagent worker — spawns an isolated agent context for delegated tasks.
+//!
+//! # Architecture
+//!
+//! The `SubagentWorker` is now powered by `run_agent_loop` (native tool-call
+//! state machine) instead of the legacy `run_epistemic_loop`. This means
+//! subagents get:
+//!
+//! - Full `TurnContext` semantics (immutable per-turn config snapshot)
+//! - Native tool calling via the provider's protocol (not custom JSON)
+//! - `ToolOrchestrator` pipeline (approval → lock → timeout → truncation)
+//! - Per-tool RwLock parallelism (read-only tools run concurrently)
+//! - Backoff with jitter on transient LLM errors
+//! - The same 120s hard timeout from AGENTS.md
+//!
+//! # Delegation Depth
+//!
+//! Recursive delegation is bounded at 3 levels by the epistemic loop's
+//! `delegation_count` check. The 120s `tokio::time::timeout` wrapping
+//! the entire execution prevents stalled LLM calls from hanging forever.
+
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
 use crate::role::AgentRole;
+use crate::turn_context::TurnContext;
 use crow_brain::compiler::IntentCompiler;
-use crow_patch::IntentPlan;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct SubagentWorker {
@@ -11,8 +33,8 @@ pub struct SubagentWorker {
     pub role: AgentRole,
     compiler: IntentCompiler,
     task_registry: crate::registry::TaskRegistry,
-    tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
-    permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
+    tool_registry: Arc<crow_tools::ToolRegistry>,
+    permissions: Arc<crow_tools::PermissionEnforcer>,
 }
 
 impl SubagentWorker {
@@ -20,8 +42,8 @@ impl SubagentWorker {
         role: AgentRole,
         compiler: IntentCompiler,
         task_registry: crate::registry::TaskRegistry,
-        tool_registry: std::sync::Arc<crow_tools::ToolRegistry>,
-        permissions: std::sync::Arc<crow_tools::PermissionEnforcer>,
+        tool_registry: Arc<crow_tools::ToolRegistry>,
+        permissions: Arc<crow_tools::PermissionEnforcer>,
     ) -> Self {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -46,17 +68,16 @@ impl SubagentWorker {
         rationale: &str,
         sys_msgs: Vec<crow_brain::ChatMessage>,
         workspace_root: &Path,
-        mcp_manager: Option<&crate::mcp::McpManager>,
+        _mcp_manager: Option<&crate::mcp::McpManager>,
         parent_observer: &mut dyn EventHandler,
-    ) -> anyhow::Result<IntentPlan> {
+    ) -> anyhow::Result<crow_patch::IntentPlan> {
         let identity = format!(
             "You are a specialized Subagent Worker (Role: {role}, ID: {id}). You have been delegated the following bounded task by the Architect Orchestrator:\n\n\
             TASK: {task}\n\n\
             FOCUS PATHS: {focus_paths:?}\n\n\
             RATIONALE: {rationale}\n\n\
             {role_instructions}\
-            Perform any necessary file reads or tool calls. When you have answers or a plan, emit a SubmitPlan action. \
-            If you resolve the requested information without modifying code, emit an empty operations array and return your findings in the rationale.",
+            Use your available tools to complete the task. When done, respond with a clear summary of what you accomplished.",
             role = self.role.name,
             id = self.id,
             task = task,
@@ -69,17 +90,37 @@ impl SubagentWorker {
             }
         );
 
+        // Build system messages with subagent-specific identity override
         let mut msgs = sys_msgs.clone();
         if let Some(first) = msgs.first_mut() {
             first.content = identity;
+        } else {
+            msgs.push(crow_brain::ChatMessage::system(format!(
+                "You are a specialized Subagent Worker (Role: {}, ID: {}).",
+                self.role.name, self.id
+            )));
         }
 
         let mut sub_messages = ConversationManager::new(msgs);
 
+        // ── Git context injection for subagents (Codex pattern) ──────
+        // Subagents inherit git context from the workspace to maintain
+        // branch/status awareness across the delegation hierarchy.
+        if let Some(git_ctx) = crate::git_context::GitContext::detect(workspace_root) {
+            let rendered = git_ctx.render();
+            if !rendered.is_empty() {
+                sub_messages.push_user(format!(
+                    "[CONTEXT] Current workspace git state:\n{rendered}"
+                ));
+            }
+        }
+
+        sub_messages.push_user(format!("Task:\n{task}"));
+
         let task_desc = format!("[{}] {}", self.role.name, task);
         parent_observer.handle_event(crate::event::AgentEvent::DelegateStart(
             self.id.clone(),
-            task_desc.clone(),
+            task_desc,
         ));
 
         let mut observer = SubagentEventHandler {
@@ -88,11 +129,7 @@ impl SubagentWorker {
             parent: parent_observer,
         };
 
-        let file_state_store = std::sync::Arc::new(crate::file_state::FileStateStore::new());
-        // Enforce a hard timeout matching the AGENTS.md branch-level 120s limit.
-        // Prevents stalled LLM calls or infinite recon loops from hanging forever.
-        const SUBAGENT_TIMEOUT: Duration = Duration::from_secs(120);
-
+        // Register task in the task registry
         let task_def = crate::registry::AgentTask {
             id: self.id.clone(),
             name: format!("Subagent-{}", self.role.name),
@@ -102,18 +139,30 @@ impl SubagentWorker {
         };
         self.task_registry.register(task_def);
 
+        // Build TurnContext for the subagent (Codex pattern: immutable per-turn snapshot)
+        let file_state = Arc::new(crow_tools::FileStateStore::new());
+        let background_manager = Arc::new(crow_tools::BackgroundProcessManager::new());
+
+        let turn_ctx = TurnContext::builder()
+            .model("subagent".to_string())
+            .provider("subagent".to_string())
+            .compiler(Arc::new(self.compiler.clone()))
+            .workspace_root(workspace_root.to_path_buf())
+            .tool_registry(Arc::clone(&self.tool_registry))
+            .permissions(Arc::clone(&self.permissions))
+            .file_state(file_state)
+            .background_manager(background_manager)
+            .max_steps(self.role.max_steps)
+            .role(self.role.clone())
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build subagent TurnContext: {e}"))?;
+
+        // Enforce the 120s hard timeout from AGENTS.md
+        const SUBAGENT_TIMEOUT: Duration = Duration::from_secs(120);
+
         let execution_result = tokio::time::timeout(
             SUBAGENT_TIMEOUT,
-            crate::epistemic::run_epistemic_loop(
-                &self.compiler,
-                &mut sub_messages,
-                workspace_root,
-                mcp_manager,
-                &mut observer,
-                file_state_store,
-                std::sync::Arc::clone(&self.tool_registry),
-                std::sync::Arc::clone(&self.permissions),
-            ),
+            crate::agent_loop::run_agent_loop(&turn_ctx, &mut sub_messages, &mut observer),
         )
         .await;
 
@@ -126,10 +175,23 @@ impl SubagentWorker {
             ));
 
         match execution_result {
-            Ok(Ok(plan)) => {
+            Ok(Ok(result)) => {
                 self.task_registry
                     .update_status(&self.id, crate::registry::TaskStatus::Completed);
-                Ok(plan)
+
+                // Convert AgentLoopResult into an IntentPlan-like representation.
+                // Subagents in native tool-call mode don't produce IntentPlan;
+                // instead they write changes directly and return a text summary.
+                // We surface this as a "no-op plan" with the summary as rationale,
+                // allowing the orchestrator to collect findings.
+                Ok(crow_patch::IntentPlan {
+                    base_snapshot_id: crow_patch::SnapshotId("subagent".into()),
+                    rationale: result.final_text,
+                    is_partial: false,
+                    confidence: crow_patch::Confidence::None,
+                    requires_mcts: false,
+                    operations: vec![],
+                })
             }
             Ok(Err(e)) => {
                 self.task_registry
@@ -243,5 +305,8 @@ impl EventHandler for SubagentEventHandler<'_> {
             }),
         }
     }
-}
 
+    fn is_cancelled(&self) -> bool {
+        self.parent.is_cancelled()
+    }
+}

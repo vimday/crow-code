@@ -231,6 +231,8 @@ impl ThreadManager {
             // Clone messages to prevent locking ConversationManager for the duration of the run
             let mut local_msgs = msgs_clone.lock().await.clone();
 
+
+
             let result = rt_clone
                 .execute_native_turn(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
                 .await;
@@ -255,8 +257,8 @@ impl ThreadManager {
                 // Safe to write back: turn completed normally
                 *msgs_clone.lock().await = local_msgs.clone();
                 match result {
-                    Ok(snapshot_id) => {
-                        state.status = TurnStatus::Completed(Some(snapshot_id.clone()));
+                    Ok(native_result) => {
+                        state.status = TurnStatus::Completed(Some(native_result.snapshot_id.clone()));
                         let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Turn(
                             TurnEvent::Completed {
                                 turn_id: state.turn_id.clone().unwrap_or_default(),
@@ -264,7 +266,16 @@ impl ThreadManager {
                                 token_usage: None,
                             },
                         )));
-                        let _ = ui_tx.send(EngineEvent::TurnComplete(true, None));
+                        // Emit timing summary populated from AgentLoopResult
+                        // (replaces the previous placeholder zeros)
+                        let timing_summary = crow_runtime::event::TurnTimingSummary {
+                            total_ms: native_result.timing.total_elapsed.as_millis() as u64,
+                            tool_ms: native_result.timing.tool_execution_time.as_millis() as u64,
+                            llm_calls: native_result.timing.llm_call_count,
+                            compactions: native_result.timing.compactions,
+                            ttft_ms: native_result.timing.time_to_first_token.map(|d| d.as_millis() as u64),
+                        };
+                        let _ = ui_tx.send(EngineEvent::TurnComplete(true, Some(timing_summary)));
 
                         // Async persistence after turn completion
                         if let Ok(store) = SessionStore::open() {
@@ -287,7 +298,7 @@ impl ThreadManager {
                             };
 
                             current_session.save_messages(&local_msgs.as_messages());
-                            current_session.push_snapshot(snapshot_id);
+                            current_session.push_snapshot(native_result.snapshot_id);
 
                             if store.save(&current_session).is_ok() {
                                 *sid_guard = Some(current_session.id.0.clone());
@@ -368,8 +379,11 @@ impl ThreadManager {
                 crow_runtime::role::AgentRole::builtin("default"),
                 compiler_instance.clone(),
                 crow_runtime::registry::TaskRegistry::new(),
-                std::sync::Arc::new(crow_tools::ToolRegistry::new()),
-                std::sync::Arc::clone(&rt_clone.permissions),
+                // Fix: pass the full runtime tool_registry (not an empty one).
+                // Previously the swarm worker had ZERO tools registered, making
+                // it completely unable to read files, run bash, or explore the repo.
+                Arc::clone(&rt_clone.tool_registry),
+                Arc::clone(&rt_clone.permissions),
             );
             // Replace worker id for consistency with the UI
             worker.id = id.clone();

@@ -92,6 +92,15 @@ pub struct SessionRuntime {
     pub background_manager: std::sync::Arc<crow_tools::BackgroundProcessManager>,
 }
 
+/// Result from `execute_native_turn` that bundles the snapshot ID with
+/// fine-grained timing data from the agent loop. This allows the
+/// `ThreadManager` to emit accurate `TurnTimingSummary` events.
+pub struct NativeTurnResult {
+    pub snapshot_id: SnapshotId,
+    pub tool_call_count: usize,
+    pub timing: crow_runtime::agent_loop::TurnTiming,
+}
+
 impl SessionRuntime {
     pub async fn boot(cfg: &CrowConfig) -> Result<Self> {
         let client = cfg.build_llm_client()?;
@@ -482,7 +491,7 @@ impl SessionRuntime {
         prompt: &str,
         messages: &mut crow_runtime::context::ConversationManager,
         observer: &mut dyn crate::event::EventHandler,
-    ) -> Result<SnapshotId> {
+    ) -> Result<NativeTurnResult> {
         let snapshot_id = crate::snapshot::resolve_snapshot_id(&self.workspace);
 
         let _profile = crate::scan_workspace(&self.workspace).map_err(|e| anyhow::anyhow!(e))?;
@@ -578,10 +587,19 @@ impl SessionRuntime {
         let result =
             crow_runtime::agent_loop::run_agent_loop(&turn_ctx, messages, observer).await?;
 
-        // Emit final text as markdown
-        if !result.final_text.trim().is_empty() {
-            observer.handle_event(crate::event::AgentEvent::Markdown(result.final_text));
-        }
+        // Log timing summary from AgentLoopResult (Codex TurnTimingState pattern).
+        observer.handle_event(crate::event::AgentEvent::Log(
+            result.timing.summary(),
+        ));
+
+        // Emit accurate timing data from AgentLoopResult.
+        // This flows back through ChannelEventHandler → EngineEvent → TUI InfoBar.
+        observer.handle_event(crate::event::AgentEvent::TokenUsage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: result.tool_call_count as u32,
+            context_window: messages.estimate_token_count() as u32,
+        });
 
         observer.handle_event(crate::event::AgentEvent::Turn(
             crate::event::TurnEvent::PhaseChanged {
@@ -590,7 +608,11 @@ impl SessionRuntime {
             },
         ));
 
-        Ok(snapshot_id)
+        Ok(NativeTurnResult {
+            snapshot_id,
+            tool_call_count: result.tool_call_count,
+            timing: result.timing,
+        })
     }
 
     // ─── Unified Entry Points ────────────────────────────────────────────────

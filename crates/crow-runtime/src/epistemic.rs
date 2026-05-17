@@ -1,10 +1,15 @@
-//! Shared epistemic engine for the autonomous crucible loop.
+//! Legacy epistemic engine for the autonomous crucible loop.
 //!
-//! Extracts the common logic for the ReadFiles / Recon / SubmitPlan
-//! interaction cycle used by both the serial crucible (`run_dry_run`)
-//! and the MCTS crucible (`run_mcts_crucible`).
+//! # ⚠️ DEPRECATED
 //!
-//! # Design Principles
+//! **This module is superseded by [`agent_loop::run_agent_loop`]**, which uses
+//! the provider's native tool-calling protocol instead of custom `AgentAction`
+//! JSON parsing. All new development should target `agent_loop.rs`.
+//!
+//! The only remaining caller is `execute_turn_with_observer` in `runtime.rs`,
+//! which uses the legacy materialise → epistemic → crucible pipeline.
+//!
+//! # Original Design Principles
 //!
 //! - **Single source of truth** for recon command translation, file
 //!   reading, and epistemic loop control.

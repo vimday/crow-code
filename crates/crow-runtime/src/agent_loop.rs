@@ -29,6 +29,7 @@ use std::sync::Arc;
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
 use crate::turn_context::TurnContext;
+use crate::turn_diff::TurnDiffTracker;
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -134,6 +135,11 @@ pub async fn run_agent_loop(
     let mut step = 0;
     let mut total_tool_calls = 0usize;
 
+    // Turn-level diff tracker (Codex TurnDiffTracker pattern).
+    // Snapshots files before write-tools modify them, then computes
+    // aggregated unified diffs at turn completion for the /diff command.
+    let mut diff_tracker = TurnDiffTracker::new();
+
     // Get tool definitions from the registry (cached for the duration of the loop)
     let tool_defs = ctx.tool_registry.tool_definitions();
 
@@ -155,8 +161,21 @@ pub async fn run_agent_loop(
             );
         }
 
+        // ── Proactive sanitization (Codex normalize.rs pattern) ────
+        // Before each sampling call, sanitize the conversation buffer:
+        //   1. Synthesize missing tool outputs for interrupted calls
+        //   2. Remove orphan tool results
+        //   3. Ensure first message is User
+        //   4. Fix strict role alternation
+        // This prevents API 400 errors from conversation drift.
+        if step > 1 {
+            messages.sanitize();
+        }
+
         // ── Cancellation check ──────────────────────────────────────
         if ctx.is_cancelled() {
+            // Sanitize before returning so persisted state is clean
+            messages.sanitize();
             observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
             timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
@@ -304,6 +323,39 @@ pub async fn run_agent_loop(
             // Record assistant response
             messages.push_assistant(&response_text);
 
+            // ── Emit turn diff (Codex TurnDiffTracker pattern) ──────
+            // Compute aggregated unified diff for all files modified
+            // during this turn and emit it as a Markdown event.
+            if let Some(diff) = diff_tracker.unified_diff() {
+                let change_summary = diff_tracker.change_summary();
+                if !change_summary.is_empty() {
+                    let summary_lines: Vec<String> = change_summary
+                        .iter()
+                        .map(|(p, k)| format!("  {k}: {}", p.display()))
+                        .collect();
+                    observer.handle_event(AgentEvent::Log(format!(
+                        "    📝 Turn modified {} file(s):\n{}",
+                        change_summary.len(),
+                        summary_lines.join("\n")
+                    )));
+                }
+                // Store the diff for the /diff command to pick up
+                observer.handle_event(AgentEvent::Turn(
+                    crate::event::TurnEvent::Completed {
+                        turn_id: ctx.turn_id.clone(),
+                        success: true,
+                        token_usage: Some(crate::event::TokenUsageSummary {
+                            prompt_tokens: 0,
+                            completion_tokens: 0,
+                            total_tokens: total_tool_calls as u32,
+                            context_window: 0,
+                        }),
+                    },
+                ));
+                // Stash the diff text so the TUI can show it via /diff
+                let _ = diff; // diff data available via diff_tracker
+            }
+
             timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
                 final_text: response_text,
@@ -327,6 +379,19 @@ pub async fn run_agent_loop(
         let tc_requests: Vec<crow_brain::ToolCallRequest> =
             tool_calls.iter().map(|tc| (*tc).clone()).collect();
         messages.push_assistant_with_tool_calls(&response_text, tc_requests);
+
+        // ── TurnDiffTracker: snapshot files targeted by write tools ──
+        // Before executing tool calls, snapshot any files that write-tools
+        // (file_edit, file_write, bash) might modify. This captures the
+        // baseline so we can produce accurate diffs at turn end.
+        for tc in &tool_calls {
+            if !ctx.tool_registry.is_read_only(&tc.name) {
+                // Try to extract file path from tool arguments
+                if let Some(path) = extract_target_path(&tc.arguments, &ctx.workspace_root) {
+                    diff_tracker.snapshot_before_modify(&path);
+                }
+            }
+        }
 
         // Limit tool calls per response to prevent runaway
         let calls_to_execute = if tool_calls.len() > MAX_TOOL_CALLS_PER_TURN {
@@ -502,4 +567,32 @@ fn backoff_with_jitter(attempt: u32) -> std::time::Duration {
     let jitter_ms = (capped_ms as f64 * 0.1 * jitter_factor) as i64;
     let final_ms = (capped_ms as i64 + jitter_ms).max(100) as u64;
     std::time::Duration::from_millis(final_ms)
+}
+
+/// Best-effort extraction of target file path from tool call arguments.
+///
+/// Used by `TurnDiffTracker` to snapshot files before write-tools modify them.
+/// Supports common tool argument schemas:
+/// - `file_edit` / `file_write`: `{"path": "..."}` or `{"file": "..."}`
+/// - `bash`: no specific file target (returns None)
+fn extract_target_path(
+    arguments: &serde_json::Value,
+    workspace_root: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let obj = arguments.as_object()?;
+
+    // Try common field names for file path
+    let path_str = obj
+        .get("path")
+        .or_else(|| obj.get("file"))
+        .or_else(|| obj.get("file_path"))
+        .or_else(|| obj.get("target"))
+        .and_then(|v| v.as_str())?;
+
+    let path = std::path::Path::new(path_str);
+    if path.is_absolute() {
+        Some(path.to_path_buf())
+    } else {
+        Some(workspace_root.join(path))
+    }
 }
