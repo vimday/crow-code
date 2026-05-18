@@ -11,6 +11,10 @@ pub struct PromptBuilder {
     contract: String,
     platform_context: String,
     compaction_prompt: Option<String>,
+    /// Tool usage guidance section (Codex model_instructions pattern).
+    tool_instructions: String,
+    /// Permission and policy context.
+    permission_context: String,
 }
 
 impl Default for PromptBuilder {
@@ -31,6 +35,8 @@ impl PromptBuilder {
             contract: String::new(),
             platform_context: build_platform_context(),
             compaction_prompt: None,
+            tool_instructions: String::new(),
+            permission_context: String::new(),
         }
     }
 
@@ -113,6 +119,39 @@ impl PromptBuilder {
         self
     }
 
+    /// Inject tool usage instructions from registered tool definitions.
+    /// Generates a structured guidance section (Codex model_instructions pattern).
+    pub fn with_tool_instructions(mut self, tool_defs: &[serde_json::Value]) -> Self {
+        if !tool_defs.is_empty() {
+            self.tool_instructions.push_str("## Available Tools\n\n");
+            self.tool_instructions
+                .push_str("You have access to the following tools for this session:\n");
+            for def in tool_defs {
+                let name = def["function"]["name"].as_str().unwrap_or("unknown");
+                let desc = def["function"]["description"].as_str().unwrap_or("");
+                self.tool_instructions
+                    .push_str(&format!("- **{name}**: {desc}\n"));
+            }
+        }
+        self
+    }
+
+    /// Inject permission and policy context so the agent is aware of its boundaries.
+    pub fn with_permission_context(
+        mut self,
+        mode: &str,
+        workspace_root: &str,
+    ) -> Self {
+        self.permission_context = format!(
+            "## Policy\n\
+            - Permission mode: {mode}\n\
+            - Workspace root: {workspace_root}\n\
+            - You must not modify files outside the workspace root.\n\
+            - Long threads and compactions may reduce accuracy. Keep interactions focused."
+        );
+        self
+    }
+
     /// Returns the compaction prompt for this session (Codex-style handoff summary).
     pub fn compaction_prompt(&self) -> &str {
         self.compaction_prompt
@@ -129,36 +168,48 @@ impl PromptBuilder {
             sys_prompt.push_str("\n\n");
         }
 
-        // Layer 2: Project context (persistent memory, workspace rules)
+        // Layer 2: Permission and policy context
+        if !self.permission_context.is_empty() {
+            sys_prompt.push_str(&self.permission_context);
+            sys_prompt.push_str("\n\n");
+        }
+
+        // Layer 3: Project context (persistent memory, workspace rules)
         if !self.project_context.is_empty() {
             sys_prompt.push_str(&self.project_context);
             sys_prompt.push_str("\n\n");
         }
 
-        // Layer 3: Developer instructions (AGENTS.md / config)
+        // Layer 4: Developer instructions (AGENTS.md / config)
         if !self.developer_instructions.is_empty() {
             sys_prompt.push_str("--- developer instructions ---\n\n");
             sys_prompt.push_str(&self.developer_instructions);
             sys_prompt.push_str("\n\n");
         }
 
-        // Layer 3.5: Git context (claw-code pattern)
+        // Layer 4.5: Git context (claw-code pattern)
         if !self.git_context.is_empty() {
             sys_prompt.push_str(&self.git_context);
             sys_prompt.push_str("\n\n");
         }
 
-        // Layer 4: Context map (AST/repo structure)
+        // Layer 5: Tool usage instructions (Codex model_instructions pattern)
+        if !self.tool_instructions.is_empty() {
+            sys_prompt.push_str(&self.tool_instructions);
+            sys_prompt.push_str("\n\n");
+        }
+
+        // Layer 6: Context map (AST/repo structure)
         sys_prompt.push_str(&self.context_map);
         sys_prompt.push_str("\n\n");
 
-        // Layer 5: Skills and MCP tools
+        // Layer 7: Skills and MCP tools
         if !self.skills.is_empty() {
             sys_prompt.push_str(&self.skills);
             sys_prompt.push_str("\n\n");
         }
 
-        // Layer 6: Contract (constraints, snapshot ID)
+        // Layer 8: Contract (constraints, snapshot ID)
         sys_prompt.push_str(&self.contract);
 
         vec![

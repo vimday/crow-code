@@ -35,6 +35,12 @@ pub struct SubagentWorker {
     task_registry: crate::registry::TaskRegistry,
     tool_registry: Arc<crow_tools::ToolRegistry>,
     permissions: Arc<crow_tools::PermissionEnforcer>,
+    /// Inherited from parent TurnContext so subagents use the same model.
+    parent_model: String,
+    /// Inherited from parent TurnContext so subagents use the same provider.
+    parent_provider: String,
+    /// Parent cancellation token — derived child token propagates ESC to subagents.
+    parent_cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl SubagentWorker {
@@ -57,7 +63,20 @@ impl SubagentWorker {
             task_registry,
             tool_registry,
             permissions,
+            parent_model: String::new(),
+            parent_provider: String::new(),
+            parent_cancel: None,
         }
+    }
+
+    /// Inherit model/provider from parent TurnContext (Codex pattern).
+    /// Subagents should use the same LLM as their parent for consistency.
+    #[must_use]
+    pub fn with_parent_context(mut self, ctx: &TurnContext) -> Self {
+        self.parent_model = ctx.model.clone();
+        self.parent_provider = ctx.provider.clone();
+        self.parent_cancel = Some(ctx.child_cancel_token());
+        self
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -143,9 +162,21 @@ impl SubagentWorker {
         let file_state = Arc::new(crow_tools::FileStateStore::new());
         let background_manager = Arc::new(crow_tools::BackgroundProcessManager::new());
 
-        let turn_ctx = TurnContext::builder()
-            .model("subagent".to_string())
-            .provider("subagent".to_string())
+        // Inherit model/provider from parent, fallback to "subagent"
+        let model = if self.parent_model.is_empty() {
+            "subagent".to_string()
+        } else {
+            self.parent_model.clone()
+        };
+        let provider = if self.parent_provider.is_empty() {
+            "subagent".to_string()
+        } else {
+            self.parent_provider.clone()
+        };
+
+        let mut builder = TurnContext::builder()
+            .model(model)
+            .provider(provider)
             .compiler(Arc::new(self.compiler.clone()))
             .workspace_root(workspace_root.to_path_buf())
             .tool_registry(Arc::clone(&self.tool_registry))
@@ -153,7 +184,14 @@ impl SubagentWorker {
             .file_state(file_state)
             .background_manager(background_manager)
             .max_steps(self.role.max_steps)
-            .role(self.role.clone())
+            .role(self.role.clone());
+
+        // Propagate parent cancellation token (Codex pattern: ESC cancels child agents)
+        if let Some(parent_token) = &self.parent_cancel {
+            builder = builder.cancel_token(parent_token.child_token());
+        }
+
+        let turn_ctx = builder
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build subagent TurnContext: {e}"))?;
 
@@ -291,6 +329,29 @@ impl EventHandler for SubagentEventHandler<'_> {
                     message: format!("[{}:{}] {}", self.role.name, self.id, message),
                 })
             }
+            // Forward structured tool-call lifecycle events with subagent context
+            AgentEvent::ToolCallStarted {
+                call_id,
+                tool_name,
+                is_read_only,
+            } => self.parent.handle_event(AgentEvent::ToolCallStarted {
+                call_id,
+                tool_name: format!("[{}:{}] {}", self.role.name, self.id, tool_name),
+                is_read_only,
+            }),
+            AgentEvent::ToolCallCompleted {
+                call_id,
+                tool_name,
+                duration_ms,
+                output_bytes,
+                is_error,
+            } => self.parent.handle_event(AgentEvent::ToolCallCompleted {
+                call_id,
+                tool_name: format!("[{}:{}] {}", self.role.name, self.id, tool_name),
+                duration_ms,
+                output_bytes,
+                is_error,
+            }),
             // Forward structured turn lifecycle events to parent as-is
             AgentEvent::Turn(ev) => self.parent.handle_event(AgentEvent::Turn(ev)),
             // Forward phased errors with subagent context prefix

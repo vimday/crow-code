@@ -166,6 +166,15 @@ impl EventHandler for CliEventHandler {
                         self.print_trace("Phase", &format!("{phase}"), Color::AnsiValue(245));
                     }
                 }
+                TurnEvent::DiffGenerated {
+                    files_changed, ..
+                } => {
+                    self.print_trace(
+                        "Diff",
+                        &format!("{files_changed} file(s) changed"),
+                        Color::AnsiValue(117),
+                    );
+                }
             },
             AgentEvent::Thinking(_step, _max) => {
                 self.stop_spinner();
@@ -198,6 +207,27 @@ impl EventHandler for CliEventHandler {
             }
             AgentEvent::ActionComplete(desc) => {
                 self.print_trace("Action", &desc, Color::AnsiValue(114));
+            }
+            AgentEvent::ToolCallStarted {
+                tool_name,
+                is_read_only,
+                ..
+            } => {
+                let kind = if is_read_only { "read" } else { "write" };
+                self.update_spinner(format!("Running {tool_name} ({kind})"));
+            }
+            AgentEvent::ToolCallCompleted {
+                tool_name,
+                duration_ms,
+                is_error,
+                ..
+            } => {
+                let status = if is_error { "✘" } else { "✓" };
+                self.print_trace(
+                    "Tool",
+                    &format!("{status} {tool_name} ({duration_ms}ms)"),
+                    Color::AnsiValue(114),
+                );
             }
             AgentEvent::ReadFiles(paths) => {
                 if self.view_mode != ViewMode::Focus {

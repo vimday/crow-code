@@ -85,6 +85,12 @@ pub struct SystemPromptBuilder<'a> {
     base_prompt: Option<&'a str>,
     skills: &'a [Skill],
     memory_sections: Vec<String>,
+    /// Optional role overlay prompt (e.g., AgentRole.system_prompt_suffix).
+    /// Merged at the end of the base prompt to inject role-specific behavior.
+    role_overlay: Option<String>,
+    /// Tool usage instructions section.
+    /// Provides structured guidance on how to use each registered tool.
+    tool_instructions: Vec<String>,
 }
 
 const SKILL_SECTION_HEADER: &str = "\n\n# Skills\n\
@@ -117,6 +123,28 @@ impl<'a> SystemPromptBuilder<'a> {
         self
     }
 
+    /// Merge an agent role overlay into the system prompt.
+    /// This is used to inject role-specific behavioral instructions
+    /// (e.g., explorer = read-only, reviewer = code review focus).
+    #[must_use]
+    pub fn with_role_overlay(mut self, overlay: impl Into<String>) -> Self {
+        self.role_overlay = Some(overlay.into());
+        self
+    }
+
+    /// Add tool usage instructions from tool definitions.
+    /// Generates structured guidance for each tool (Codex model_instructions pattern).
+    #[must_use]
+    pub fn with_tool_instructions(mut self, tool_defs: &[serde_json::Value]) -> Self {
+        for def in tool_defs {
+            let name = def["function"]["name"].as_str().unwrap_or("unknown");
+            let desc = def["function"]["description"].as_str().unwrap_or("");
+            self.tool_instructions
+                .push(format!("- **{name}**: {desc}"));
+        }
+        self
+    }
+
     /// Build the final system prompt string.
     pub fn build(self) -> String {
         let base = self
@@ -126,10 +154,28 @@ impl<'a> SystemPromptBuilder<'a> {
 
         let mut prompt = base.to_string();
 
+        // Append role overlay (Codex AgentRole pattern)
+        if let Some(overlay) = &self.role_overlay {
+            if !overlay.is_empty() {
+                prompt.push_str("\n\n# Role\n");
+                prompt.push_str(overlay);
+            }
+        }
+
         // Append project memory sections
         for section in &self.memory_sections {
             prompt.push_str("\n\n");
             prompt.push_str(section);
+        }
+
+        // Append tool instructions section (Codex model_instructions pattern)
+        if !self.tool_instructions.is_empty() {
+            prompt.push_str("\n\n# Available Tools\n\n");
+            prompt.push_str("You have access to the following tools:\n");
+            for instruction in &self.tool_instructions {
+                prompt.push_str(instruction);
+                prompt.push('\n');
+            }
         }
 
         // Append skills section

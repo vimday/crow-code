@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::budget::ModelBudget;
@@ -93,6 +94,15 @@ pub struct TurnContext {
 
     /// Agent role for this turn (controls permissions, prompt overlay, limits).
     pub role: crate::role::AgentRole,
+
+    /// Turn-level diff tracker (Codex TurnDiffTracker pattern).
+    /// Snapshots files before write-tools modify them, then computes
+    /// aggregated unified diffs at turn completion for the `/diff` command.
+    /// Wrapped in `Mutex` so tool executors can snapshot from async contexts.
+    pub diff_tracker: Arc<Mutex<crate::turn_diff::TurnDiffTracker>>,
+
+    /// Optional MCP manager for MCP tool calls.
+    pub mcp_manager: Option<Arc<crate::mcp::McpManager>>,
 }
 
 impl TurnContext {
@@ -122,6 +132,27 @@ impl TurnContext {
     pub fn elapsed(&self) -> std::time::Duration {
         self.started_at.elapsed()
     }
+
+    /// Generate the compaction prompt string (Codex compact_prompt pattern).
+    ///
+    /// Returns a structured prompt that instructs the LLM to produce
+    /// a context-checkpoint summary for handoff to the next turn.
+    pub fn compact_prompt(&self) -> String {
+        format!(
+            "You are performing a CONTEXT CHECKPOINT COMPACTION for model '{model}' \
+            (turn {turn_id}, elapsed {elapsed:.1}s).\n\n\
+            Create a handoff summary for the next LLM that will resume the task.\n\n\
+            Include:\n\
+            - Current progress and key decisions made\n\
+            - Important context, constraints, or user preferences\n\
+            - What remains to be done (clear next steps)\n\
+            - Any critical data, examples, or references needed to continue\n\n\
+            Be concise, structured, and focused on helping the next LLM seamlessly continue the work.",
+            model = self.model,
+            turn_id = &self.turn_id[..8.min(self.turn_id.len())],
+            elapsed = self.elapsed().as_secs_f64(),
+        )
+    }
 }
 
 /// Builder for `TurnContext` — provides sensible defaults for testing
@@ -142,6 +173,7 @@ pub struct TurnContextBuilder {
     max_steps: Option<usize>,
     reasoning_effort: Option<String>,
     role: Option<crate::role::AgentRole>,
+    mcp_manager: Option<Arc<crate::mcp::McpManager>>,
 }
 
 
@@ -222,6 +254,11 @@ impl TurnContextBuilder {
         self
     }
 
+    pub fn mcp_manager(mut self, mcp: Arc<crate::mcp::McpManager>) -> Self {
+        self.mcp_manager = Some(mcp);
+        self
+    }
+
     /// Build the `TurnContext`, deriving defaults where possible.
     ///
     /// # Errors
@@ -264,6 +301,8 @@ impl TurnContextBuilder {
             reasoning_effort: self.reasoning_effort,
             timing: Arc::new(crate::turn_timing::TurnTimingState::new()),
             role: self.role.unwrap_or_default(),
+            diff_tracker: Arc::new(Mutex::new(crate::turn_diff::TurnDiffTracker::new())),
+            mcp_manager: self.mcp_manager,
         })
     }
 }

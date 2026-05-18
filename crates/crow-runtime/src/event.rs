@@ -26,6 +26,13 @@ pub enum TurnEvent {
     Aborted { turn_id: String, reason: String },
     /// The turn transitioned to a new phase.
     PhaseChanged { turn_id: String, phase: TurnPhase },
+    /// A unified diff was generated for this turn's changes.
+    /// Carries the diff text for the TUI `/diff` command.
+    DiffGenerated {
+        turn_id: String,
+        diff_text: String,
+        files_changed: usize,
+    },
 }
 
 /// Phases of a turn lifecycle — used for status bar and telemetry.
@@ -109,6 +116,22 @@ pub enum AgentEvent {
     StreamChunk(String),
     ActionStart(String),
     ActionComplete(String),
+    /// Structured tool call lifecycle — start (Codex pattern).
+    /// Carries tool name, call ID, and whether the tool is read-only.
+    ToolCallStarted {
+        call_id: String,
+        tool_name: String,
+        is_read_only: bool,
+    },
+    /// Structured tool call lifecycle — complete (Codex pattern).
+    /// Carries execution metadata for the InfoBar and history.
+    ToolCallCompleted {
+        call_id: String,
+        tool_name: String,
+        duration_ms: u64,
+        output_bytes: usize,
+        is_error: bool,
+    },
     PlanSubmitted(IntentPlan),
     CruciblePreflight(String),
     ReadFiles(Vec<String>),

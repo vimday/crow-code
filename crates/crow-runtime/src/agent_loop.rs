@@ -29,7 +29,6 @@ use std::sync::Arc;
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
 use crate::turn_context::TurnContext;
-use crate::turn_diff::TurnDiffTracker;
 
 // ─── Constants ──────────────────────────────────────────────────────
 
@@ -135,22 +134,21 @@ pub async fn run_agent_loop(
     let mut step = 0;
     let mut total_tool_calls = 0usize;
 
-    // Turn-level diff tracker (Codex TurnDiffTracker pattern).
-    // Snapshots files before write-tools modify them, then computes
-    // aggregated unified diffs at turn completion for the /diff command.
-    let mut diff_tracker = TurnDiffTracker::new();
+    // Turn-level diff tracker lives in TurnContext (Codex pattern).
+    // Reset it for this turn in case TurnContext is reused.
+    ctx.diff_tracker.lock().await.reset();
 
     // Get tool definitions from the registry (cached for the duration of the loop)
     let tool_defs = ctx.tool_registry.tool_definitions();
 
     // Create a ToolOrchestrator for this turn (owns the RwLock for parallel/serial dispatch)
-    let orchestrator = crow_tools::orchestrator::ToolOrchestrator::new(
+    let orchestrator = Arc::new(crow_tools::orchestrator::ToolOrchestrator::new(
         crow_tools::orchestrator::OrchestratorConfig {
             max_output_bytes: MAX_TOOL_OUTPUT_BYTES,
             max_parallel: MAX_TOOL_CALLS_PER_TURN,
             ..Default::default()
         },
-    );
+    ));
 
     loop {
         step += 1;
@@ -174,9 +172,16 @@ pub async fn run_agent_loop(
 
         // ── Cancellation check ──────────────────────────────────────
         if ctx.is_cancelled() {
-            // Sanitize before returning so persisted state is clean
+            // Post-cancellation sanitization (Codex pattern):
+            // Ensure conversation state is valid before returning.
             messages.sanitize();
             observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
+            observer.handle_event(AgentEvent::Turn(
+                crate::event::TurnEvent::Aborted {
+                    turn_id: ctx.turn_id.clone(),
+                    reason: "Cancelled by user".into(),
+                },
+            ));
             timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
                 final_text: String::new(),
@@ -323,11 +328,13 @@ pub async fn run_agent_loop(
             // Record assistant response
             messages.push_assistant(&response_text);
 
-            // ── Emit turn diff (Codex TurnDiffTracker pattern) ──────
+            // ── Emit turn diff via TurnEvent::DiffGenerated ─────────
             // Compute aggregated unified diff for all files modified
-            // during this turn and emit it as a Markdown event.
-            if let Some(diff) = diff_tracker.unified_diff() {
-                let change_summary = diff_tracker.change_summary();
+            // during this turn and emit it through the event system
+            // so the TUI /diff command can display it.
+            let diff_guard = ctx.diff_tracker.lock().await;
+            if let Some(diff_text) = diff_guard.unified_diff() {
+                let change_summary = diff_guard.change_summary();
                 if !change_summary.is_empty() {
                     let summary_lines: Vec<String> = change_summary
                         .iter()
@@ -339,22 +346,16 @@ pub async fn run_agent_loop(
                         summary_lines.join("\n")
                     )));
                 }
-                // Store the diff for the /diff command to pick up
+                // Emit structured diff event (replaces the old `let _ = diff;` discard)
                 observer.handle_event(AgentEvent::Turn(
-                    crate::event::TurnEvent::Completed {
+                    crate::event::TurnEvent::DiffGenerated {
                         turn_id: ctx.turn_id.clone(),
-                        success: true,
-                        token_usage: Some(crate::event::TokenUsageSummary {
-                            prompt_tokens: 0,
-                            completion_tokens: 0,
-                            total_tokens: total_tool_calls as u32,
-                            context_window: 0,
-                        }),
+                        diff_text,
+                        files_changed: change_summary.len(),
                     },
                 ));
-                // Stash the diff text so the TUI can show it via /diff
-                let _ = diff; // diff data available via diff_tracker
             }
+            drop(diff_guard);
 
             timing.total_elapsed = turn_start.elapsed();
             return Ok(AgentLoopResult {
@@ -384,11 +385,14 @@ pub async fn run_agent_loop(
         // Before executing tool calls, snapshot any files that write-tools
         // (file_edit, file_write, bash) might modify. This captures the
         // baseline so we can produce accurate diffs at turn end.
-        for tc in &tool_calls {
-            if !ctx.tool_registry.is_read_only(&tc.name) {
-                // Try to extract file path from tool arguments
-                if let Some(path) = extract_target_path(&tc.arguments, &ctx.workspace_root) {
-                    diff_tracker.snapshot_before_modify(&path);
+        {
+            let mut diff_guard = ctx.diff_tracker.lock().await;
+            for tc in &tool_calls {
+                if !ctx.tool_registry.is_read_only(&tc.name) {
+                    // Try to extract file path from tool arguments
+                    if let Some(path) = extract_target_path(&tc.arguments, &ctx.workspace_root) {
+                        diff_guard.snapshot_before_modify(&path);
+                    }
                 }
             }
         }
@@ -406,11 +410,10 @@ pub async fn run_agent_loop(
 
         // ── Execute tool calls via ToolOrchestrator ─────────────────
         // Each tool call is dispatched through the orchestrator's unified
-        // pipeline (approval → lock → timeout → truncation).
+        // pipeline (approval → lock → timeout → truncation → cancellation).
         let tool_exec_start = std::time::Instant::now();
         let mut tasks = Vec::with_capacity(calls_to_execute.len());
         for tc in calls_to_execute {
-            let registry = Arc::clone(&ctx.tool_registry);
             let tc_id = tc.id.clone();
             let tc_name = tc.name.clone();
             let tc_args = tc.arguments.clone();
@@ -419,9 +422,17 @@ pub async fn run_agent_loop(
             let fs = Arc::clone(&ctx.file_state);
             let bgm = Arc::clone(&ctx.background_manager);
             let delegator = ctx.subagent_delegator.clone();
-            let orch_lock = orchestrator.execution_lock();
-            let tool_cancel = ctx.child_cancel_token();
-            let tool_timeout = registry.tool_timeout(&tc_name);
+            let registry = Arc::clone(&ctx.tool_registry);
+            let cancel_token = ctx.child_cancel_token();
+            let orch = Arc::clone(&orchestrator);
+
+            // Emit structured ToolCallStarted event (Codex pattern)
+            let is_read_only = ctx.tool_registry.is_read_only(&tc_name);
+            observer.handle_event(AgentEvent::ToolCallStarted {
+                call_id: tc_id.clone(),
+                tool_name: tc_name.clone(),
+                is_read_only,
+            });
 
             tasks.push(tokio::spawn(async move {
                 let tool_ctx = crow_tools::ToolContext {
@@ -432,46 +443,17 @@ pub async fn run_agent_loop(
                     subagent_delegator: delegator,
                 };
 
-                // Determine lock type based on tool's read-only status
-                let is_read_only = registry.is_read_only(&tc_name);
+                // Dispatch through the orchestrator's unified pipeline
+                let result = orch.execute_tool(
+                    &tc_id,
+                    &tc_name,
+                    tc_args,
+                    &registry,
+                    &tool_ctx,
+                    cancel_token,
+                ).await;
 
-                // Execute with RwLock + cancellation + per-tool timeout
-                let result = tokio::select! {
-                    _ = tool_cancel.cancelled() => {
-                        Err(anyhow::anyhow!("Tool '{tc_name}' aborted by user"))
-                    }
-                    result = async {
-                        // Acquire appropriate lock
-                        if is_read_only {
-                            let _guard = orch_lock.read().await;
-                            tokio::time::timeout(
-                                tool_timeout,
-                                registry.execute(&tc_name, tc_args, &tool_ctx),
-                            ).await
-                        } else {
-                            let _guard = orch_lock.write().await;
-                            tokio::time::timeout(
-                                tool_timeout,
-                                registry.execute(&tc_name, tc_args, &tool_ctx),
-                            ).await
-                        }
-                    } => {
-                        match result {
-                            Ok(inner) => inner,
-                            Err(_) => Err(anyhow::anyhow!(
-                                "Tool '{tc_name}' timed out after {}s",
-                                tool_timeout.as_secs()
-                            )),
-                        }
-                    }
-                };
-
-                let output = match result {
-                    Ok(out) => out,
-                    Err(e) => crow_tools::ToolOutput::error(format!("Tool execution error: {e}")),
-                };
-
-                (tc_id, tc_name, output)
+                result
             }));
         }
 
@@ -480,31 +462,36 @@ pub async fn run_agent_loop(
 
         for join_result in results {
             match join_result {
-                Ok((tc_id, tc_name, output)) => {
+                Ok(tool_result) => {
                     total_tool_calls += 1;
 
-                    let mut content = output.content;
-                    if content.len() > MAX_TOOL_OUTPUT_BYTES {
-                        // Safe truncation at a char boundary
-                        let truncated = crow_patch::safe_truncate(&content, MAX_TOOL_OUTPUT_BYTES);
-                        content = format!(
-                            "{truncated}\n\n[SYSTEM WARNING: Tool output truncated to 100KB]"
-                        );
-                    }
+                    let content = tool_result.output.content.clone();
+                    let is_error = tool_result.output.is_error;
 
-                    // Safe preview for the event (avoid UTF-8 boundary panics)
+                    // Emit structured ToolCallCompleted event (Codex pattern)
+                    observer.handle_event(AgentEvent::ToolCallCompleted {
+                        call_id: tool_result.call_id.clone(),
+                        tool_name: tool_result.name.clone(),
+                        duration_ms: tool_result.duration.as_millis() as u64,
+                        output_bytes: content.len(),
+                        is_error,
+                    });
+
+                    // Safe preview for the legacy ActionComplete event
                     let preview = crow_patch::safe_truncate(&content, 120);
-                    observer
-                        .handle_event(AgentEvent::ActionComplete(format!("{tc_name}: {preview}")));
+                    observer.handle_event(AgentEvent::ActionComplete(
+                        format!("{}: {preview}", tool_result.name),
+                    ));
 
-                    if output.is_error {
+                    if is_error {
                         observer.handle_event(AgentEvent::Log(format!(
-                            "    ⚠️ Tool '{tc_name}' returned error"
+                            "    ⚠️ Tool '{}' returned error",
+                            tool_result.name
                         )));
                     }
 
                     // Push tool result into conversation
-                    messages.push_tool_result(&tc_id, &content);
+                    messages.push_tool_result(&tool_result.call_id, &content);
                 }
                 Err(e) => {
                     observer

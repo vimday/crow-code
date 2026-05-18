@@ -596,6 +596,14 @@ impl ConversationManager {
     /// only compress the conversation, so the trigger must measure the
     /// same scope.
     pub fn needs_compaction(&self) -> bool {
+        self.needs_compaction_with_pending(0)
+    }
+
+    /// Check compaction need accounting for `additional_bytes` that will be
+    /// added (e.g. pending tool output). This is the Codex pre-turn
+    /// compaction pattern — the caller can check "will this tool result
+    /// push us over?" before actually adding it.
+    pub fn needs_compaction_with_pending(&self, additional_bytes: usize) -> bool {
         let turns = self.conversation.len();
 
         // Don't compact if there are too few messages — nothing to compress.
@@ -606,8 +614,8 @@ impl ConversationManager {
             return false;
         }
 
-        let hist_bytes = self.history_bytes();
-        let hist_tokens = self.estimate_history_token_count();
+        let hist_bytes = self.history_bytes() + additional_bytes;
+        let hist_tokens = self.estimate_history_token_count() + (additional_bytes / 4);
 
         // Token-based: compact when **history** tokens exceed threshold.
         // With max_bytes = 768KB, this gives ~57K tokens of history before
@@ -617,6 +625,14 @@ impl ConversationManager {
         hist_bytes > (self.max_bytes * 3) / 10
             || turns > (self.max_history_turns * 8) / 10
             || hist_tokens > token_threshold
+    }
+
+    /// Estimate the token impact of a pending message before recording it.
+    /// Used for pre-turn compaction decisions (Codex pattern).
+    ///
+    /// Returns a rough estimate (4 chars ≈ 1 token).
+    pub fn estimate_pending_tokens(&self, content: &str) -> usize {
+        content.len() / 4
     }
 
     /// Approximate token count for the **entire** context (system + history).

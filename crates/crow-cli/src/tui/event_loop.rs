@@ -399,6 +399,16 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                     state.active_action = Some(format!("{phase}"));
                     state.turn_phase = Some(format!("{phase}"));
                 }
+                TurnEvent::DiffGenerated {
+                    diff_text,
+                    files_changed,
+                    ..
+                } => {
+                    if !diff_text.is_empty() {
+                        state.push_diff(&diff_text);
+                        state.push_log(format!("{files_changed} file(s) changed this turn."));
+                    }
+                }
             }
         }
         AgentEvent::Thinking(_, _) => {
@@ -453,6 +463,35 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         }
         AgentEvent::ActionComplete(desc) => {
             state.push_action(desc);
+        }
+        AgentEvent::ToolCallStarted {
+            tool_name,
+            is_read_only,
+            ..
+        } => {
+            let kind = if is_read_only { "read" } else { "write" };
+            let header = format!("{tool_name} ({kind})");
+            state.active_action = Some(header.clone());
+            state.status_indicator = Some(state::StatusIndicatorState {
+                header,
+                details: None,
+                details_max_lines: 3,
+            });
+        }
+        AgentEvent::ToolCallCompleted {
+            tool_name,
+            duration_ms,
+            output_bytes,
+            is_error,
+            ..
+        } => {
+            let status = if is_error { "✘" } else { "✓" };
+            let size_label = if output_bytes > 1024 {
+                format!("{}KB", output_bytes / 1024)
+            } else {
+                format!("{output_bytes}B")
+            };
+            state.push_action(format!("{status} {tool_name} ({duration_ms}ms, {size_label})"));
         }
         AgentEvent::ReadFiles(paths) => {
             if state.view_mode != ViewMode::Focus {
