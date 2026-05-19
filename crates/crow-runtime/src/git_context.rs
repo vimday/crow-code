@@ -134,6 +134,101 @@ impl GitContext {
             sections.join("\n\n")
         )
     }
+
+    /// Render git context as XML-tagged block (Codex `environment_context` pattern).
+    ///
+    /// Used for structured injection into system prompts, enabling the agent
+    /// to parse context boundaries cleanly.
+    pub fn render_xml(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+
+        let mut out = String::with_capacity(512);
+        out.push_str("<git_context>\n");
+
+        if let Some(ref branch) = self.branch {
+            out.push_str(&format!("  <branch>{branch}</branch>\n"));
+        }
+
+        if let Some(ref status) = self.status {
+            let trimmed = status.trim();
+            if !trimmed.is_empty() {
+                let clean = !trimmed.lines().skip(1).any(|l| !l.is_empty());
+                out.push_str(&format!(
+                    "  <working_tree clean=\"{clean}\">{trimmed}</working_tree>\n"
+                ));
+            }
+        }
+
+        if !self.recent_commits.is_empty() {
+            out.push_str("  <recent_commits>\n");
+            for commit in &self.recent_commits {
+                out.push_str(&format!("    <commit>{commit}</commit>\n"));
+            }
+            out.push_str("  </recent_commits>\n");
+        }
+
+        out.push_str("</git_context>");
+        out
+    }
+}
+
+/// Lightweight git status summary for quick checks (Codex pattern).
+///
+/// Unlike `GitContext`, this only captures branch and clean/dirty status
+/// without running expensive diff commands. Useful for subagent context
+/// injection where full diffs are not needed.
+#[derive(Debug, Clone)]
+pub struct GitStatusSummary {
+    /// Branch name.
+    pub branch: String,
+    /// Whether the working tree is clean.
+    pub is_clean: bool,
+    /// Number of modified files.
+    pub modified_count: usize,
+    /// Number of untracked files.
+    pub untracked_count: usize,
+}
+
+impl GitStatusSummary {
+    /// Detect a lightweight git status summary.
+    ///
+    /// Returns `None` if not inside a git repository.
+    pub fn detect(workspace_root: &Path) -> Option<Self> {
+        let branch = run_git(workspace_root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        let status_output =
+            run_git(workspace_root, &["status", "--porcelain"]).unwrap_or_default();
+
+        let modified_count = status_output
+            .lines()
+            .filter(|l| l.starts_with(" M") || l.starts_with("M ") || l.starts_with("MM"))
+            .count();
+        let untracked_count = status_output
+            .lines()
+            .filter(|l| l.starts_with("??"))
+            .count();
+        let is_clean = status_output.trim().is_empty();
+
+        Some(Self {
+            branch,
+            is_clean,
+            modified_count,
+            untracked_count,
+        })
+    }
+
+    /// One-line summary suitable for logging or status bar display.
+    pub fn one_line(&self) -> String {
+        if self.is_clean {
+            format!("🌿 {} (clean)", self.branch)
+        } else {
+            format!(
+                "🌿 {} ({} modified, {} untracked)",
+                self.branch, self.modified_count, self.untracked_count
+            )
+        }
+    }
 }
 
 /// Run a git command and return its trimmed stdout, or `None` on failure.

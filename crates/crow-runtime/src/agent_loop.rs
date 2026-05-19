@@ -27,7 +27,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::context::ConversationManager;
-use crate::event::{AgentEvent, EventHandler};
+use crate::event::{AgentEvent, EventHandler, TurnEvent, TurnPhase};
 use crate::turn_context::TurnContext;
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -141,6 +141,26 @@ pub async fn run_agent_loop(
     // Get tool definitions from the registry (cached for the duration of the loop)
     let tool_defs = ctx.tool_registry.tool_definitions();
 
+    // ── Emit TurnEvent::Started (Codex turn lifecycle) ───────────
+    observer.handle_event(AgentEvent::Turn(TurnEvent::Started {
+        turn_id: ctx.turn_id.clone(),
+    }));
+
+    // ── Inject environment context at turn start (Codex pattern) ─
+    // Give the agent situational awareness about its runtime
+    // environment: OS, shell, date, cwd.
+    let env_ctx = crow_brain::environment::CrowEnvironmentContext::from_workspace(
+        &ctx.workspace_root,
+    );
+    let env_block = env_ctx.render();
+    if !env_block.is_empty() && step == 0 {
+        // Inject as a synthetic user message so the agent sees it
+        // in its first sampling call.
+        messages.push_user(format!(
+            "[SYSTEM: Environment context for this turn]\n{env_block}"
+        ));
+    }
+
     // Create a ToolOrchestrator for this turn (owns the RwLock for parallel/serial dispatch)
     let orchestrator = Arc::new(crow_tools::orchestrator::ToolOrchestrator::new(
         crow_tools::orchestrator::OrchestratorConfig {
@@ -194,6 +214,10 @@ pub async fn run_agent_loop(
         // Check context budget BEFORE sending to the LLM. This prevents
         // context-window-exceeded errors from the provider.
         if messages.needs_compaction() {
+            observer.handle_event(AgentEvent::Turn(TurnEvent::PhaseChanged {
+                turn_id: ctx.turn_id.clone(),
+                phase: TurnPhase::Compacting,
+            }));
             observer.handle_event(AgentEvent::Log(
                 "    🔄 Pre-sampling compaction: context nearing limit...".into(),
             ));
@@ -211,6 +235,13 @@ pub async fn run_agent_loop(
             ));
         }
 
+        observer.handle_event(AgentEvent::Turn(TurnEvent::PhaseChanged {
+            turn_id: ctx.turn_id.clone(),
+            phase: TurnPhase::EpistemicLoop {
+                step: step as u32,
+                max_steps: ctx.max_steps as u32,
+            },
+        }));
         observer.handle_event(AgentEvent::StateChanged {
             from: "WaitingForInput".into(),
             to: "Streaming".into(),
@@ -358,6 +389,14 @@ pub async fn run_agent_loop(
             drop(diff_guard);
 
             timing.total_elapsed = turn_start.elapsed();
+
+            // ── Emit TurnEvent::Completed (Codex turn lifecycle) ─────
+            observer.handle_event(AgentEvent::Turn(TurnEvent::Completed {
+                turn_id: ctx.turn_id.clone(),
+                success: true,
+                token_usage: None,
+            }));
+
             return Ok(AgentLoopResult {
                 final_text: response_text,
                 tool_call_count: total_tool_calls,
@@ -366,6 +405,10 @@ pub async fn run_agent_loop(
         }
 
         // ── Tool calls requested ────────────────────────────────────
+        observer.handle_event(AgentEvent::Turn(TurnEvent::PhaseChanged {
+            turn_id: ctx.turn_id.clone(),
+            phase: TurnPhase::Applying,
+        }));
         observer.handle_event(AgentEvent::StateChanged {
             from: "Streaming".into(),
             to: "ExecutingTool".into(),
@@ -506,6 +549,10 @@ pub async fn run_agent_loop(
         // After tool results are added, check if context grew past budget.
         // This matches Codex's `run_auto_compact` mid-turn pattern.
         if messages.needs_compaction() {
+            observer.handle_event(AgentEvent::Turn(TurnEvent::PhaseChanged {
+                turn_id: ctx.turn_id.clone(),
+                phase: TurnPhase::Compacting,
+            }));
             observer.handle_event(AgentEvent::Log(
                 "    🔄 Mid-turn compaction: tool outputs grew context past budget...".into(),
             ));

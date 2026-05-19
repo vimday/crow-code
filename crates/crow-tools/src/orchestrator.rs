@@ -63,6 +63,22 @@ pub struct OrchestratorConfig {
     pub max_parallel: usize,
     /// Default timeout for tools that don't specify one.
     pub default_timeout: Duration,
+    /// Escalation policy when a tool is denied (Codex pattern).
+    pub escalation: EscalationPolicy,
+}
+
+/// Escalation policy when a tool call is denied (Codex orchestrator pattern).
+///
+/// When a tool call is denied due to permission restrictions, the
+/// escalation policy determines whether the orchestrator should retry
+/// with elevated permissions or return the denial immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EscalationPolicy {
+    /// Do not escalate — return the denial as-is.
+    #[default]
+    NoEscalation,
+    /// Log the denial but continue without retry.
+    LogAndContinue,
 }
 
 impl Default for OrchestratorConfig {
@@ -71,6 +87,7 @@ impl Default for OrchestratorConfig {
             max_output_bytes: 100 * 1024, // 100 KB
             max_parallel: 20,
             default_timeout: Duration::from_secs(120),
+            escalation: EscalationPolicy::default(),
         }
     }
 }
@@ -206,30 +223,75 @@ impl ToolOrchestrator {
     }
 
     /// Check if a tool call is approved for execution.
+    ///
+    /// Improved granularity: bash commands are analyzed to distinguish
+    /// read-only operations (cat, grep, find) from write operations.
     fn check_approval(
         &self,
         tool_name: &str,
-        _args: &serde_json::Value,
+        args: &serde_json::Value,
         ctx: &ToolContext<'_>,
     ) -> ApprovalDecision {
         // In DangerFullAccess mode, everything is auto-approved.
-        // Future: implement Guardian AI review for dangerous operations.
         if ctx.permissions.permission_mode == crate::PermissionMode::DangerFullAccess {
             return ApprovalDecision::Approved;
         }
 
         // For ReadOnly mode, block write tools
-        if ctx.permissions.permission_mode == crate::PermissionMode::ReadOnly
-            && (tool_name == "bash" || tool_name == "file_write" || tool_name == "file_edit")
-        {
-            return ApprovalDecision::Denied {
-                reason: format!(
-                    "Tool '{tool_name}' requires write access (running in read-only mode)"
-                ),
-            };
+        if ctx.permissions.permission_mode == crate::PermissionMode::ReadOnly {
+            match tool_name {
+                "file_write" | "file_edit" => {
+                    return ApprovalDecision::Denied {
+                        reason: format!(
+                            "Tool '{tool_name}' requires write access (running in read-only mode)"
+                        ),
+                    };
+                }
+                "bash"
+                    // Analyze bash command for write indicators
+                    if Self::is_bash_write_command(args) => {
+                        return ApprovalDecision::Denied {
+                            reason: "Bash command appears to modify files (running in read-only mode)".to_string(),
+                        };
+                    }
+                _ => {}
+            }
         }
 
         ApprovalDecision::Approved
+    }
+
+    /// Heuristic analysis of bash command arguments to detect write operations.
+    ///
+    /// Returns `true` if the command appears to modify the filesystem.
+    /// Conservative — some edge cases may slip through, but the important
+    /// destructive commands are caught.
+    fn is_bash_write_command(args: &serde_json::Value) -> bool {
+        let cmd = args
+            .get("command")
+            .or_else(|| args.get("cmd"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Destructive command prefixes
+        let write_indicators = [
+            "rm ", "rm\t", "rmdir",
+            "mv ", "mv\t",
+            "cp ", "cp\t",
+            "mkdir", "touch",
+            "chmod", "chown",
+            "sed -i", "sed --in-place",
+            "tee ", "tee\t",
+            ">", ">>",
+            "install ",
+            "npm install", "yarn add", "pip install",
+            "cargo add",
+        ];
+
+        let cmd_trimmed = cmd.trim();
+        write_indicators
+            .iter()
+            .any(|indicator| cmd_trimmed.starts_with(indicator) || cmd_trimmed.contains(indicator))
     }
 
     /// Truncate output content if it exceeds the limit.

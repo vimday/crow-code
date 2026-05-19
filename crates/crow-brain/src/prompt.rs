@@ -91,6 +91,12 @@ pub struct SystemPromptBuilder<'a> {
     /// Tool usage instructions section.
     /// Provides structured guidance on how to use each registered tool.
     tool_instructions: Vec<String>,
+    /// Structured environment context (Codex ContextualUserFragment pattern).
+    /// Renders as `<environment_context>` XML block.
+    environment_context: Option<crate::environment::CrowEnvironmentContext>,
+    /// Permission-aware instructions (Codex permissions_instructions pattern).
+    /// Renders as `<permissions_instructions>` XML block.
+    permissions_prompt: Option<crate::permissions_prompt::PermissionsPrompt>,
 }
 
 const SKILL_SECTION_HEADER: &str = "\n\n# Skills\n\
@@ -134,6 +140,22 @@ impl<'a> SystemPromptBuilder<'a> {
 
     /// Add tool usage instructions from tool definitions.
     /// Generates structured guidance for each tool (Codex model_instructions pattern).
+    /// Attach structured environment context (Codex `ContextualUserFragment` pattern).
+    /// Renders as `<environment_context>` XML block in the system prompt.
+    #[must_use]
+    pub fn with_environment(mut self, env: crate::environment::CrowEnvironmentContext) -> Self {
+        self.environment_context = Some(env);
+        self
+    }
+
+    /// Attach permission-aware instructions (Codex `permissions_instructions` pattern).
+    /// Tells the agent exactly what it can and cannot do.
+    #[must_use]
+    pub fn with_permissions(mut self, perms: crate::permissions_prompt::PermissionsPrompt) -> Self {
+        self.permissions_prompt = Some(perms);
+        self
+    }
+
     #[must_use]
     pub fn with_tool_instructions(mut self, tool_defs: &[serde_json::Value]) -> Self {
         for def in tool_defs {
@@ -160,6 +182,18 @@ impl<'a> SystemPromptBuilder<'a> {
                 prompt.push_str("\n\n# Role\n");
                 prompt.push_str(overlay);
             }
+        }
+
+        // Append structured environment context (Codex ContextualUserFragment)
+        if let Some(env) = &self.environment_context {
+            prompt.push_str("\n\n");
+            prompt.push_str(&env.render());
+        }
+
+        // Append permission instructions (Codex permissions_instructions)
+        if let Some(perms) = &self.permissions_prompt {
+            prompt.push_str("\n\n");
+            prompt.push_str(&perms.render());
         }
 
         // Append project memory sections

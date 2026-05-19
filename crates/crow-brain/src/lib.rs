@@ -28,4 +28,6 @@ pub use model_registry::{
 };
 pub use router::{build_client, describe_provider};
 pub use usage::TokenUsage;
+pub mod environment;
+pub mod permissions_prompt;
 pub mod prompt;
