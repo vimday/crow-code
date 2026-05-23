@@ -103,6 +103,10 @@ pub struct TurnContext {
 
     /// Optional MCP manager for MCP tool calls.
     pub mcp_manager: Option<Arc<crate::mcp::McpManager>>,
+
+    /// Observable agent status tracker (Codex `AgentStatusTracker` pattern).
+    /// Tracks lifecycle state transitions: PendingInit → Running → Completed/Interrupted/Errored.
+    pub status_tracker: Arc<crate::agent_status::AgentStatusTracker>,
 }
 
 impl TurnContext {
@@ -174,6 +178,7 @@ pub struct TurnContextBuilder {
     reasoning_effort: Option<String>,
     role: Option<crate::role::AgentRole>,
     mcp_manager: Option<Arc<crate::mcp::McpManager>>,
+    status_tracker: Option<Arc<crate::agent_status::AgentStatusTracker>>,
 }
 
 
@@ -259,6 +264,11 @@ impl TurnContextBuilder {
         self
     }
 
+    pub fn status_tracker(mut self, tracker: Arc<crate::agent_status::AgentStatusTracker>) -> Self {
+        self.status_tracker = Some(tracker);
+        self
+    }
+
     /// Build the `TurnContext`, deriving defaults where possible.
     ///
     /// # Errors
@@ -303,6 +313,7 @@ impl TurnContextBuilder {
             role: self.role.unwrap_or_default(),
             diff_tracker: Arc::new(Mutex::new(crate::turn_diff::TurnDiffTracker::new())),
             mcp_manager: self.mcp_manager,
+            status_tracker: self.status_tracker.unwrap_or_else(|| Arc::new(crate::agent_status::AgentStatusTracker::new())),
         })
     }
 }
@@ -318,6 +329,7 @@ impl std::fmt::Debug for TurnContext {
             .field("max_steps", &self.max_steps)
             .field("started_at", &self.started_at)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("status_tracker", &self.status_tracker)
             .finish_non_exhaustive()
     }
 }

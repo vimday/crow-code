@@ -65,6 +65,10 @@ pub struct OrchestratorConfig {
     pub default_timeout: Duration,
     /// Escalation policy when a tool is denied (Codex pattern).
     pub escalation: EscalationPolicy,
+    /// File ownership patterns from the agent role (Codex `AgentRole` pattern).
+    /// When non-empty, write tools are restricted to files matching at least one pattern.
+    /// Empty means all files are allowed.
+    pub file_ownership: Vec<String>,
 }
 
 /// Escalation policy when a tool call is denied (Codex orchestrator pattern).
@@ -88,6 +92,7 @@ impl Default for OrchestratorConfig {
             max_parallel: 20,
             default_timeout: Duration::from_secs(120),
             escalation: EscalationPolicy::default(),
+            file_ownership: Vec::new(),
         }
     }
 }
@@ -258,6 +263,27 @@ impl ToolOrchestrator {
             }
         }
 
+        // File ownership check (Codex AgentRole pattern)
+        // If file_ownership patterns are configured, deny writes to files
+        // not matching any pattern.
+        if !self.config.file_ownership.is_empty() {
+            let is_write_tool = matches!(tool_name, "file_write" | "file_edit" | "bash");
+            if is_write_tool {
+                if let Some(path) = args.get("path").or_else(|| args.get("file")).and_then(|v| v.as_str()) {
+                    let owned = self.config.file_ownership.iter().any(|pattern| {
+                        path.contains(pattern) || glob_matches(pattern, path)
+                    });
+                    if !owned {
+                        return ApprovalDecision::Denied {
+                            reason: format!(
+                                "File '{path}' is outside this role's ownership scope"
+                            ),
+                        };
+                    }
+                }
+            }
+        }
+
         ApprovalDecision::Approved
     }
 
@@ -315,4 +341,19 @@ impl Default for ToolOrchestrator {
     fn default() -> Self {
         Self::new(OrchestratorConfig::default())
     }
+}
+
+/// Simple glob pattern matching for file ownership checks.
+/// Supports `*` as wildcard and `**/` for recursive directory matching.
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix("**/") {
+        return path.ends_with(suffix) || path.contains(&format!("/{suffix}"));
+    }
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        return path.starts_with(prefix);
+    }
+    path.contains(pattern)
 }

@@ -170,6 +170,7 @@ impl SerialCrucible<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(deprecated)]
     async fn run_epoch(
         &self,
         messages: &mut ConversationManager,

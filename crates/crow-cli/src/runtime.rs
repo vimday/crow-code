@@ -98,7 +98,8 @@ pub struct SessionRuntime {
 pub struct NativeTurnResult {
     pub snapshot_id: SnapshotId,
     pub tool_call_count: usize,
-    pub timing: crow_runtime::agent_loop::TurnTiming,
+    pub timing_snapshot: Option<crow_runtime::turn_timing::TurnTimingSnapshot>,
+    pub metrics: crow_runtime::agent_loop::TurnMetrics,
 }
 
 impl SessionRuntime {
@@ -276,6 +277,7 @@ impl SessionRuntime {
             .await
     }
 
+    #[allow(deprecated)]
     pub async fn execute_turn_with_observer(
         &self,
         cfg: &CrowConfig,
@@ -588,9 +590,11 @@ impl SessionRuntime {
             crow_runtime::agent_loop::run_agent_loop(&turn_ctx, messages, observer).await?;
 
         // Log timing summary from AgentLoopResult (Codex TurnTimingState pattern).
-        observer.handle_event(crate::event::AgentEvent::Log(
-            result.timing.summary(),
-        ));
+        if let Some(ref snapshot) = result.timing_snapshot {
+            observer.handle_event(crate::event::AgentEvent::Log(
+                result.metrics.summary(snapshot),
+            ));
+        }
 
         // Emit accurate timing data from AgentLoopResult.
         // This flows back through ChannelEventHandler → EngineEvent → TUI InfoBar.
@@ -611,7 +615,8 @@ impl SessionRuntime {
         Ok(NativeTurnResult {
             snapshot_id,
             tool_call_count: result.tool_call_count,
-            timing: result.timing,
+            timing_snapshot: result.timing_snapshot,
+            metrics: result.metrics,
         })
     }
 
@@ -676,6 +681,7 @@ impl SessionRuntime {
         }
     }
 
+    #[allow(deprecated)]
     pub async fn generate_plan(&self, cfg: &CrowConfig, prompt: &str) -> Result<()> {
         use crate::evidence_report::*;
         use crow_workspace::PlanHydrator;
@@ -855,6 +861,7 @@ impl SessionRuntime {
         Ok(())
     }
 
+    #[allow(deprecated)]
     pub async fn resume(&self, cfg: &CrowConfig, session_id: &str) -> Result<()> {
         println!(
             "🦅 crow session resume — continuing session {}",

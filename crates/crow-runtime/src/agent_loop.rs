@@ -22,10 +22,14 @@
 //! - **CancellationToken propagation**: cancel reaches in-flight tool tasks via `tokio::select!`
 //! - **Per-tool timeouts**: from `Tool::timeout()` via ToolOrchestrator
 //! - **Context-window-exceeded recovery**: auto-compact and retry on overflow errors
+//! - **Role constraint enforcement**: max_steps, max_tool_calls, max_turn_duration from AgentRole
+//! - **AgentStatusTracker**: observable state machine updated at turn lifecycle boundaries
+//! - **TurnTimingState**: async-safe TTFT/TTFM/duration tracking via the canonical module
 
 use anyhow::Result;
 use std::sync::Arc;
 
+use crate::agent_status::AgentStatus;
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler, TurnEvent, TurnPhase};
 use crate::turn_context::TurnContext;
@@ -35,53 +39,42 @@ use crate::turn_context::TurnContext;
 /// Maximum output bytes from a tool result before truncation.
 const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024; // 100 KB
 
-/// Maximum number of tool calls to execute per response.
-const MAX_TOOL_CALLS_PER_TURN: usize = 20;
+/// Fallback maximum tool calls per response (overridden by role).
+const DEFAULT_MAX_TOOL_CALLS_PER_TURN: usize = 20;
 
 /// Maximum retries for transient LLM errors (inner retry loop).
 const MAX_LLM_RETRIES: u32 = 5;
 
-// ─── Turn Timing (Codex TurnTimingState pattern) ────────────────────
+/// Default turn-level timeout when the role doesn't specify one (10 minutes).
+const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// Timing data collected during a single agent turn.
-#[derive(Debug, Clone)]
-pub struct TurnTiming {
-    /// Total wall-clock time for the entire agent turn.
-    pub total_elapsed: std::time::Duration,
+// ─── Turn Metrics ───────────────────────────────────────────────────
+
+/// Supplementary turn metrics tracked inline during the agent loop.
+///
+/// The canonical async-safe timing (TTFT/TTFM/duration) lives in
+/// `TurnTimingState` (`turn_timing.rs`) and is accessed via `ctx.timing`.
+/// This struct captures additional counters that `TurnTimingState` doesn't
+/// track (tool execution time, compaction count, LLM call count).
+#[derive(Debug, Clone, Default)]
+pub struct TurnMetrics {
     /// Total time spent executing tool calls.
     pub tool_execution_time: std::time::Duration,
     /// Number of LLM API calls made during this turn (including retries).
     pub llm_call_count: u32,
     /// Number of pre-sampling compactions performed.
     pub compactions: u32,
-    /// Time to first token (TTFT) from the first LLM call.
-    pub time_to_first_token: Option<std::time::Duration>,
-    /// Timestamp when the turn started.
-    pub started_at: Option<std::time::Instant>,
 }
 
-impl Default for TurnTiming {
-    fn default() -> Self {
-        Self {
-            total_elapsed: std::time::Duration::ZERO,
-            tool_execution_time: std::time::Duration::ZERO,
-            llm_call_count: 0,
-            compactions: 0,
-            time_to_first_token: None,
-            started_at: None,
-        }
-    }
-}
-
-impl TurnTiming {
-    /// Return a human-readable summary of the turn timing.
-    pub fn summary(&self) -> String {
-        let total_ms = self.total_elapsed.as_millis();
-        let tool_ms = self.tool_execution_time.as_millis();
+impl TurnMetrics {
+    /// Return a human-readable summary combining these metrics with a timing snapshot.
+    pub fn summary(&self, snapshot: &crate::turn_timing::TurnTimingSnapshot) -> String {
+        let total_ms = snapshot.total_ms;
+        let tool_ms = self.tool_execution_time.as_millis() as u64;
         let llm_ms = total_ms.saturating_sub(tool_ms);
-        let ttft = self
-            .time_to_first_token
-            .map(|d| format!("{}ms", d.as_millis()))
+        let ttft = snapshot
+            .ttft_ms
+            .map(|ms| format!("{ms}ms"))
             .unwrap_or_else(|| "n/a".to_string());
         format!(
             "Turn: {total_ms}ms total, {llm_ms}ms LLM ({} calls), {tool_ms}ms tools, TTFT: {ttft}, {} compaction(s)",
@@ -101,8 +94,10 @@ pub struct AgentLoopResult {
     pub final_text: String,
     /// Total number of tool calls made during this turn.
     pub tool_call_count: usize,
-    /// Turn timing data (Codex TurnTimingState pattern).
-    pub timing: TurnTiming,
+    /// Canonical timing snapshot (TTFT, TTFM, total duration).
+    pub timing_snapshot: Option<crate::turn_timing::TurnTimingSnapshot>,
+    /// Supplementary turn metrics (tool time, LLM calls, compactions).
+    pub metrics: TurnMetrics,
 }
 
 // ─── Agent Loop ─────────────────────────────────────────────────────
@@ -123,16 +118,66 @@ pub struct AgentLoopResult {
 pub async fn run_agent_loop(
     ctx: &TurnContext,
     messages: &mut ConversationManager,
-    mut observer: &mut dyn EventHandler,
+    observer: &mut dyn EventHandler,
 ) -> Result<AgentLoopResult> {
-    let turn_start = std::time::Instant::now();
-    let mut timing = TurnTiming {
-        started_at: Some(turn_start),
-        ..TurnTiming::default()
+    // ── Role-aware constraints ───────────────────────────────────
+    // Merge role limits with TurnContext defaults. The tighter bound wins.
+    let effective_max_steps = ctx.max_steps.min(ctx.role.max_steps);
+    let effective_max_tool_calls = ctx.role.max_tool_calls_per_turn.min(DEFAULT_MAX_TOOL_CALLS_PER_TURN);
+    let turn_timeout = if ctx.role.max_turn_duration.as_secs() > 0 {
+        ctx.role.max_turn_duration
+    } else {
+        DEFAULT_TURN_TIMEOUT
     };
-    let mut first_token_recorded = false;
+
+    // Wrap the entire loop body in a turn-level timeout (Codex pattern).
+    // Subagents already have a 120s hard timeout; this provides the same
+    // safety net for the main agent loop.
+    match tokio::time::timeout(
+        turn_timeout,
+        run_agent_loop_inner(ctx, messages, observer, effective_max_steps, effective_max_tool_calls),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            // Turn-level timeout exceeded
+            observer.handle_event(AgentEvent::Turn(TurnEvent::Aborted {
+                turn_id: ctx.turn_id.clone(),
+                reason: format!("Turn exceeded {}s timeout", turn_timeout.as_secs()),
+            }));
+            ctx.status_tracker.set(AgentStatus::Errored(
+                format!("Turn timeout after {}s", turn_timeout.as_secs()),
+            ));
+            messages.sanitize();
+            let snapshot = ctx.timing.snapshot().await;
+            Ok(AgentLoopResult {
+                final_text: String::new(),
+                tool_call_count: 0,
+                timing_snapshot: snapshot,
+                metrics: TurnMetrics::default(),
+            })
+        }
+    }
+}
+
+/// Inner agent loop body — extracted so we can wrap it in `tokio::time::timeout`.
+async fn run_agent_loop_inner(
+    ctx: &TurnContext,
+    messages: &mut ConversationManager,
+    mut observer: &mut dyn EventHandler,
+    effective_max_steps: usize,
+    effective_max_tool_calls: usize,
+) -> Result<AgentLoopResult> {
+    let mut metrics = TurnMetrics::default();
     let mut step = 0;
     let mut total_tool_calls = 0usize;
+
+    // ── Wire canonical TurnTimingState (replaces inline TurnTiming) ──
+    ctx.timing.mark_turn_started().await;
+
+    // ── Wire AgentStatusTracker (Codex observable state machine) ─────
+    ctx.status_tracker.set(AgentStatus::Running);
 
     // Turn-level diff tracker lives in TurnContext (Codex pattern).
     // Reset it for this turn in case TurnContext is reused.
@@ -153,7 +198,7 @@ pub async fn run_agent_loop(
         &ctx.workspace_root,
     );
     let env_block = env_ctx.render();
-    if !env_block.is_empty() && step == 0 {
+    if !env_block.is_empty() {
         // Inject as a synthetic user message so the agent sees it
         // in its first sampling call.
         messages.push_user(format!(
@@ -165,17 +210,20 @@ pub async fn run_agent_loop(
     let orchestrator = Arc::new(crow_tools::orchestrator::ToolOrchestrator::new(
         crow_tools::orchestrator::OrchestratorConfig {
             max_output_bytes: MAX_TOOL_OUTPUT_BYTES,
-            max_parallel: MAX_TOOL_CALLS_PER_TURN,
+            max_parallel: effective_max_tool_calls,
+            file_ownership: ctx.role.file_ownership.clone(),
             ..Default::default()
         },
     ));
 
     loop {
         step += 1;
-        if step > ctx.max_steps {
+        if step > effective_max_steps {
+            ctx.status_tracker.set(AgentStatus::Errored(
+                format!("Exceeded {effective_max_steps} steps"),
+            ));
             anyhow::bail!(
-                "Agent loop exceeded {} steps without completing. Aborting.",
-                ctx.max_steps
+                "Agent loop exceeded {effective_max_steps} steps without completing. Aborting."
             );
         }
 
@@ -202,11 +250,13 @@ pub async fn run_agent_loop(
                     reason: "Cancelled by user".into(),
                 },
             ));
-            timing.total_elapsed = turn_start.elapsed();
+            ctx.status_tracker.set(AgentStatus::Interrupted);
+            let snapshot = ctx.timing.snapshot().await;
             return Ok(AgentLoopResult {
                 final_text: String::new(),
                 tool_call_count: total_tool_calls,
-                timing,
+                timing_snapshot: snapshot,
+                metrics,
             });
         }
 
@@ -227,7 +277,7 @@ pub async fn run_agent_loop(
                     "    ⚠️ Pre-sampling compaction failed: {e}"
                 )));
             }
-            timing.compactions += 1;
+            metrics.compactions += 1;
             observer.handle_event(AgentEvent::Compacting { active: false });
             // Codex pattern: warn user about accuracy degradation after compaction
             observer.handle_event(AgentEvent::Log(
@@ -239,14 +289,14 @@ pub async fn run_agent_loop(
             turn_id: ctx.turn_id.clone(),
             phase: TurnPhase::EpistemicLoop {
                 step: step as u32,
-                max_steps: ctx.max_steps as u32,
+                max_steps: effective_max_steps as u32,
             },
         }));
         observer.handle_event(AgentEvent::StateChanged {
             from: "WaitingForInput".into(),
             to: "Streaming".into(),
         });
-        observer.handle_event(AgentEvent::Thinking(step as u32, ctx.max_steps as u32));
+        observer.handle_event(AgentEvent::Thinking(step as u32, effective_max_steps as u32));
 
         // ── Stream LLM response with tools (inner retry loop) ───────
         let response = {
@@ -267,7 +317,7 @@ pub async fn run_agent_loop(
 
             let mut adapter = ToolObserverAdapter(observer);
             let mut retry_count = 0u32;
-            let llm_call_start = std::time::Instant::now();
+            let _llm_call_start = std::time::Instant::now();
 
             let result = loop {
                 // Check cancellation before each LLM attempt
@@ -286,12 +336,9 @@ pub async fn run_agent_loop(
                     .await
                 {
                     Ok(resp) => {
-                        timing.llm_call_count += 1;
-                        // Record TTFT on first successful response
-                        if !first_token_recorded {
-                            first_token_recorded = true;
-                            timing.time_to_first_token = Some(llm_call_start.elapsed());
-                        }
+                        metrics.llm_call_count += 1;
+                        // Record TTFT via canonical TurnTimingState
+                        ctx.timing.record_first_token().await;
                         break Ok(resp);
                     }
                     Err(ref brain_err) if is_context_overflow(brain_err) => {
@@ -329,7 +376,7 @@ pub async fn run_agent_loop(
                             });
                         }
 
-                        tokio::time::sleep(backoff_with_jitter(retry_count)).await;
+                        tokio::time::sleep(crate::turn_timing::backoff_with_jitter(retry_count)).await;
                     }
                     Err(e) => break Err(e),
                 }
@@ -388,7 +435,9 @@ pub async fn run_agent_loop(
             }
             drop(diff_guard);
 
-            timing.total_elapsed = turn_start.elapsed();
+            // Record first complete message via canonical TurnTimingState
+            ctx.timing.record_first_message().await;
+            let snapshot = ctx.timing.snapshot().await;
 
             // ── Emit TurnEvent::Completed (Codex turn lifecycle) ─────
             observer.handle_event(AgentEvent::Turn(TurnEvent::Completed {
@@ -396,11 +445,13 @@ pub async fn run_agent_loop(
                 success: true,
                 token_usage: None,
             }));
+            ctx.status_tracker.set(AgentStatus::Completed(None));
 
             return Ok(AgentLoopResult {
                 final_text: response_text,
                 tool_call_count: total_tool_calls,
-                timing,
+                timing_snapshot: snapshot,
+                metrics,
             });
         }
 
@@ -440,13 +491,13 @@ pub async fn run_agent_loop(
             }
         }
 
-        // Limit tool calls per response to prevent runaway
-        let calls_to_execute = if tool_calls.len() > MAX_TOOL_CALLS_PER_TURN {
+        // Limit tool calls per response to prevent runaway (role-aware)
+        let calls_to_execute = if tool_calls.len() > effective_max_tool_calls {
             observer.handle_event(AgentEvent::Log(format!(
-                "    ⚠️ Tool call limit: executing first {MAX_TOOL_CALLS_PER_TURN} of {} calls",
+                "    ⚠️ Tool call limit: executing first {effective_max_tool_calls} of {} calls",
                 tool_calls.len()
             )));
-            &tool_calls[..MAX_TOOL_CALLS_PER_TURN]
+            &tool_calls[..effective_max_tool_calls]
         } else {
             &tool_calls
         };
@@ -537,13 +588,24 @@ pub async fn run_agent_loop(
                     messages.push_tool_result(&tool_result.call_id, &content);
                 }
                 Err(e) => {
+                    // Synthesize a tool result for the panicked call to prevent
+                    // orphan tool_call → API 400 errors (Codex ensure_tool_call_outputs pattern).
+                    let _panic_msg = format!("[tool execution panicked: {e}]");
                     observer
                         .handle_event(AgentEvent::Error(format!("Tool execution panicked: {e}")));
+
+                    // We need the call_id from the original request to push a matching result.
+                    // Since join_all preserves order, we can correlate by index.
+                    // However, we don't have the call_id here. The sanitize() call
+                    // at the top of the next iteration will synthesize missing outputs,
+                    // but we should push an explicit one when possible.
+                    // For now, the sanitize() safety net handles this case.
+                    total_tool_calls += 1;
                 }
             }
         }
 
-        timing.tool_execution_time += tool_exec_start.elapsed();
+        metrics.tool_execution_time += tool_exec_start.elapsed();
 
         // ── Mid-turn compaction (post-tool) ─────────────────────────
         // After tool results are added, check if context grew past budget.
@@ -562,7 +624,7 @@ pub async fn run_agent_loop(
                     "    ⚠️ Mid-turn compaction failed: {e}"
                 )));
             }
-            timing.compactions += 1;
+            metrics.compactions += 1;
             observer.handle_event(AgentEvent::Compacting { active: false });
             // Codex pattern: warn user about accuracy degradation
             observer.handle_event(AgentEvent::Log(
@@ -581,27 +643,9 @@ fn is_context_overflow(err: &crow_brain::BrainError) -> bool {
         || msg.contains("token limit")
 }
 
-/// Exponential backoff with ±10% random jitter (Codex pattern).
-///
-/// Base delay: 200ms, doubling per attempt. Jitter is ±10% of the computed
-/// delay, using system time nanos as entropy source to avoid a `rand` dependency.
-/// This decorrelates retry storms when multiple agents hit rate limits simultaneously.
-fn backoff_with_jitter(attempt: u32) -> std::time::Duration {
-    let base_ms = 200u64;
-    let exp_ms = base_ms.saturating_mul(2u64.saturating_pow(attempt));
-    // Cap at 30 seconds
-    let capped_ms = exp_ms.min(30_000);
-    // ±10% jitter using system time nanos as a cheap entropy source
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    // Map nanos to [-1.0, 1.0) range, then scale to ±10%
-    let jitter_factor = (nanos as f64 / u32::MAX as f64) * 2.0 - 1.0;
-    let jitter_ms = (capped_ms as f64 * 0.1 * jitter_factor) as i64;
-    let final_ms = (capped_ms as i64 + jitter_ms).max(100) as u64;
-    std::time::Duration::from_millis(final_ms)
-}
+// `backoff_with_jitter` is now re-exported from `crate::turn_timing`.
+// The duplicate implementation that was here has been removed to
+// consolidate on a single canonical implementation.
 
 /// Best-effort extraction of target file path from tool call arguments.
 ///

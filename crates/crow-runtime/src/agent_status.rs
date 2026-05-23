@@ -76,6 +76,7 @@ impl std::fmt::Display for AgentStatus {
 ///
 /// Allows multiple subscribers to observe state transitions without
 /// polling. Each call to `set()` notifies all watchers.
+#[derive(Debug)]
 pub struct AgentStatusTracker {
     tx: watch::Sender<AgentStatus>,
     rx: watch::Receiver<AgentStatus>,

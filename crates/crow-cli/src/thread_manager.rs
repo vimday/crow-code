@@ -268,12 +268,22 @@ impl ThreadManager {
                         )));
                         // Emit timing summary populated from AgentLoopResult
                         // (replaces the previous placeholder zeros)
-                        let timing_summary = crow_runtime::event::TurnTimingSummary {
-                            total_ms: native_result.timing.total_elapsed.as_millis() as u64,
-                            tool_ms: native_result.timing.tool_execution_time.as_millis() as u64,
-                            llm_calls: native_result.timing.llm_call_count,
-                            compactions: native_result.timing.compactions,
-                            ttft_ms: native_result.timing.time_to_first_token.map(|d| d.as_millis() as u64),
+                        let timing_summary = if let Some(ref snap) = native_result.timing_snapshot {
+                            crow_runtime::event::TurnTimingSummary {
+                                total_ms: snap.total_ms,
+                                tool_ms: native_result.metrics.tool_execution_time.as_millis() as u64,
+                                llm_calls: native_result.metrics.llm_call_count,
+                                compactions: native_result.metrics.compactions,
+                                ttft_ms: snap.ttft_ms,
+                            }
+                        } else {
+                            crow_runtime::event::TurnTimingSummary {
+                                total_ms: 0,
+                                tool_ms: native_result.metrics.tool_execution_time.as_millis() as u64,
+                                llm_calls: native_result.metrics.llm_call_count,
+                                compactions: native_result.metrics.compactions,
+                                ttft_ms: None,
+                            }
                         };
                         let _ = ui_tx.send(EngineEvent::TurnComplete(true, Some(timing_summary)));
 

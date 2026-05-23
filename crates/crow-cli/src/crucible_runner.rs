@@ -212,6 +212,7 @@ pub(crate) async fn apply_winning_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(deprecated)]
 pub(crate) async fn run_mcts_crucible(
     mcts_config: &crate::mcts::MctsConfig,
     profile: &crow_probe::types::ProjectProfile,
