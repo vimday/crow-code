@@ -37,9 +37,19 @@ pub enum ActivePopup {
     },
 }
 
+/// Threshold: pastes with more lines than this get collapsed into a
+/// placeholder in the composer (Claude Code behavior). The full content
+/// is stored in `paste_attachments` and expanded on submit.
+const PASTE_COLLAPSE_LINES: usize = 5;
+
 pub struct ComposerComponent<'a> {
     pub textarea: TextArea<'a>,
     pub active_popup: ActivePopup,
+    /// Paste attachments: when a large paste is collapsed into a
+    /// placeholder, the full text is stored here keyed by a monotonic
+    /// index. On submit, placeholders are expanded back.
+    pub paste_attachments: Vec<String>,
+    paste_counter: usize,
 }
 
 impl<'a> Default for ComposerComponent<'a> {
@@ -70,6 +80,8 @@ impl<'a> ComposerComponent<'a> {
         Self {
             textarea: make_textarea(),
             active_popup: ActivePopup::None,
+            paste_attachments: Vec::new(),
+            paste_counter: 0,
         }
     }
 
@@ -77,6 +89,30 @@ impl<'a> ComposerComponent<'a> {
     fn reset_textarea(&mut self) {
         self.textarea = make_textarea();
         self.active_popup = ActivePopup::None;
+        self.paste_attachments.clear();
+        self.paste_counter = 0;
+    }
+
+    /// Replace `[Pasted text #N: ...]` placeholders with the original
+    /// content stored in `paste_attachments`. Called just before submit.
+    fn expand_paste_placeholders(&self, text: &str) -> String {
+        if self.paste_attachments.is_empty() {
+            return text.to_string();
+        }
+        let mut result = text.to_string();
+        for (i, content) in self.paste_attachments.iter().enumerate() {
+            let idx = i + 1; // 1-indexed
+            // Match the placeholder pattern we insert. Because the
+            // format_bytes output varies, match up to the `]`.
+            let prefix = format!("[Pasted text #{idx}:");
+            if let Some(start) = result.find(&prefix) {
+                if let Some(end_offset) = result[start..].find(']') {
+                    let end = start + end_offset + 1;
+                    result.replace_range(start..end, content);
+                }
+            }
+        }
+        result
     }
 
     pub fn get_popup_height(&self, state: &AppState) -> u16 {
@@ -99,52 +135,50 @@ impl<'a> Component for ComposerComponent<'a> {
     fn handle_event(&mut self, event: &Event, state: &mut AppState) -> Result<Option<TuiAction>> {
         // Handle bracketed paste events (Ctrl+V / terminal paste)
         if let Event::Paste(ref text) = event {
-            // ── Paste size feedback (Codex / Claude Code parity) ─────
-            // Quietly insert short pastes; for large pastes show a
-            // status hint so the user knows the buffer just got loaded
-            // with a wall of text (and could trim before submitting).
-            const SOFT_THRESHOLD: usize = 4 * 1024; // 4 KB
-            const HARD_THRESHOLD: usize = 64 * 1024; // 64 KB
             let bytes = text.len();
-            let lines = text.lines().count();
+            let line_count = text.lines().count();
 
-            for line in text.lines() {
-                self.textarea.insert_str(line);
-            }
-            // Preserve newlines between lines (lines() drops them).
-            // tui-textarea's insert_newline is awkward to drive in a
-            // tight loop; we re-feed a single newline per separator.
-            // Note: tui_textarea's `insert_str` does not split on '\n',
-            // so we issue an explicit newline keypress per line break.
-            // This matches the prior behavior — most pastes are
-            // multi-line code blocks and we want them kept multi-line.
-            let separators = text
-                .as_bytes()
-                .iter()
-                .filter(|&&b| b == b'\n')
-                .count();
-            for _ in 0..separators {
-                self.textarea.insert_newline();
-            }
+            // ── Claude Code behavior: collapse large pastes ─────────
+            // Short pastes (<= PASTE_COLLAPSE_LINES lines AND < 4KB):
+            //   insert verbatim with proper newlines.
+            // Large pastes:
+            //   store the full content as an attachment and insert a
+            //   compact placeholder like `[Pasted text #1: 245 lines]`
+            //   so the composer stays readable. On submit, the
+            //   placeholder is expanded back to full content.
+            const SOFT_THRESHOLD: usize = 4 * 1024;
 
-            if bytes >= HARD_THRESHOLD {
-                state.show_status(
-                    crate::tui::state::StatusMessage::warn(format!(
-                        "Pasted {} bytes ({} lines) — Ctrl+U clears, Shift+Enter newlines",
-                        format_bytes(bytes),
-                        lines
-                    )),
-                    6000,
+            if line_count > PASTE_COLLAPSE_LINES || bytes >= SOFT_THRESHOLD {
+                // Collapse into placeholder
+                self.paste_counter += 1;
+                let idx = self.paste_counter;
+                self.paste_attachments.push(text.clone());
+                let placeholder = format!(
+                    "[Pasted text #{idx}: {line_count} lines, {}]",
+                    format_bytes(bytes)
                 );
-            } else if bytes >= SOFT_THRESHOLD {
+                self.textarea.insert_str(&placeholder);
                 state.show_status(
                     crate::tui::state::StatusMessage::info(format!(
-                        "Pasted {} ({} lines)",
-                        format_bytes(bytes),
-                        lines
+                        "Attached paste #{idx} ({line_count} lines) — will expand on submit"
                     )),
-                    3000,
+                    4000,
                 );
+            } else {
+                // Short paste: insert verbatim with proper newlines.
+                // tui-textarea's insert_str does NOT handle '\n', so we
+                // must interleave insert_str + insert_newline per line.
+                let lines_vec: Vec<&str> = text.lines().collect();
+                for (i, line) in lines_vec.iter().enumerate() {
+                    self.textarea.insert_str(line);
+                    if i < lines_vec.len() - 1 {
+                        self.textarea.insert_newline();
+                    }
+                }
+                // If the original text ends with a newline, add it.
+                if text.ends_with('\n') {
+                    self.textarea.insert_newline();
+                }
             }
             return Ok(None);
         }
@@ -296,7 +330,9 @@ impl<'a> Component for ComposerComponent<'a> {
             // Normal textarea handling — Enter submits (Shift+Enter = newline)
             if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                 let lines = self.textarea.lines().to_vec();
-                let text = lines.join("\n");
+                let mut text = lines.join("\n");
+                // Expand paste placeholders back to full content.
+                text = self.expand_paste_placeholders(&text);
                 self.reset_textarea();
                 return Ok(Some(TuiAction::SubmitCommand(text)));
             }
