@@ -502,10 +502,11 @@ impl Tool for ReadFilesTool {
             }
         };
 
-        // Record file state for staleness tracking
+        // Record file state for staleness tracking (hash-augmented)
         if let Some(ref store) = ctx.file_state {
             let mtime = crate::file_state::get_file_mtime(&abs_path).await;
-            store.record(abs_path, mtime);
+            let hash = crate::file_state::hash_file_on_disk(&abs_path).await;
+            store.record_with_hash(abs_path, mtime, hash);
         }
 
         Ok(ToolOutput::success(content))

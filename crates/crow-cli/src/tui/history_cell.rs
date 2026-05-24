@@ -364,3 +364,154 @@ impl HistoryCell for DiffCell {
         &self.payload
     }
 }
+
+/// Status of a tool call card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCardStatus {
+    Ok,
+    Error,
+    Cached,
+    Retried,
+}
+
+/// A polished tool-call card with status icon, tool name, duration, output
+/// size, and a one-line preview. Replaces the flat ActionCell for tool
+/// completions so multi-step turns are visually scannable.
+#[derive(Debug, Clone)]
+pub struct ToolCallCell {
+    pub tool_name: String,
+    pub status: ToolCardStatus,
+    pub duration_ms: u64,
+    pub output_bytes: usize,
+    pub preview: String,
+    pub retry_count: u32,
+    pub is_read_only: bool,
+}
+
+impl ToolCallCell {
+    pub fn from_completed(
+        tool_name: String,
+        duration_ms: u64,
+        output_bytes: usize,
+        is_error: bool,
+        preview: String,
+        retry_count: u32,
+        from_cache: bool,
+    ) -> Self {
+        let status = if is_error {
+            ToolCardStatus::Error
+        } else if from_cache {
+            ToolCardStatus::Cached
+        } else if retry_count > 0 {
+            ToolCardStatus::Retried
+        } else {
+            ToolCardStatus::Ok
+        };
+        Self {
+            tool_name,
+            status,
+            duration_ms,
+            output_bytes,
+            preview,
+            retry_count,
+            is_read_only: false,
+        }
+    }
+
+    fn icon(&self) -> &'static str {
+        match self.status {
+            ToolCardStatus::Ok => "✓",
+            ToolCardStatus::Error => "✘",
+            ToolCardStatus::Cached => "💾",
+            ToolCardStatus::Retried => "🔁",
+        }
+    }
+
+    fn icon_color(&self) -> Color {
+        match self.status {
+            ToolCardStatus::Ok => Color::Green,
+            ToolCardStatus::Error => Color::Red,
+            ToolCardStatus::Cached => Color::Cyan,
+            ToolCardStatus::Retried => Color::Yellow,
+        }
+    }
+
+    fn format_size(&self) -> String {
+        if self.output_bytes >= 1024 * 1024 {
+            format!("{:.1}MB", self.output_bytes as f64 / (1024.0 * 1024.0))
+        } else if self.output_bytes >= 1024 {
+            format!("{:.1}KB", self.output_bytes as f64 / 1024.0)
+        } else {
+            format!("{}B", self.output_bytes)
+        }
+    }
+
+    fn format_duration(&self) -> String {
+        if self.duration_ms >= 60_000 {
+            let secs = self.duration_ms / 1000;
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        } else if self.duration_ms >= 1_000 {
+            format!("{:.1}s", self.duration_ms as f64 / 1000.0)
+        } else {
+            format!("{}ms", self.duration_ms)
+        }
+    }
+}
+
+impl HistoryCell for ToolCallCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        // Header line: icon + tool name + duration + size
+        let meta = if self.output_bytes > 0 {
+            format!("({} · {})", self.format_duration(), self.format_size())
+        } else {
+            format!("({})", self.format_duration())
+        };
+        let mut header_spans = vec![
+            GUTTER.set_style(ratatui::style::Style::new()),
+            self.icon().to_string().fg(self.icon_color()).bold(),
+            " ".set_style(ratatui::style::Style::new()),
+            self.tool_name.clone().bold(),
+            " ".set_style(ratatui::style::Style::new()),
+            meta.fg(Color::DarkGray),
+        ];
+        if self.retry_count > 0 {
+            header_spans.push(
+                format!(" ↻{}", self.retry_count).fg(Color::Yellow),
+            );
+        }
+        if matches!(self.status, ToolCardStatus::Cached) {
+            header_spans.push(" cached".fg(Color::Cyan).dim());
+        }
+        lines.push(Line::from(header_spans));
+
+        // Preview (single line, wrapped, dim)
+        if !self.preview.trim().is_empty() {
+            let wrap_width = width.saturating_sub(6).max(1) as usize;
+            let preview_first = self
+                .preview
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or(self.preview.as_str())
+                .to_string();
+            let wrapped = textwrap::wrap(&preview_first, wrap_width);
+            for line in wrapped.iter().take(2) {
+                lines.push(Line::from(vec![
+                    format!("{GUTTER}  ").fg(Color::DarkGray),
+                    line.to_string().fg(Color::DarkGray),
+                ]));
+            }
+        }
+
+        lines
+    }
+
+    fn kind_label(&self) -> &'static str {
+        "ToolCall"
+    }
+
+    fn raw_text(&self) -> &str {
+        &self.preview
+    }
+}

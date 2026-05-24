@@ -417,6 +417,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 header: "Thinking...".into(),
                 details: None,
                 details_max_lines: 3,
+                progress_pct: None,
             });
             // Start a fresh streaming session for this turn
             state.stream_controller.start();
@@ -459,6 +460,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 header: desc,
                 details: None,
                 details_max_lines: 3,
+                progress_pct: None,
             });
         }
         AgentEvent::ActionComplete(desc) => {
@@ -476,6 +478,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 header,
                 details: None,
                 details_max_lines: 3,
+                progress_pct: None,
             });
         }
         AgentEvent::ToolCallCompleted {
@@ -483,15 +486,22 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             duration_ms,
             output_bytes,
             is_error,
+            retry_count,
+            from_cache,
+            preview,
             ..
         } => {
-            let status = if is_error { "✘" } else { "✓" };
-            let size_label = if output_bytes > 1024 {
-                format!("{}KB", output_bytes / 1024)
-            } else {
-                format!("{output_bytes}B")
-            };
-            state.push_action(format!("{status} {tool_name} ({duration_ms}ms, {size_label})"));
+            // Push a polished tool-call card to history (replaces the
+            // flat ActionCell line). Preview is one-line, dim, wrapped.
+            state.push_tool_card(
+                tool_name,
+                duration_ms,
+                output_bytes,
+                is_error,
+                preview,
+                retry_count,
+                from_cache,
+            );
         }
         AgentEvent::ReadFiles(paths) => {
             if state.view_mode != ViewMode::Focus {
@@ -510,6 +520,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 header,
                 details: Some(desc),
                 details_max_lines: 3,
+                progress_pct: None,
             });
         }
         AgentEvent::DelegateStart(id, task) => {
@@ -584,6 +595,14 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         AgentEvent::Compacting { active } => {
             if active {
                 state.active_action = Some("Compacting context…".into());
+                // Indeterminate progress: show the bar in animated mode at 33%
+                // until we get a real percentage from the compactor.
+                state.status_indicator = Some(state::StatusIndicatorState {
+                    header: "Compacting context…".into(),
+                    details: Some("Summarizing older turns to free up context".into()),
+                    details_max_lines: 3,
+                    progress_pct: Some(33),
+                });
             } else {
                 state.active_action = None;
                 state.push_action("Context compaction complete");

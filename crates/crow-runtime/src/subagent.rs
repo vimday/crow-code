@@ -345,12 +345,18 @@ impl EventHandler for SubagentEventHandler<'_> {
                 duration_ms,
                 output_bytes,
                 is_error,
+                retry_count,
+                from_cache,
+                preview,
             } => self.parent.handle_event(AgentEvent::ToolCallCompleted {
                 call_id,
                 tool_name: format!("[{}:{}] {}", self.role.name, self.id, tool_name),
                 duration_ms,
                 output_bytes,
                 is_error,
+                retry_count,
+                from_cache,
+                preview,
             }),
             // Forward structured turn lifecycle events to parent as-is
             AgentEvent::Turn(ev) => self.parent.handle_event(AgentEvent::Turn(ev)),

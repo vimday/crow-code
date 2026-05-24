@@ -11,6 +11,10 @@ use tui_textarea::TextArea;
 
 /// Maximum number of command palette items visible at once.
 const PALETTE_MAX_VISIBLE: usize = 8;
+/// How many file picker matches to show.
+const FILE_PICKER_MAX_VISIBLE: usize = 8;
+/// Maximum number of files to scan for the @ picker (perf cap).
+const FILE_PICKER_SCAN_LIMIT: usize = 20_000;
 
 pub enum ActivePopup {
     None,
@@ -20,6 +24,16 @@ pub enum ActivePopup {
         /// Scroll offset: index of the first visible item.
         scroll_offset: usize,
         options: Vec<(String, String)>,
+    },
+    /// File picker triggered by typing `@<query>` in the composer.
+    /// `start_byte` is the byte offset of the `@` in the input buffer
+    /// (used to splice the chosen path back into place on Enter).
+    FilePicker {
+        query: String,
+        selected_idx: usize,
+        scroll_offset: usize,
+        candidates: Vec<String>,
+        start_byte: usize,
     },
 }
 
@@ -44,7 +58,7 @@ fn make_textarea<'a>() -> TextArea<'a> {
     // to place a single terminal blinking cursor (Codex/Claude Code pattern).
     textarea.set_cursor_style(ratatui::style::Style::new());
     let placeholder = ratatui::style::Style::new().fg(ratatui::style::Color::DarkGray);
-    textarea.set_placeholder_text("Ask Crow anything...");
+    textarea.set_placeholder_text("Ask Crow anything · / for commands · @ for files");
     textarea.set_placeholder_style(placeholder);
     // NOTE: Do NOT call set_line_number_style() — it enables line numbers.
     // A chat input box should never show line numbers.
@@ -69,11 +83,14 @@ impl<'a> ComposerComponent<'a> {
         if let crate::tui::state::ApprovalState::PendingCommand(..) = state.approval_state {
             return 5;
         }
-        if let ActivePopup::CommandPalette { ref options, .. } = self.active_popup {
-            // Visible items capped at PALETTE_MAX_VISIBLE, plus 2 for borders
-            (options.len() as u16).min(PALETTE_MAX_VISIBLE as u16) + 2
-        } else {
-            0
+        match &self.active_popup {
+            ActivePopup::CommandPalette { options, .. } => {
+                (options.len() as u16).min(PALETTE_MAX_VISIBLE as u16) + 2
+            }
+            ActivePopup::FilePicker { candidates, .. } => {
+                (candidates.len() as u16).min(FILE_PICKER_MAX_VISIBLE as u16) + 2
+            }
+            ActivePopup::None => 0,
         }
     }
 }
@@ -82,8 +99,52 @@ impl<'a> Component for ComposerComponent<'a> {
     fn handle_event(&mut self, event: &Event, state: &mut AppState) -> Result<Option<TuiAction>> {
         // Handle bracketed paste events (Ctrl+V / terminal paste)
         if let Event::Paste(ref text) = event {
+            // ── Paste size feedback (Codex / Claude Code parity) ─────
+            // Quietly insert short pastes; for large pastes show a
+            // status hint so the user knows the buffer just got loaded
+            // with a wall of text (and could trim before submitting).
+            const SOFT_THRESHOLD: usize = 4 * 1024; // 4 KB
+            const HARD_THRESHOLD: usize = 64 * 1024; // 64 KB
+            let bytes = text.len();
+            let lines = text.lines().count();
+
             for line in text.lines() {
                 self.textarea.insert_str(line);
+            }
+            // Preserve newlines between lines (lines() drops them).
+            // tui-textarea's insert_newline is awkward to drive in a
+            // tight loop; we re-feed a single newline per separator.
+            // Note: tui_textarea's `insert_str` does not split on '\n',
+            // so we issue an explicit newline keypress per line break.
+            // This matches the prior behavior — most pastes are
+            // multi-line code blocks and we want them kept multi-line.
+            let separators = text
+                .as_bytes()
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count();
+            for _ in 0..separators {
+                self.textarea.insert_newline();
+            }
+
+            if bytes >= HARD_THRESHOLD {
+                state.show_status(
+                    crate::tui::state::StatusMessage::warn(format!(
+                        "Pasted {} bytes ({} lines) — Ctrl+U clears, Shift+Enter newlines",
+                        format_bytes(bytes),
+                        lines
+                    )),
+                    6000,
+                );
+            } else if bytes >= SOFT_THRESHOLD {
+                state.show_status(
+                    crate::tui::state::StatusMessage::info(format!(
+                        "Pasted {} ({} lines)",
+                        format_bytes(bytes),
+                        lines
+                    )),
+                    3000,
+                );
             }
             return Ok(None);
         }
@@ -134,6 +195,67 @@ impl<'a> Component for ComposerComponent<'a> {
                 }
             }
 
+            // ── File picker overlay ─────────────────────────────────
+            // Allows the user to splice a workspace file path into the
+            // input by typing `@<query>` and selecting from the picker.
+            if let ActivePopup::FilePicker {
+                ref mut selected_idx,
+                ref mut scroll_offset,
+                ref candidates,
+                start_byte,
+                ..
+            } = self.active_popup
+            {
+                if key.code == KeyCode::Esc {
+                    self.active_popup = ActivePopup::None;
+                    return Ok(None);
+                }
+                if key.code == KeyCode::Up {
+                    if *selected_idx > 0 {
+                        *selected_idx -= 1;
+                        if *selected_idx < *scroll_offset {
+                            *scroll_offset = *selected_idx;
+                        }
+                    }
+                    return Ok(None);
+                }
+                if key.code == KeyCode::Down {
+                    if *selected_idx < candidates.len().saturating_sub(1) {
+                        *selected_idx += 1;
+                        if *selected_idx >= *scroll_offset + FILE_PICKER_MAX_VISIBLE {
+                            *scroll_offset = selected_idx
+                                .saturating_sub(FILE_PICKER_MAX_VISIBLE - 1);
+                        }
+                    }
+                    return Ok(None);
+                }
+                if (key.code == KeyCode::Tab || key.code == KeyCode::Enter)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    if let Some(path) = candidates.get(*selected_idx).cloned() {
+                        let line = self.textarea.lines().join("\n");
+                        let after = if start_byte <= line.len() {
+                            extract_after_at_token(&line[start_byte..])
+                        } else {
+                            ""
+                        };
+                        let mut new_line = String::new();
+                        new_line.push_str(&line[..start_byte]);
+                        new_line.push_str(&path);
+                        new_line.push(' ');
+                        new_line.push_str(after);
+
+                        let _ = after; // shadow to silence unused
+                        self.textarea = make_textarea();
+                        self.textarea.insert_str(&new_line);
+                        self.active_popup = ActivePopup::None;
+                        return Ok(None);
+                    }
+                }
+                // Fall through for typing — let the textarea consume it
+                // and the post-mutation block below will refresh the picker.
+            }
+
             // ── Ctrl+U: clear current line (Unix convention) ──────────
             if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.reset_textarea();
@@ -181,10 +303,13 @@ impl<'a> Component for ComposerComponent<'a> {
 
             self.textarea.input(*key);
 
-            // Post-mutation text analysis for the Popup logic
+            // Post-mutation text analysis for the popup logic.
+            // Order: command palette (slash/bang prefix) → file picker (@token).
             let lines = self.textarea.lines();
-            if lines.len() == 1 && (lines[0].starts_with('/') || lines[0].starts_with('!')) {
-                let query = lines[0].to_string();
+            let single_line = lines.len() == 1;
+            let line0 = lines.first().map(String::as_str).unwrap_or("");
+            if single_line && (line0.starts_with('/') || line0.starts_with('!')) {
+                let query = line0.to_string();
                 let options = crow_commands::get_palette_commands(&query);
 
                 if !options.is_empty() {
@@ -196,6 +321,23 @@ impl<'a> Component for ComposerComponent<'a> {
                     };
                 } else {
                     self.active_popup = ActivePopup::None;
+                }
+            } else if let Some((start, query)) = current_at_token(lines, self.textarea.cursor()) {
+                // @ picker: scan workspace lazily and rank by simple
+                // contains/prefix match. Capped at FILE_PICKER_SCAN_LIMIT
+                // entries so this stays snappy even on huge repos.
+                let candidates =
+                    rank_workspace_files(&state.workspace_name, &query, FILE_PICKER_SCAN_LIMIT);
+                if candidates.is_empty() {
+                    self.active_popup = ActivePopup::None;
+                } else {
+                    self.active_popup = ActivePopup::FilePicker {
+                        query,
+                        selected_idx: 0,
+                        scroll_offset: 0,
+                        candidates,
+                        start_byte: start,
+                    };
                 }
             } else {
                 self.active_popup = ActivePopup::None;
@@ -348,10 +490,223 @@ impl<'a> Component for ComposerComponent<'a> {
                 frame.render_widget(popup_list, popup_horiz[0]);
             }
         }
+
+        // Draw the file picker overlay (@ trigger)
+        if let ActivePopup::FilePicker {
+            ref query,
+            selected_idx,
+            scroll_offset,
+            ref candidates,
+            ..
+        } = self.active_popup
+        {
+            if popup_h > 0 {
+                use ratatui::style::{Color, Stylize};
+                use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
+
+                frame.render_widget(Clear, popup_area);
+
+                let visible_end =
+                    (scroll_offset + FILE_PICKER_MAX_VISIBLE).min(candidates.len());
+                let has_more_above = scroll_offset > 0;
+                let has_more_below = visible_end < candidates.len();
+
+                let list_items: Vec<ListItem> = candidates[scroll_offset..visible_end]
+                    .iter()
+                    .enumerate()
+                    .map(|(vis_i, path)| {
+                        let abs_i = vis_i + scroll_offset;
+                        let line = format!(" {path}");
+                        if abs_i == selected_idx {
+                            ListItem::new(line).style(
+                                ratatui::style::Style::new()
+                                    .bg(Color::LightMagenta)
+                                    .fg(Color::Black)
+                                    .bold(),
+                            )
+                        } else {
+                            ListItem::new(line)
+                        }
+                    })
+                    .collect();
+
+                let title = match (has_more_above, has_more_below) {
+                    (true, true) => format!(" @{query}  ▲▼ "),
+                    (true, false) => format!(" @{query}  ▲ "),
+                    (false, true) => format!(" @{query}  ▼ "),
+                    (false, false) => format!(" @{query} "),
+                };
+
+                let popup_list = List::new(list_items).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(ratatui::style::Style::new().fg(Color::Magenta))
+                        .title(title),
+                );
+
+                let popup_width = (area.width * 70 / 100).clamp(45, 80);
+                let popup_horiz = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Horizontal)
+                    .constraints([
+                        ratatui::layout::Constraint::Length(popup_width),
+                        ratatui::layout::Constraint::Min(0),
+                    ])
+                    .split(popup_area);
+                frame.render_widget(popup_list, popup_horiz[0]);
+            }
+        }
     }
 }
 
 // ── Extracted approval popup renderer ─────────────────────────────────
+
+/// Format a byte count into a short human-readable string (e.g. "1.2KB", "4MB").
+fn format_bytes(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes}B")
+    }
+}
+
+/// Locate the current `@<query>` token under or just before the cursor.
+/// Returns `(byte_offset_of_at, query)` if one is active, else None.
+///
+/// Triggers when the immediately-preceding `@` is at start-of-line or
+/// follows whitespace; the query is the run of non-whitespace
+/// characters after it. Empty query is fine (just-typed `@`).
+fn current_at_token(
+    lines: &[String],
+    cursor: (usize, usize),
+) -> Option<(usize, String)> {
+    let (row, col) = cursor;
+    let line = lines.get(row)?;
+    let cursor_byte = line.char_indices().nth(col).map(|(b, _)| b).unwrap_or(line.len());
+    let head = &line[..cursor_byte];
+    let at_pos = head.rfind('@')?;
+    // Boundary check: at start-of-line or preceded by whitespace.
+    if at_pos > 0 {
+        let prev = head[..at_pos].chars().last()?;
+        if !prev.is_whitespace() {
+            return None;
+        }
+    }
+    let query: String = head[at_pos + 1..].to_string();
+    if query.contains(char::is_whitespace) {
+        return None;
+    }
+    // Compute the running byte offset across prior lines (include '\n').
+    let mut byte_offset = 0;
+    for prior in lines.iter().take(row) {
+        byte_offset += prior.len() + 1; // +1 for '\n'
+    }
+    byte_offset += at_pos;
+    Some((byte_offset, query))
+}
+
+/// Helper: when committing a @-token replacement, return the slice of
+/// text after the token within the spliced segment.
+fn extract_after_at_token(rest: &str) -> &str {
+    // `rest` starts at the `@`; find the first whitespace after it.
+    let mut idx = 0;
+    let bytes = rest.as_bytes();
+    if bytes.first() == Some(&b'@') {
+        idx = 1;
+    }
+    while idx < bytes.len() && !(bytes[idx] as char).is_whitespace() {
+        idx += 1;
+    }
+    &rest[idx..]
+}
+
+/// Walk the workspace and rank files by query match. Returns up to
+/// `FILE_PICKER_MAX_VISIBLE * 2` candidates so the user can scroll.
+/// Skips common heavy directories (target, node_modules, .git).
+fn rank_workspace_files(workspace_root: &str, query: &str, scan_limit: usize) -> Vec<String> {
+    use std::path::Path;
+
+    let root = Path::new(workspace_root);
+    if !root.exists() {
+        return Vec::new();
+    }
+
+    let mut all = Vec::with_capacity(2048);
+    let mut count = 0usize;
+    walk_files(root, root, &mut all, &mut count, scan_limit);
+
+    let q_lower = query.to_lowercase();
+    let mut ranked: Vec<(i32, String)> = all
+        .into_iter()
+        .filter_map(|rel| {
+            let lower = rel.to_lowercase();
+            // Score: 0 if no match, otherwise smaller is better.
+            // Tier 1: filename startsWith   (rank 0)
+            // Tier 2: any path startsWith   (rank 1)
+            // Tier 3: path contains         (rank 2)
+            let basename = std::path::Path::new(&rel)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if q_lower.is_empty() {
+                Some((3, rel))
+            } else if basename.starts_with(&q_lower) {
+                Some((0, rel))
+            } else if lower.starts_with(&q_lower) {
+                Some((1, rel))
+            } else if lower.contains(&q_lower) {
+                Some((2, rel))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.len().cmp(&b.1.len())));
+    ranked.truncate(FILE_PICKER_MAX_VISIBLE * 4);
+    ranked.into_iter().map(|(_, p)| p).collect()
+}
+
+fn walk_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<String>,
+    count: &mut usize,
+    limit: usize,
+) {
+    if *count >= limit {
+        return;
+    }
+    let Ok(read) = std::fs::read_dir(dir) else { return; };
+    for entry in read.flatten() {
+        if *count >= limit {
+            return;
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.') && name_str != "." {
+            continue; // skip dotfiles/dirs (.git, .crow, etc.)
+        }
+        if matches!(
+            name_str.as_ref(),
+            "target" | "node_modules" | "dist" | "build" | "venv" | "__pycache__"
+        ) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = entry.file_type() else { continue; };
+        if meta.is_dir() {
+            walk_files(root, &path, out, count, limit);
+        } else if meta.is_file() {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().into_owned());
+                *count += 1;
+            }
+        }
+    }
+}
 
 /// Render the security approval popup. Extracted from inline render() to
 /// reduce complexity and enable dynamic sizing.

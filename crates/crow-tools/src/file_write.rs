@@ -72,7 +72,14 @@ impl Tool for FileWriteTool {
 
         let file_exists = abs_path.exists();
 
-        // Staleness check for existing files
+        // Read original content for diff (if overwriting)
+        let original_content = if file_exists {
+            std::fs::read_to_string(&abs_path).ok()
+        } else {
+            None
+        };
+
+        // Staleness check for existing files (hash-augmented)
         if file_exists {
             if let Some(ref store) = ctx.file_state {
                 if !store.has_recorded(&abs_path) {
@@ -82,7 +89,11 @@ impl Tool for FileWriteTool {
                     )));
                 }
                 let current_mtime = crate::file_state::get_file_mtime(&abs_path).await;
-                if store.is_stale(&abs_path, current_mtime) {
+                let current_hash = original_content
+                    .as_deref()
+                    .map(|c| crate::file_state::hash_content(c.as_bytes()))
+                    .unwrap_or(0);
+                if store.is_stale_with_hash(&abs_path, current_mtime, current_hash) {
                     return Ok(ToolOutput::error(format!(
                         "File '{}' has been modified since it was last read. Read the file again before writing.",
                         parsed.path
@@ -90,13 +101,6 @@ impl Tool for FileWriteTool {
                 }
             }
         }
-
-        // Read original content for diff (if overwriting)
-        let original_content = if file_exists {
-            std::fs::read_to_string(&abs_path).ok()
-        } else {
-            None
-        };
 
         // Create parent directories
         if let Some(parent) = abs_path.parent() {
@@ -116,10 +120,11 @@ impl Tool for FileWriteTool {
             )));
         }
 
-        // Update file state tracking
+        // Update file state tracking with new mtime + content hash
         if let Some(ref store) = ctx.file_state {
             let mtime = crate::file_state::get_file_mtime(&abs_path).await;
-            store.record(abs_path, mtime);
+            let new_hash = crate::file_state::hash_content(parsed.content.as_bytes());
+            store.record_with_hash(abs_path, mtime, new_hash);
         }
 
         // Build response

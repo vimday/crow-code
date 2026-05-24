@@ -27,6 +27,10 @@ pub struct StatusIndicatorState {
     pub header: String,
     pub details: Option<String>,
     pub details_max_lines: usize,
+    /// Optional progress (0.0–1.0) — when set, the status indicator
+    /// renders a slim progress bar below the header. Stored as integer
+    /// percentage (0..=100) so the struct stays Eq-comparable.
+    pub progress_pct: Option<u8>,
 }
 
 impl StatusIndicatorState {
@@ -35,6 +39,7 @@ impl StatusIndicatorState {
             header: String::from("Working"),
             details: None,
             details_max_lines: 3,
+            progress_pct: None,
         }
     }
 }
@@ -226,6 +231,30 @@ impl AppState {
         self.history.push(Box::new(history_cell::DiffCell {
             payload: payload.into(),
         }));
+    }
+
+    /// Push a polished tool-call card (replaces the flat ActionCell on
+    /// tool completion).
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_tool_card(
+        &mut self,
+        tool_name: String,
+        duration_ms: u64,
+        output_bytes: usize,
+        is_error: bool,
+        preview: String,
+        retry_count: u32,
+        from_cache: bool,
+    ) {
+        self.history.push(Box::new(history_cell::ToolCallCell::from_completed(
+            tool_name,
+            duration_ms,
+            output_bytes,
+            is_error,
+            preview,
+            retry_count,
+            from_cache,
+        )));
     }
 }
 

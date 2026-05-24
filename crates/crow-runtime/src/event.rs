@@ -131,6 +131,13 @@ pub enum AgentEvent {
         duration_ms: u64,
         output_bytes: usize,
         is_error: bool,
+        /// Number of times the orchestrator retried this call. 0 if first
+        /// attempt succeeded.
+        retry_count: u32,
+        /// True when this result came from the in-turn dedup cache.
+        from_cache: bool,
+        /// One-line preview of the tool's output (already truncated).
+        preview: String,
     },
     PlanSubmitted(IntentPlan),
     CruciblePreflight(String),

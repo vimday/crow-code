@@ -168,6 +168,41 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
         let mut lines = Vec::new();
         lines.push(truncate_line_with_ellipsis(Line::from(spans), chunks[0].width as usize));
 
+        // Progress bar (slim) when the indicator carries a percent.
+        if area.height > 1 {
+            if let Some(ref ind) = self.state.status_indicator {
+                if let Some(pct) = ind.progress_pct {
+                    let bar_width = chunks[0].width.saturating_sub(8) as usize;
+                    if bar_width >= 8 {
+                        let filled = (bar_width * pct as usize / 100).min(bar_width);
+                        let empty = bar_width - filled;
+                        let bar_str = format!(
+                            "  {}{}{} {pct:>3}%",
+                            "▰".repeat(filled),
+                            "▱".repeat(empty),
+                            ""
+                        );
+                        let _ = bar_str;
+                        let bar_line = Line::from(vec![
+                            Span::styled(
+                                format!("  {}", "▰".repeat(filled)),
+                                ratatui::style::Style::new().fg(colors::accent_system()),
+                            ),
+                            Span::styled(
+                                "▱".repeat(empty),
+                                ratatui::style::Style::new().fg(colors::text_muted()),
+                            ),
+                            Span::styled(
+                                format!(" {pct:>3}%"),
+                                ratatui::style::Style::new().fg(colors::text_muted()),
+                            ),
+                        ]);
+                        lines.push(bar_line);
+                    }
+                }
+            }
+        }
+
         // 4. Details (if any) and enough height
         if area.height > 1 {
             if let Some(ref ind) = self.state.status_indicator {

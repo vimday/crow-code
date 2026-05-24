@@ -22,7 +22,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::{ToolContext, ToolOutput, ToolRegistry};
@@ -42,6 +42,10 @@ pub struct ToolResult {
     pub was_cancelled: bool,
     /// Whether the tool timed out.
     pub was_timeout: bool,
+    /// Number of retries that were performed (0 = first attempt succeeded).
+    pub retry_count: u32,
+    /// Whether this result came from the in-turn dedup cache (saved a real call).
+    pub from_cache: bool,
 }
 
 /// Approval decision for a tool call.
@@ -69,6 +73,12 @@ pub struct OrchestratorConfig {
     /// When non-empty, write tools are restricted to files matching at least one pattern.
     /// Empty means all files are allowed.
     pub file_ownership: Vec<String>,
+    /// Maximum retries for transient tool failures (network errors, timeouts).
+    /// Default 2 (so up to 3 attempts total). Set to 0 to disable.
+    pub max_tool_retries: u32,
+    /// Enable in-turn dedup cache: identical (tool, args) calls within the
+    /// same orchestrator return the previous output instead of re-executing.
+    pub dedup_cache_enabled: bool,
 }
 
 /// Escalation policy when a tool call is denied (Codex orchestrator pattern).
@@ -93,6 +103,8 @@ impl Default for OrchestratorConfig {
             default_timeout: Duration::from_secs(120),
             escalation: EscalationPolicy::default(),
             file_ownership: Vec::new(),
+            max_tool_retries: 2,
+            dedup_cache_enabled: true,
         }
     }
 }
@@ -108,6 +120,9 @@ pub struct ToolOrchestrator {
     /// Read-only tools acquire a shared read lock (concurrent).
     /// Write tools acquire an exclusive write lock (serialized).
     execution_lock: Arc<RwLock<()>>,
+    /// In-turn dedup cache: keyed by (tool_name, canonical args JSON).
+    /// Cleared when the orchestrator is dropped (one per turn).
+    dedup_cache: Arc<Mutex<std::collections::HashMap<String, ToolOutput>>>,
 }
 
 impl ToolOrchestrator {
@@ -115,12 +130,13 @@ impl ToolOrchestrator {
         Self {
             config,
             execution_lock: Arc::new(RwLock::new(())),
+            dedup_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
     /// Execute a single tool call through the full pipeline.
     ///
-    /// Pipeline: approval → lock acquisition → timeout → execution → output formatting
+    /// Pipeline: dedup-cache → approval → lock acquisition → timeout → execution → retries → output formatting
     pub async fn execute_tool(
         &self,
         call_id: &str,
@@ -132,6 +148,38 @@ impl ToolOrchestrator {
     ) -> ToolResult {
         let start = Instant::now();
 
+        // ── Dedup cache lookup (read-only tools only — write tools always
+        //    re-execute because side effects matter) ───────────────────
+        let is_read_only = registry.is_read_only(tool_name);
+        let cache_key = if self.config.dedup_cache_enabled && is_read_only {
+            Some(make_dedup_key(tool_name, &args))
+        } else {
+            None
+        };
+
+        if let Some(ref key) = cache_key {
+            let cache = self.dedup_cache.lock().await;
+            if let Some(cached) = cache.get(key) {
+                let cached_marker = ToolOutput {
+                    content: format!(
+                        "{}\n\n[CACHE: identical {tool_name} call already executed earlier this turn — reused result]",
+                        cached.content
+                    ),
+                    is_error: cached.is_error,
+                };
+                return ToolResult {
+                    call_id: call_id.to_string(),
+                    name: tool_name.to_string(),
+                    output: self.truncate_output(cached_marker, self.config.max_output_bytes),
+                    duration: start.elapsed(),
+                    was_cancelled: false,
+                    was_timeout: false,
+                    retry_count: 0,
+                    from_cache: true,
+                };
+            }
+        }
+
         // ── Step 1: Approval check ──────────────────────────────────
         let approval = self.check_approval(tool_name, &args, ctx);
         if let ApprovalDecision::Denied { reason } = approval {
@@ -142,19 +190,50 @@ impl ToolOrchestrator {
                 duration: start.elapsed(),
                 was_cancelled: false,
                 was_timeout: false,
+                retry_count: 0,
+                from_cache: false,
             };
         }
 
         // ── Step 2: Determine lock type ─────────────────────────────
-        let is_read_only = registry.is_read_only(tool_name);
         let timeout = registry.tool_timeout(tool_name);
 
-        // ── Step 3: Execute with lock + timeout + cancellation ──────
+        // ── Step 3: Execute with retries ─────────────────────────────
+        let max_retries = self.config.max_tool_retries;
         let lock = Arc::clone(&self.execution_lock);
         let max_output = self.config.max_output_bytes;
+        let mut retry_count = 0u32;
+        let mut final_output: ToolOutput;
+        let was_timeout: bool;
+        let mut was_cancelled = false;
 
-        let result = tokio::select! {
-            _ = cancel.cancelled() => {
+        loop {
+            let attempt_args = args.clone();
+            let result = tokio::select! {
+                _ = cancel.cancelled() => {
+                    was_cancelled = true;
+                    Ok(Err(anyhow::anyhow!("cancelled")))
+                }
+                result = async {
+                    if is_read_only {
+                        let _guard = lock.read().await;
+                        tokio::time::timeout(
+                            timeout,
+                            registry.execute(tool_name, attempt_args, ctx),
+                        ).await
+                    } else {
+                        let _guard = lock.write().await;
+                        tokio::time::timeout(
+                            timeout,
+                            registry.execute(tool_name, attempt_args, ctx),
+                        ).await
+                    }
+                } => {
+                    result
+                }
+            };
+
+            if was_cancelled {
                 return ToolResult {
                     call_id: call_id.to_string(),
                     name: tool_name.to_string(),
@@ -162,54 +241,62 @@ impl ToolOrchestrator {
                     duration: start.elapsed(),
                     was_cancelled: true,
                     was_timeout: false,
+                    retry_count,
+                    from_cache: false,
                 };
             }
-            result = async {
-                // Acquire appropriate lock
-                if is_read_only {
-                    let _guard = lock.read().await;
-                    tokio::time::timeout(
-                        timeout,
-                        registry.execute(tool_name, args, ctx),
-                    ).await
-                } else {
-                    let _guard = lock.write().await;
-                    tokio::time::timeout(
-                        timeout,
-                        registry.execute(tool_name, args, ctx),
-                    ).await
-                }
-            } => {
-                result
+
+            let (output, this_was_timeout) = match result {
+                Ok(Ok(out)) => (out, false),
+                Ok(Err(e)) => (
+                    ToolOutput::error(format!("Tool execution error: {e}")),
+                    false,
+                ),
+                Err(_elapsed) => (
+                    ToolOutput::error(format!(
+                        "Tool '{tool_name}' timed out after {}s",
+                        timeout.as_secs()
+                    )),
+                    true,
+                ),
+            };
+
+            let should_retry = retry_count < max_retries
+                && (this_was_timeout || is_transient_failure(&output));
+
+            if should_retry {
+                retry_count += 1;
+                // Exponential backoff: 200ms → 400ms → 800ms → 1.6s
+                let backoff_ms = 200u64 << retry_count.saturating_sub(1).min(4);
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                continue;
             }
-        };
 
-        // ── Step 4: Handle result ───────────────────────────────────
-        let (output, was_timeout) = match result {
-            Ok(Ok(out)) => (out, false),
-            Ok(Err(e)) => (
-                ToolOutput::error(format!("Tool execution error: {e}")),
-                false,
-            ),
-            Err(_elapsed) => (
-                ToolOutput::error(format!(
-                    "Tool '{tool_name}' timed out after {}s",
-                    timeout.as_secs()
-                )),
-                true,
-            ),
-        };
+            final_output = output;
+            was_timeout = this_was_timeout;
+            break;
+        }
 
-        // ── Step 5: Truncate output if needed ───────────────────────
-        let output = self.truncate_output(output, max_output);
+        // ── Step 4: Truncate output if needed ───────────────────────
+        final_output = self.truncate_output(final_output, max_output);
+
+        // ── Step 5: Cache successful read-only results for dedup ────
+        if let Some(key) = cache_key {
+            if !final_output.is_error {
+                let mut cache = self.dedup_cache.lock().await;
+                cache.insert(key, final_output.clone());
+            }
+        }
 
         ToolResult {
             call_id: call_id.to_string(),
             name: tool_name.to_string(),
-            output,
+            output: final_output,
             duration: start.elapsed(),
             was_cancelled: false,
             was_timeout,
+            retry_count,
+            from_cache: false,
         }
     }
 
@@ -356,4 +443,103 @@ fn glob_matches(pattern: &str, path: &str) -> bool {
         return path.starts_with(prefix);
     }
     path.contains(pattern)
+}
+
+/// Build a stable dedup key from tool name + canonical-form args JSON.
+/// We sort object keys recursively so semantically-equivalent calls hash
+/// identically even if the LLM reordered fields.
+fn make_dedup_key(tool_name: &str, args: &serde_json::Value) -> String {
+    let canonical = canonicalize_json(args);
+    format!("{tool_name}|{canonical}")
+}
+
+fn canonicalize_json(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let mut s = String::from("{");
+            for (i, (k, val)) in entries.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push('"');
+                s.push_str(k);
+                s.push_str("\":");
+                s.push_str(&canonicalize_json(val));
+            }
+            s.push('}');
+            s
+        }
+        serde_json::Value::Array(arr) => {
+            let mut s = String::from("[");
+            for (i, val) in arr.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(&canonicalize_json(val));
+            }
+            s.push(']');
+            s
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Heuristic: does this tool output look like a transient failure
+/// worth retrying? Catches common network/timeout error strings without
+/// punishing legitimate errors that won't recover by waiting.
+fn is_transient_failure(output: &ToolOutput) -> bool {
+    if !output.is_error {
+        return false;
+    }
+    let text = output.content.to_lowercase();
+    let transient_markers = [
+        "timed out",
+        "timeout",
+        "connection refused",
+        "connection reset",
+        "broken pipe",
+        "temporarily unavailable",
+        "503",
+        "502",
+        "504",
+        "rate limit",
+        "too many requests",
+        "429",
+        "no route to host",
+        "network unreachable",
+    ];
+    transient_markers.iter().any(|m| text.contains(m))
+}
+
+#[cfg(test)]
+mod orchestrator_helpers_tests {
+    use super::*;
+
+    #[test]
+    fn dedup_key_is_order_independent() {
+        let a = serde_json::json!({"path": "src/foo.rs", "limit": 100});
+        let b = serde_json::json!({"limit": 100, "path": "src/foo.rs"});
+        assert_eq!(make_dedup_key("read_file", &a), make_dedup_key("read_file", &b));
+    }
+
+    #[test]
+    fn dedup_key_distinguishes_different_args() {
+        let a = serde_json::json!({"path": "src/foo.rs"});
+        let b = serde_json::json!({"path": "src/bar.rs"});
+        assert_ne!(make_dedup_key("read_file", &a), make_dedup_key("read_file", &b));
+    }
+
+    #[test]
+    fn detects_transient_errors() {
+        let timeout = ToolOutput::error("Tool 'bash' timed out after 120s");
+        let rate_limit = ToolOutput::error("HTTP 429 rate limit exceeded");
+        let success = ToolOutput::success("done");
+        let perm = ToolOutput::error("Permission denied: file is read-only");
+        assert!(is_transient_failure(&timeout));
+        assert!(is_transient_failure(&rate_limit));
+        assert!(!is_transient_failure(&success));
+        assert!(!is_transient_failure(&perm));
+    }
 }

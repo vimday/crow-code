@@ -10,6 +10,7 @@ pub mod autodream;
 pub mod client;
 pub mod compactor;
 pub mod compiler;
+pub mod fallback;
 pub mod model_registry;
 pub mod router;
 pub mod schema;
@@ -22,6 +23,7 @@ pub use compiler::{
     AgentResponse, AgentResponseBlock, ChatMessage, ChatRole, CompilerError, IntentCompiler,
     LlmClient, ToolCallRequest, ToolStreamObserver,
 };
+pub use fallback::FallbackLlmClient;
 pub use model_registry::{
     detect_provider_from_model, max_tokens_for_model, model_token_limit, preflight_context_check,
     resolve_model_alias, ModelTokenLimit,

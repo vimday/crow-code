@@ -1,6 +1,28 @@
 use crow_brain::{ChatMessage, ChatRole};
 use std::collections::VecDeque;
 
+/// Map a context budget (in bytes) to the % of budget at which to trigger
+/// compaction. Small budgets compact early (30%), 1M-token-class budgets
+/// compact late (60%), with a linear ramp in between. Returned value is
+/// in [30, 60].
+fn adaptive_compaction_pct(max_bytes: usize) -> usize {
+    // Two anchor points:
+    //   768 KB ≈ 200K-token small-window models  → 30%
+    //   4 MB   ≈ 1M-token Opus / GPT-5 class     → 60%
+    const SMALL: usize = 768 * 1024;
+    const LARGE: usize = 4 * 1024 * 1024;
+    if max_bytes <= SMALL {
+        return 30;
+    }
+    if max_bytes >= LARGE {
+        return 60;
+    }
+    // Linear interpolation: 30 + (max-SMALL)/(LARGE-SMALL) * 30
+    let span = LARGE - SMALL;
+    let over = max_bytes - SMALL;
+    30 + (30 * over / span)
+}
+
 #[derive(Debug, Clone)]
 struct Memory {
     message: ChatMessage,
@@ -617,12 +639,17 @@ impl ConversationManager {
         let hist_bytes = self.history_bytes() + additional_bytes;
         let hist_tokens = self.estimate_history_token_count() + (additional_bytes / 4);
 
-        // Token-based: compact when **history** tokens exceed threshold.
-        // With max_bytes = 768KB, this gives ~57K tokens of history before
-        // compaction triggers.
-        let token_threshold = (self.max_bytes / 4) * 3 / 10;
+        // Adaptive trigger ratio:
+        //   - small budgets (≤ 768KB): 30 % — be conservative, models with
+        //     small windows hit the wall faster.
+        //   - 1M-token-class budgets (> 2 MB): 60 % — premature compaction
+        //     hurts more than late compaction; we have plenty of runway.
+        //   - in-between: linearly interpolate between the two.
+        let pct = adaptive_compaction_pct(self.max_bytes);
+        let bytes_threshold = self.max_bytes.saturating_mul(pct) / 100;
+        let token_threshold = (self.max_bytes / 4) * pct / 100;
 
-        hist_bytes > (self.max_bytes * 3) / 10
+        hist_bytes > bytes_threshold
             || turns > (self.max_history_turns * 8) / 10
             || hist_tokens > token_threshold
     }

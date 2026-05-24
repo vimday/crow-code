@@ -342,10 +342,13 @@ async fn run_agent_loop_inner(
                         break Ok(resp);
                     }
                     Err(ref brain_err) if is_context_overflow(brain_err) => {
-                        // Context window exceeded — compact and retry once
-                        adapter.0.handle_event(AgentEvent::Log(
-                            "    🔄 Context window exceeded, compacting and retrying...".into(),
-                        ));
+                        // Context window exceeded — compact and retry once.
+                        // Surface the original error so the user sees what
+                        // the model was trying to say (Codex pattern: never
+                        // swallow context-overflow context silently).
+                        adapter.0.handle_event(AgentEvent::Log(format!(
+                            "    🔄 Context window exceeded ({brain_err}), compacting and retrying..."
+                        )));
                         adapter
                             .0
                             .handle_event(AgentEvent::Compacting { active: true });
@@ -355,9 +358,9 @@ async fn run_agent_loop_inner(
                             .handle_event(AgentEvent::Compacting { active: false });
 
                         if compact_result.is_err() || retry_count >= 1 {
-                            break Err(crow_brain::BrainError::Config(
-                                "Context window exceeded even after compaction".into(),
-                            ));
+                            break Err(crow_brain::BrainError::Config(format!(
+                                "Context window exceeded even after compaction. Original error: {brain_err}"
+                            )));
                         }
                         retry_count += 1;
                         continue;
@@ -507,6 +510,11 @@ async fn run_agent_loop_inner(
         // pipeline (approval → lock → timeout → truncation → cancellation).
         let tool_exec_start = std::time::Instant::now();
         let mut tasks = Vec::with_capacity(calls_to_execute.len());
+        // Capture call_id alongside each spawn so we can synthesize a
+        // matched tool_result on panic — preserving conversation integrity
+        // (Codex `ensure_tool_call_outputs` pattern).
+        let mut call_ids = Vec::with_capacity(calls_to_execute.len());
+        let mut tool_names = Vec::with_capacity(calls_to_execute.len());
         for tc in calls_to_execute {
             let tc_id = tc.id.clone();
             let tc_name = tc.name.clone();
@@ -528,6 +536,8 @@ async fn run_agent_loop_inner(
                 is_read_only,
             });
 
+            call_ids.push(tc_id.clone());
+            tool_names.push(tc_name.clone());
             tasks.push(tokio::spawn(async move {
                 let tool_ctx = crow_tools::ToolContext {
                     workspace_root: &root,
@@ -554,7 +564,7 @@ async fn run_agent_loop_inner(
         // Await all tool results
         let results = futures::future::join_all(tasks).await;
 
-        for join_result in results {
+        for (idx, join_result) in results.into_iter().enumerate() {
             match join_result {
                 Ok(tool_result) => {
                     total_tool_calls += 1;
@@ -563,13 +573,31 @@ async fn run_agent_loop_inner(
                     let is_error = tool_result.output.is_error;
 
                     // Emit structured ToolCallCompleted event (Codex pattern)
+                    let preview = crow_patch::safe_truncate(&content, 240).to_string();
                     observer.handle_event(AgentEvent::ToolCallCompleted {
                         call_id: tool_result.call_id.clone(),
                         tool_name: tool_result.name.clone(),
                         duration_ms: tool_result.duration.as_millis() as u64,
                         output_bytes: content.len(),
                         is_error,
+                        retry_count: tool_result.retry_count,
+                        from_cache: tool_result.from_cache,
+                        preview: preview.clone(),
                     });
+
+                    // Surface retry / cache info as transient log lines
+                    if tool_result.retry_count > 0 {
+                        observer.handle_event(AgentEvent::Log(format!(
+                            "    🔁 Retried '{}' {} time(s) (transient failure)",
+                            tool_result.name, tool_result.retry_count
+                        )));
+                    }
+                    if tool_result.from_cache {
+                        observer.handle_event(AgentEvent::Log(format!(
+                            "    💾 Reused cached result for '{}' (dedup)",
+                            tool_result.name
+                        )));
+                    }
 
                     // Safe preview for the legacy ActionComplete event
                     let preview = crow_patch::safe_truncate(&content, 120);
@@ -588,18 +616,25 @@ async fn run_agent_loop_inner(
                     messages.push_tool_result(&tool_result.call_id, &content);
                 }
                 Err(e) => {
-                    // Synthesize a tool result for the panicked call to prevent
-                    // orphan tool_call → API 400 errors (Codex ensure_tool_call_outputs pattern).
-                    let _panic_msg = format!("[tool execution panicked: {e}]");
-                    observer
-                        .handle_event(AgentEvent::Error(format!("Tool execution panicked: {e}")));
-
-                    // We need the call_id from the original request to push a matching result.
-                    // Since join_all preserves order, we can correlate by index.
-                    // However, we don't have the call_id here. The sanitize() call
-                    // at the top of the next iteration will synthesize missing outputs,
-                    // but we should push an explicit one when possible.
-                    // For now, the sanitize() safety net handles this case.
+                    // Tool task panicked — synthesize a matched tool_result
+                    // so the conversation isn't left with an orphan tool_call.
+                    // Surface the panic message to the user, not just a
+                    // generic notice (the original `_panic_msg` was unused).
+                    let call_id = call_ids
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| format!("panic-{idx}"));
+                    let tool_name = tool_names
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let panic_msg = format!(
+                        "[tool '{tool_name}' panicked: {e}]. Consider whether the inputs were valid; if not, ask the user."
+                    );
+                    observer.handle_event(AgentEvent::Error(format!(
+                        "Tool '{tool_name}' execution panicked: {e}"
+                    )));
+                    messages.push_tool_result(&call_id, &panic_msg);
                     total_tool_calls += 1;
                 }
             }

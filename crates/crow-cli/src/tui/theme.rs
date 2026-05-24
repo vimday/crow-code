@@ -55,59 +55,63 @@ pub struct ThemeConfig {
 }
 
 impl Default for ThemeConfig {
-    /// Default crow dark theme with transparent backgrounds.
+    /// Default crow dark theme — modern, slightly desaturated palette.
+    /// Inspired by Tokyo Night / Charm Bracelet aesthetics: crisp blues,
+    /// teal accents, soft greens for success, and warm reds for errors.
     fn default() -> Self {
         Self {
             background: Color::Reset,
             surface: Color::Reset,
 
-            text_primary: hex("#F5F5FA"),
-            text_secondary: hex("#90909F"),
-            text_muted: hex("#808090"),
+            text_primary: hex("#E6E7EE"),
+            text_secondary: hex("#A1A6B8"),
+            text_muted: hex("#6E7388"),
 
-            accent_user: hex("#C4C6CF"),
-            user_msg_bg: hex("#2A2A35"),
-            accent_system: hex("#64C8FF"),
-            accent_success: hex("#64DC8C"),
-            accent_warning: hex("#FFC864"),
-            accent_error: hex("#FF6464"),
+            accent_user: hex("#C0CAF5"),
+            user_msg_bg: hex("#1F2335"),
+            // Teal-cyan: distinctive against typical terminal blues
+            accent_system: hex("#7AA2F7"),
+            accent_success: hex("#9ECE6A"),
+            accent_warning: hex("#E0AF68"),
+            accent_error: hex("#F7768E"),
 
-            code_bg: hex("#23232D"),
-            code_fg: hex("#8CDCF0"),
-            code_border: hex("#707080"),
+            code_bg: hex("#1A1B26"),
+            code_fg: hex("#7DCFFF"),
+            code_border: hex("#3B4261"),
 
-            border: hex("#707080"),
-            border_active: hex("#A0A0AF"),
-            divider: hex("#707080"),
+            border: hex("#3B4261"),
+            border_active: hex("#7AA2F7"),
+            divider: hex("#2E3140"),
         }
     }
 }
 
 impl ThemeConfig {
-    /// Light theme for terminals with light backgrounds (codex pattern).
+    /// Light theme — high-contrast, easy-on-the-eyes palette tuned for
+    /// terminals on macOS / iTerm2 with a paper-white background.
     pub fn light() -> Self {
         Self {
             background: Color::Reset,
             surface: Color::Reset,
 
-            text_primary: hex("#1A1A2E"),
-            text_secondary: hex("#5A5A6F"),
-            text_muted: hex("#7A7A8F"),
+            text_primary: hex("#1F2335"),
+            text_secondary: hex("#4F5570"),
+            text_muted: hex("#7A7E94"),
 
-            accent_user: hex("#3A3A4F"),
-            user_msg_bg: hex("#E8E8F0"),
-            accent_system: hex("#0078D4"),
-            accent_success: hex("#107C41"),
-            accent_warning: hex("#C47F00"),
-            accent_error: hex("#D13438"),
+            accent_user: hex("#3B4261"),
+            user_msg_bg: hex("#E1E8F2"),
+            accent_system: hex("#1976D2"),
+            accent_success: hex("#388E3C"),
+            accent_warning: hex("#B8860B"),
+            accent_error: hex("#C62828"),
 
-            code_bg: hex("#F0F0F5"),
-            code_fg: hex("#0078D4"),
-            code_border: hex("#C0C0CF"),
+            code_bg: hex("#EAEEF6"),
+            code_fg: hex("#1976D2"),
+            code_border: hex("#B5BFD0"),
 
-            border: hex("#C0C0CF"),
-            border_active: hex("#5A5A6F"),
-            divider: hex("#C0C0CF"),
+            border: hex("#B5BFD0"),
+            border_active: hex("#1976D2"),
+            divider: hex("#D5DAE3"),
         }
     }
 }
