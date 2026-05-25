@@ -165,20 +165,9 @@ impl<'a> Component for ComposerComponent<'a> {
                     4000,
                 );
             } else {
-                // Short paste: insert verbatim with proper newlines.
-                // tui-textarea's insert_str does NOT handle '\n', so we
-                // must interleave insert_str + insert_newline per line.
-                let lines_vec: Vec<&str> = text.lines().collect();
-                for (i, line) in lines_vec.iter().enumerate() {
-                    self.textarea.insert_str(line);
-                    if i < lines_vec.len() - 1 {
-                        self.textarea.insert_newline();
-                    }
-                }
-                // If the original text ends with a newline, add it.
-                if text.ends_with('\n') {
-                    self.textarea.insert_newline();
-                }
+                // Short paste: insert_str handles '\n' natively — it
+                // splits on newlines and inserts as a multi-line chunk.
+                self.textarea.insert_str(text);
             }
             return Ok(None);
         }
