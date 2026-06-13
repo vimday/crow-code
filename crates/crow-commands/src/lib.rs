@@ -87,6 +87,24 @@ pub fn catalog() -> &'static [CommandSpec] {
             usage_hint: None,
         },
         CommandSpec {
+            trigger: "/undo",
+            category: Category::Workspace,
+            description: "Revert file changes from the last agent turn",
+            usage_hint: None,
+        },
+        CommandSpec {
+            trigger: "/tokens",
+            category: Category::Context,
+            description: "Show current context window usage",
+            usage_hint: None,
+        },
+        CommandSpec {
+            trigger: "/cost",
+            category: Category::Context,
+            description: "Show token usage and estimated cost summary",
+            usage_hint: None,
+        },
+        CommandSpec {
             trigger: "/memory",
             category: Category::Context,
             description: "Manage persistent workspace memory",

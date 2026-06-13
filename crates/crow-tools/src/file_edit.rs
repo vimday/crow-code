@@ -60,12 +60,15 @@ impl Tool for FileEditTool {
 
     fn description(&self) -> &'static str {
         "Edit a file by replacing text. You MUST read the file first before editing. \
-         The old_text must exactly match existing content (including whitespace and indentation). \
-         Two modes: \
-         (1) Single edit — provide old_text + new_text (+ optional replace_all). \
-         (2) Batch edit — provide an `edits` array of {old_text, new_text, replace_all?} \
-         to apply N changes atomically in one call (preferred when making multiple edits to \
-         the same file — saves round-trips and is applied as a single transaction)."
+         The old_text must exactly match existing content (including whitespace and indentation).\n\
+         Examples:\n\
+         - file_edit(path='src/main.rs', old_text='println!(\"hello\")', new_text='println!(\"world\")') \
+         — replace first occurrence\n\
+         - file_edit(path='lib.rs', old_text='v1', new_text='v2', replace_all=true) \
+         — replace all occurrences\n\
+         - file_edit(path='lib.rs', edits=[{old_text:'a', new_text:'b'}, {old_text:'c', new_text:'d'}]) \
+         — batch edit atomically\n\
+         Batch mode is preferred for multiple edits to the same file."
     }
 
     fn parameters(&self) -> serde_json::Value {

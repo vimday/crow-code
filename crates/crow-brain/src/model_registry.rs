@@ -114,6 +114,26 @@ pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
             context_window_tokens: 128_000,
         }),
 
+        // ── Google Gemini ───────────────────────────────────────
+        "gemini-2.5-pro" | "gemini-2.5-pro-preview-06-05" => Some(ModelTokenLimit {
+            max_output_tokens: 65_536,
+            context_window_tokens: 2_000_000,
+        }),
+        "gemini-2.5-flash" | "gemini-2.5-flash-preview-05-20" => Some(ModelTokenLimit {
+            max_output_tokens: 65_536,
+            context_window_tokens: 1_000_000,
+        }),
+        "gemini-2.0-flash" => Some(ModelTokenLimit {
+            max_output_tokens: 8_192,
+            context_window_tokens: 1_000_000,
+        }),
+
+        // ── Doubao (ByteDance) ──────────────────────────────────
+        m if m.starts_with("doubao") => Some(ModelTokenLimit {
+            max_output_tokens: 4_096,
+            context_window_tokens: 128_000,
+        }),
+
         _ => None,
     }
 }
@@ -187,6 +207,13 @@ pub fn resolve_model_alias(model: &str) -> String {
         // GLM aliases
         "glm" => "glm-4-plus".to_string(),
 
+        // Google Gemini aliases
+        "gemini" | "gemini-pro" => "gemini-2.5-pro".to_string(),
+        "gemini-flash" => "gemini-2.5-flash".to_string(),
+
+        // Doubao aliases
+        "doubao" => "doubao-pro-32k".to_string(),
+
         // No alias — return as-is
         _ => trimmed.to_string(),
     }
@@ -228,6 +255,12 @@ pub fn detect_provider_from_model(model: &str) -> Option<&'static str> {
     }
     if canonical.starts_with("glm") {
         return Some("glm");
+    }
+    if canonical.starts_with("gemini") {
+        return Some("google");
+    }
+    if canonical.starts_with("doubao") {
+        return Some("doubao");
     }
 
     None

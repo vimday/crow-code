@@ -19,8 +19,13 @@ impl Tool for FileWriteTool {
 
     fn description(&self) -> &'static str {
         "Create a new file or overwrite an existing file with the given content. \
-         Parent directories are created automatically. For modifying existing files, \
-         prefer file_edit instead. If the file already exists, you must read it first."
+         Parent directories are created automatically.\n\
+         Examples:\n\
+         - file_write(path='src/config.rs', content='pub const VERSION: &str = \"1.0\";') \
+         — create a new file\n\
+         - file_write(path='README.md', content='# My Project') — overwrite (must read first)\n\
+         For modifying existing files, prefer file_edit instead (smaller diffs, less token usage). \
+         If the file already exists, you must read it first."
     }
 
     fn parameters(&self) -> serde_json::Value {

@@ -101,6 +101,7 @@ impl AgentRole {
             "reviewer" => Self::reviewer(),
             "architect" => Self::architect(),
             "executor" => Self::executor(),
+            "planner" => Self::planner(),
             _ => Self::default_role(),
         }
     }
@@ -125,14 +126,26 @@ impl AgentRole {
         Self {
             name: "explorer".to_string(),
             description: "Read-only reconnaissance agent. Explores codebase structure, reads files, runs searches. Cannot modify any files.".to_string(),
-            system_prompt_suffix: "You are an Explorer agent. Your job is ONLY to gather information. \
-                You MUST NOT write, edit, or delete any files. Use only read-only tools: \
-                read_file, grep, glob, list_dir, bash (read-only commands only). \
-                Be thorough but efficient — minimize token usage.".to_string(),
+            system_prompt_suffix: "You are an Explorer agent. Your ONLY job is to gather information and report findings.\n\
+                \n\
+                ## Constraints\n\
+                - You MUST NOT write, edit, or delete any files\n\
+                - Use only: read_file, grep, list_dir, bash (read-only commands like cat, find, wc)\n\
+                \n\
+                ## Strategy\n\
+                1. Start with grep to locate relevant code\n\
+                2. Use list_dir to understand module structure\n\
+                3. Read specific files/sections to understand implementation\n\
+                4. Summarize findings with file paths and line numbers\n\
+                \n\
+                ## Output Format\n\
+                - Report findings as structured bullet points\n\
+                - Always include file paths and line numbers\n\
+                - Highlight key patterns, dependencies, and potential issues".to_string(),
             permission_level: RolePermissionLevel::ReadOnly,
             max_turn_duration: Duration::from_secs(120),
             reasoning_effort: ReasoningEffort::Low,
-            max_tool_calls_per_turn: 30, // explorers read a lot
+            max_tool_calls_per_turn: 30,
             max_steps: 20,
             can_delegate: false,
             file_ownership: vec![],
@@ -228,6 +241,40 @@ impl AgentRole {
         }
     }
 
+    fn planner() -> Self {
+        Self {
+            name: "planner".to_string(),
+            description: "Research and planning agent. Reads code, analyzes architecture, produces implementation plans. Cannot modify files.".to_string(),
+            system_prompt_suffix: "You are a Planner agent. Your job is to research the codebase and produce a detailed implementation plan.\n\
+                \n\
+                ## Constraints\n\
+                - You MUST NOT modify any files\n\
+                - Focus on understanding before prescribing\n\
+                \n\
+                ## Strategy\n\
+                1. Understand the request fully before exploring code\n\
+                2. Map relevant modules, dependencies, and data flows\n\
+                3. Identify all files that need changes\n\
+                4. Produce a step-by-step implementation plan\n\
+                \n\
+                ## Output Format\n\
+                Produce a structured plan with:\n\
+                - Goal summary\n\
+                - Files to modify (with specific functions/sections)\n\
+                - Order of changes (dependencies first)\n\
+                - Potential risks or edge cases\n\
+                - Verification steps".to_string(),
+            permission_level: RolePermissionLevel::ReadOnly,
+            max_turn_duration: Duration::from_secs(180),
+            reasoning_effort: ReasoningEffort::High,
+            max_tool_calls_per_turn: 25,
+            max_steps: 30,
+            can_delegate: false,
+            file_ownership: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
     /// Assign file ownership to this role (for worker agents).
     pub fn with_file_ownership(mut self, patterns: Vec<String>) -> Self {
         self.file_ownership = patterns;
@@ -248,7 +295,7 @@ impl AgentRole {
 
     /// List all available built-in role names.
     pub fn builtin_names() -> &'static [&'static str] {
-        &["default", "explorer", "worker", "coder", "reviewer", "architect", "executor"]
+        &["default", "explorer", "worker", "coder", "reviewer", "architect", "executor", "planner"]
     }
 }
 

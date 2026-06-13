@@ -106,10 +106,31 @@ impl InfoBar {
                 format!("{:.1}k tok", tokens / 1000.0)
             };
 
+            // Compute tok/s from elapsed time
+            let tok_per_sec = state
+                .streaming_start_time
+                .map(|t| {
+                    let secs = t.elapsed().as_secs_f64();
+                    if secs > 0.5 {
+                        format!(" ({:.0} tok/s)", tokens / secs)
+                    } else {
+                        String::new()
+                    }
+                })
+                .unwrap_or_default();
+
             vec![
                 format!(" {spinner} ").set_style(Styles::spinner()),
                 token_display.fg(colors::text_secondary()),
+                tok_per_sec.fg(colors::text_muted()),
                 format!(" · {elapsed}").fg(colors::text_secondary()),
+            ]
+        } else if let Some(ref phase) = state.turn_phase {
+            // Show the enriched phase string (e.g. "🧠 Thinking (step 3/20)")
+            let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
+            vec![
+                format!(" {spinner} ").set_style(Styles::spinner()),
+                phase.clone().fg(colors::accent_system()),
             ]
         } else if let Some(ref action) = state.active_action {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];

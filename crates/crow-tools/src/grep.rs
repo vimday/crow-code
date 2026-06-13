@@ -142,7 +142,13 @@ impl Tool for GrepTool {
     fn description(&self) -> &'static str {
         "Search file contents using regex patterns (powered by ripgrep). Supports multiple output \
          modes, context lines, glob filtering, and file type filtering. Respects .gitignore. \
-         Always searches hidden files. Use this instead of bash grep/rg for structured results."
+         Always searches hidden files. Use this instead of bash grep/rg for structured results.\n\
+         Examples:\n\
+         - grep(pattern='fn main') — find all main functions in workspace\n\
+         - grep(pattern='TODO', glob='*.rs') — find TODOs in Rust files only\n\
+         - grep(pattern='impl.*Error', context=3) — show 3 lines around Error impls\n\
+         - grep(pattern='use std', output_mode='files_with_matches') — list files using std\n\
+         - grep(pattern='struct', file_type='rust', case_insensitive=true) — case-insensitive search"
     }
 
     fn is_read_only(&self) -> bool {

@@ -68,6 +68,20 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
             return;
         }
 
+        // ── Quit Hint Override (Codex "press again to quit" pattern) ──
+        if let Some(deadline) = self.state.quit_hint_until {
+            if std::time::Instant::now() < deadline {
+                let hint = Line::from(vec![
+                    " ⚠ ".fg(colors::accent_error()).bold(),
+                    "Press ".fg(colors::accent_warning()),
+                    "Ctrl+C".fg(colors::accent_error()).bold(),
+                    " again to quit".fg(colors::accent_warning()),
+                ]);
+                Paragraph::new(hint).render(area, buf);
+                return;
+            }
+        }
+
         // ── Right side context ──
         let mut right_parts: Vec<String> = Vec::new();
         right_parts.push(self.state.model_info.clone());

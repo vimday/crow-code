@@ -129,6 +129,20 @@ impl<'a> ComposerComponent<'a> {
             ActivePopup::None => 0,
         }
     }
+
+    /// Desired composer height in terminal rows. Grows with the
+    /// textarea's content (e.g. after a multi-line paste) so the user
+    /// can see all lines and navigate with arrow keys, but caps at 12
+    /// rows to keep the conversation pane readable.
+    ///
+    /// Layout breakdown: 1 row for top border + N content rows.
+    pub fn desired_height(&self) -> u16 {
+        const MIN_LINES: u16 = 1;
+        const MAX_LINES: u16 = 12;
+        let content_lines = self.textarea.lines().len() as u16;
+        let lines = content_lines.clamp(MIN_LINES, MAX_LINES);
+        lines + 1 // +1 for top border
+    }
 }
 
 impl<'a> Component for ComposerComponent<'a> {

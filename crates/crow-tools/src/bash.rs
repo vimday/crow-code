@@ -34,14 +34,15 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a bash command in the workspace directory. Use for running tests, building \
-         projects, git operations, installing dependencies, and system commands. Output is \
-         captured from both stdout and stderr. Commands that produce no output within the \
-         timeout will be killed. Prefer dedicated tools (grep, file_edit, read_file) when \
-         available — use bash only for operations without a dedicated tool. Supports \
-         background=true for async execution of long-running tasks like dev servers. \
-         Optional `cwd` (relative to workspace) for one-shot directory changes. \
-         Optional `env` map for setting environment variables (e.g. RUST_BACKTRACE=1)."
+        "Execute a bash command in the workspace directory. Output is captured from both \
+         stdout and stderr, with smart head+tail truncation preserving errors at the end. \
+         Prefer dedicated tools (grep, file_edit, read_file) when available.\n\
+         Examples:\n\
+         - bash(command='cargo check --message-format=short') — type-check a Rust project\n\
+         - bash(command='npm test', timeout_secs=300) — run tests with extended timeout\n\
+         - bash(command='git diff HEAD~1', cwd='packages/core') — diff from a subdirectory\n\
+         - bash(command='npm run dev', background=true) — start a dev server in background\n\
+         - bash(command='cargo build', env={\"RUSTFLAGS\": \"-D warnings\"}) — build with env vars"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -236,7 +237,9 @@ fn head_tail_truncate(s: &str, budget: usize) -> String {
     }
     let marker_template = "\n\n[... truncated XXXX bytes — head + tail shown ...]\n\n";
     let usable = budget.saturating_sub(marker_template.len());
-    let head_budget = usable * 2 / 3;
+    // 80/20 split: keep more head context but ensure build errors
+    // (typically at the end of output) are never lost.
+    let head_budget = usable * 4 / 5;
     let tail_budget = usable - head_budget;
 
     let head = crow_patch::safe_truncate(s, head_budget);

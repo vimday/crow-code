@@ -1,5 +1,5 @@
 use crate::config::CrowConfig;
-use crate::event::{AgentEvent, ViewMode};
+use crate::event::{AgentEvent, TurnPhase, ViewMode};
 use crate::tui::commands::{execute_shell_command, handle_enter};
 use crate::tui::components::{composer::ComposerComponent, history::HistoryComponent};
 use crate::tui::history_cell;
@@ -242,6 +242,17 @@ pub async fn run_tui_loop(
                     handle_agent_event(state, ev);
                 }
                 TuiMessage::TurnComplete(success, timing) => {
+                    // Flush any pending streaming buffer to the active cell
+                    // before committing (throttling may have skipped the last rebuild)
+                    if !state.streaming_buffer.is_empty()
+                        && state.streaming_buffer.len() > state.last_cell_buffer_len
+                    {
+                        state.active_cell = Some(Box::new(history_cell::AgentMessageCell {
+                            payload: state.streaming_buffer.clone(),
+                            is_continuation: false,
+                        }));
+                    }
+
                     // Commit active cell to history
                     if let Some(cell) = state.active_cell.take() {
                         state.history.push(cell);
@@ -258,6 +269,8 @@ pub async fn run_tui_loop(
                     state.is_streaming = false;
                     state.streaming_token_estimate = 0.0;
                     state.streaming_start_time = None;
+                    state.last_cell_update = None;
+                    state.last_cell_buffer_len = 0;
                     let was_cancelled = state
                         .cancellation
                         .as_ref()
@@ -278,7 +291,7 @@ pub async fn run_tui_loop(
                                 String::new()
                             };
                             format!(
-                                "Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft}{tps_display})",
+                                "✅ Done ({total_s:.1}s, {} LLM call(s), TTFT: {ttft}{tps_display})",
                                 t.llm_calls
                             )
                         } else {
@@ -396,8 +409,22 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                     state.push_error(format!("Turn aborted [{turn_id}]: {reason}"));
                 }
                 TurnEvent::PhaseChanged { phase, .. } => {
-                    state.active_action = Some(format!("{phase}"));
-                    state.turn_phase = Some(format!("{phase}"));
+                    let label = match &phase {
+                        TurnPhase::Materializing => "📦 Materializing".to_string(),
+                        TurnPhase::BuildingRepoMap => "🗺️ Building repo map".to_string(),
+                        TurnPhase::Compacting => "🔄 Compacting context".to_string(),
+                        TurnPhase::EpistemicLoop { step, max_steps } => {
+                            format!("🧠 Thinking (step {step}/{max_steps})")
+                        }
+                        TurnPhase::CruciblePreflight => "🔍 Preflight checks".to_string(),
+                        TurnPhase::CrucibleVerification { attempt } => {
+                            format!("🧪 Verifying (attempt {attempt})")
+                        }
+                        TurnPhase::Applying => "⚡ Applying changes".to_string(),
+                        TurnPhase::Complete => "✅ Complete".to_string(),
+                    };
+                    state.active_action = Some(label.clone());
+                    state.turn_phase = Some(label);
                 }
                 TurnEvent::DiffGenerated {
                     diff_text,
@@ -427,15 +454,32 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             state.is_streaming = true;
             state.streaming_token_estimate = 0.0;
             state.streaming_start_time = Some(Instant::now());
+            state.last_cell_update = None;
+            state.last_cell_buffer_len = 0;
         }
         AgentEvent::StreamChunk(chunk) => {
-            // Accumulate into streaming buffer and rebuild the active cell
+            // Accumulate into streaming buffer
             state.streaming_buffer.push_str(&chunk);
-            state.active_cell = Some(Box::new(history_cell::AgentMessageCell {
-                payload: state.streaming_buffer.clone(),
-                is_continuation: false,
-            }));
             state.streaming_token_estimate += AppState::estimate_tokens(&chunk);
+
+            // Throttled cell rebuild: only create a new AgentMessageCell if
+            // ≥100 chars have been added since the last rebuild, OR ≥50ms
+            // has elapsed. This avoids cloning the entire buffer on every
+            // single token arrival.
+            let chars_since = state.streaming_buffer.len().saturating_sub(state.last_cell_buffer_len);
+            let elapsed_ok = state
+                .last_cell_update
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(50));
+
+            if chars_since >= 100 || elapsed_ok {
+                state.active_cell = Some(Box::new(history_cell::AgentMessageCell {
+                    payload: state.streaming_buffer.clone(),
+                    is_continuation: false,
+                }));
+                state.last_cell_update = Some(Instant::now());
+                state.last_cell_buffer_len = state.streaming_buffer.len();
+            }
+
             state.scroll_offset = 0; // Force scroll to bottom on new content
         }
         AgentEvent::Markdown(md) => {

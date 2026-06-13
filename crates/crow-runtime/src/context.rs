@@ -1,6 +1,50 @@
 use crow_brain::{ChatMessage, ChatRole};
 use std::collections::VecDeque;
 
+/// Confirmation patterns that indicate a tool result has zero informational
+/// value after the turn completes. These are aggressively pruned during
+/// micro-compaction to reclaim context budget.
+const CONFIRMATION_PATTERNS: &[&str] = &[
+    "file written successfully",
+    "created ",
+    "wrote ",
+    "saved ",
+    "deleted ",
+    "removed ",
+    "renamed ",
+    "moved ",
+    "copied ",
+    "directory created",
+    "patch applied",
+    "successfully",
+];
+
+/// Returns true if the content looks like a low-value confirmation message
+/// that can be safely pruned during micro-compaction.
+fn is_confirmation_result(content: &str) -> bool {
+    // Short results that match confirmation patterns are pruneable
+    if content.len() > 512 {
+        return false;
+    }
+    let lower = content.to_lowercase();
+    CONFIRMATION_PATTERNS
+        .iter()
+        .any(|pat| lower.contains(pat))
+}
+
+/// Conversation-level statistics for the InfoBar gauge and /tokens command.
+#[derive(Debug, Clone, Default)]
+pub struct ConversationStats {
+    pub total_bytes: usize,
+    pub system_bytes: usize,
+    pub conversation_bytes: usize,
+    pub message_count: usize,
+    pub user_message_count: usize,
+    pub assistant_message_count: usize,
+    pub tool_result_count: usize,
+    pub budget_pct: f64,
+}
+
 /// Map a context budget (in bytes) to the % of budget at which to trigger
 /// compaction. Small budgets compact early (30%), 1M-token-class budgets
 /// compact late (60%), with a linear ramp in between. Returned value is
@@ -211,6 +255,38 @@ impl ConversationManager {
             self.conversation.truncate(truncate_at);
             self.history_version = self.history_version.saturating_add(1);
         }
+    }
+
+    /// Removes all messages from the last assistant response onward,
+    /// effectively undoing the most recent turn. Everything after the
+    /// last user message is removed.
+    ///
+    /// Returns `true` if any messages were removed, `false` if there
+    /// was nothing to roll back (e.g. no assistant response yet).
+    pub fn rollback_last_turn(&mut self) -> bool {
+        // Find the index of the last User message
+        let last_user_idx = self
+            .conversation
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, m)| m.message.role == ChatRole::User)
+            .map(|(i, _)| i);
+
+        let Some(idx) = last_user_idx else {
+            return false;
+        };
+
+        // If the last message is already a user message, there's nothing
+        // after it to roll back.
+        let truncate_to = idx + 1;
+        if truncate_to >= self.conversation.len() {
+            return false;
+        }
+
+        self.conversation.truncate(truncate_to);
+        self.history_version = self.history_version.saturating_add(1);
+        true
     }
 
     /// Appends a verification result to the conversation.
@@ -576,7 +652,23 @@ impl ConversationManager {
     }
 
     /// Enforces size limits by aggressively pruning older messages.
+    ///
+    /// The pruning pipeline has four stages, each progressively more aggressive:
+    ///
+    /// 1. **Micro-compaction**: Prune low-value tool results (confirmations) and
+    ///    replace large file reads with their summaries. The 3 most recent tool
+    ///    results are always preserved in full.
+    /// 2. **Semantic pruning**: Downgrade older messages to their summaries.
+    /// 3. **Hard turn limit**: Cap absolute history length.
+    /// 4. **Last resort**: Hard-pop from index 1 until under budget.
     fn enforce_budget(&mut self) {
+        // 0. Micro-compaction: prune low-value tool results first.
+        //    This is cheap (no LLM call) and reclaims the most budget per
+        //    pruned message since tool outputs are often the largest items.
+        if self.check_over_budget() {
+            self.micro_compact();
+        }
+
         // 1. Semantic Pruning: If we exceed byte budget, downgrade oldest un-summarized
         //    user messages to their summaries. We skip index 0 to anchor the original Task.
         let mut idx = 1;
@@ -607,6 +699,55 @@ impl ConversationManager {
         // Keep index 0 alive, so we remove from index 1.
         while self.check_over_budget() && self.conversation.len() > 1 {
             self.conversation.remove(1);
+        }
+    }
+
+    /// Fast, local micro-compaction pass (no LLM call).
+    ///
+    /// Prunes tool results that are pure confirmations and replaces large file
+    /// reads with their summary. The 3 most recent tool results are always
+    /// kept in full to preserve the agent's working memory of the current task.
+    fn micro_compact(&mut self) {
+        // Identify indices of all Tool-role messages (oldest → newest)
+        let tool_indices: Vec<usize> = self
+            .conversation
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.message.role == ChatRole::Tool)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Protect the most recent 3 tool results from any pruning
+        let protected_count = 3;
+        let pruneable_end = tool_indices.len().saturating_sub(protected_count);
+        let pruneable = &tool_indices[..pruneable_end];
+
+        // Pass 1: Aggressively prune confirmation-only tool results
+        for &idx in pruneable {
+            if !self.check_over_budget() {
+                return;
+            }
+            let mem = &self.conversation[idx];
+            if is_confirmation_result(&mem.message.content) {
+                self.conversation[idx].message.content =
+                    "[SYSTEM: Confirmation result pruned]".into();
+                self.conversation[idx].summary = None;
+            }
+        }
+
+        // Pass 2: Replace large tool/file-read results with their summary
+        // (anything over 2KB that has a summary available)
+        const LARGE_RESULT_THRESHOLD: usize = 2048;
+        for &idx in pruneable {
+            if !self.check_over_budget() {
+                return;
+            }
+            let mem = &mut self.conversation[idx];
+            if mem.message.content.len() > LARGE_RESULT_THRESHOLD {
+                if let Some(summary) = mem.summary.take() {
+                    mem.message.content = summary;
+                }
+            }
         }
     }
 
@@ -690,6 +831,17 @@ impl ConversationManager {
         self.history_version
     }
 
+    /// Return the content of the most recent user message, if any.
+    ///
+    /// Used by `estimate_task_complexity` for adaptive step sizing.
+    pub fn last_user_content(&self) -> Option<&str> {
+        self.conversation
+            .iter()
+            .rev()
+            .find(|m| m.message.role == ChatRole::User)
+            .map(|m| m.message.content.as_str())
+    }
+
     /// Shrinks the conversation history by converting the oldest turns into a
     /// single foundational system memory, while keeping the most recent active turns.
     pub fn compact_into_summary(&mut self, summary_text: String) {
@@ -709,6 +861,44 @@ impl ConversationManager {
 
     pub fn get_total_bytes(&self) -> usize {
         self.system_bytes() + self.history_bytes()
+    }
+
+    /// Returns detailed conversation statistics for the InfoBar gauge and
+    /// the `/tokens` command.
+    pub fn statistics(&self) -> ConversationStats {
+        let system_bytes = self.system_bytes();
+        let conversation_bytes = self.history_bytes();
+        let total_bytes = system_bytes + conversation_bytes;
+
+        let mut user_message_count: usize = 0;
+        let mut assistant_message_count: usize = 0;
+        let mut tool_result_count: usize = 0;
+
+        for mem in &self.conversation {
+            match mem.message.role {
+                ChatRole::User => user_message_count += 1,
+                ChatRole::Assistant => assistant_message_count += 1,
+                ChatRole::Tool => tool_result_count += 1,
+                _ => {}
+            }
+        }
+
+        let budget_pct = if self.max_bytes > 0 {
+            (total_bytes as f64 / self.max_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        ConversationStats {
+            total_bytes,
+            system_bytes,
+            conversation_bytes,
+            message_count: self.conversation.len(),
+            user_message_count,
+            assistant_message_count,
+            tool_result_count,
+            budget_pct,
+        }
     }
 
     fn history_bytes(&self) -> usize {

@@ -71,7 +71,12 @@ impl Tool for SearchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search for a regex pattern across files using ripgrep. Returns matching lines with file paths and line numbers."
+        "Search for a regex pattern across files using ripgrep. Returns matching lines with \
+         file paths and line numbers.\n\
+         Examples:\n\
+         - grep(pattern='fn main') — find all main functions\n\
+         - grep(pattern='TODO', glob='*.rs') — find TODOs in Rust files\n\
+         - grep(pattern='use std', path='src/lib.rs') — search a single file"
     }
 
     fn is_read_only(&self) -> bool {
@@ -387,7 +392,12 @@ impl Tool for ReadFilesTool {
         "read_file"
     }
     fn description(&self) -> &'static str {
-        "Read the contents of a file from the workspace. Supports optional line-range selection."
+        "Read the contents of a file from the workspace. Supports optional line-range selection \
+         via start_line/end_line or offset/limit.\n\
+         Examples:\n\
+         - read_file(path='src/main.rs') — read entire file\n\
+         - read_file(path='src/main.rs', start_line=10, end_line=50) — read lines 10-50\n\
+         - read_file(path='src/main.rs', offset=100, limit=50) — read 50 lines starting at line 100"
     }
 
     fn is_read_only(&self) -> bool {
@@ -409,6 +419,14 @@ impl Tool for ReadFilesTool {
                 "end_line": {
                     "type": "integer",
                     "description": "Optional 1-indexed end line (inclusive) for partial reads"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Start reading from this line (1-indexed, default 1). Alternative to start_line."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Read at most this many lines. Used with offset. Alternative to end_line."
                 }
             },
             "required": ["path"]
@@ -421,6 +439,8 @@ impl Tool for ReadFilesTool {
             path: crow_patch::WorkspacePath,
             start_line: Option<usize>,
             end_line: Option<usize>,
+            offset: Option<usize>,
+            limit: Option<usize>,
         }
         let parsed: Args = serde_json::from_value(args)?;
 
@@ -451,8 +471,14 @@ impl Tool for ReadFilesTool {
                 let mut bytes_read = 0usize;
                 let mut was_truncated = false;
 
-                let start = parsed.start_line.unwrap_or(1).max(1);
-                let end = parsed.end_line.unwrap_or(usize::MAX);
+                // Support both start_line/end_line and offset/limit.
+                // offset/limit take precedence if both are provided.
+                let start = parsed.offset.or(parsed.start_line).unwrap_or(1).max(1);
+                let end = if let Some(limit) = parsed.limit {
+                    start.saturating_add(limit).saturating_sub(1)
+                } else {
+                    parsed.end_line.unwrap_or(usize::MAX)
+                };
 
                 for (idx, line_res) in reader.lines().enumerate() {
                     let line_num = idx + 1;

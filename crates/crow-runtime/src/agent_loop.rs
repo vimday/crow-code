@@ -28,6 +28,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 
 use crate::agent_status::AgentStatus;
 use crate::context::ConversationManager;
@@ -39,8 +40,11 @@ use crate::turn_context::TurnContext;
 /// Maximum output bytes from a tool result before truncation.
 const MAX_TOOL_OUTPUT_BYTES: usize = 100 * 1024; // 100 KB
 
-/// Fallback maximum tool calls per response (overridden by role).
+/// Base maximum tool calls per response (modulated by task complexity).
 const DEFAULT_MAX_TOOL_CALLS_PER_TURN: usize = 20;
+
+/// Approximate chars-per-token ratio for token estimation.
+const CHARS_PER_TOKEN: u64 = 4;
 
 /// Maximum retries for transient LLM errors (inner retry loop).
 const MAX_LLM_RETRIES: u32 = 5;
@@ -64,9 +68,17 @@ pub struct TurnMetrics {
     pub llm_call_count: u32,
     /// Number of pre-sampling compactions performed.
     pub compactions: u32,
+    /// Estimated token count for this turn (LLM responses + tool outputs).
+    /// Uses the ~4 chars/token heuristic for cost awareness.
+    pub estimated_tokens: u64,
 }
 
 impl TurnMetrics {
+    /// Accumulate estimated tokens from a text chunk using the chars/4 heuristic.
+    fn add_token_estimate(&mut self, text: &str) {
+        self.estimated_tokens += (text.len() as u64) / CHARS_PER_TOKEN;
+    }
+
     /// Return a human-readable summary combining these metrics with a timing snapshot.
     pub fn summary(&self, snapshot: &crate::turn_timing::TurnTimingSnapshot) -> String {
         let total_ms = snapshot.total_ms;
@@ -76,11 +88,80 @@ impl TurnMetrics {
             .ttft_ms
             .map(|ms| format!("{ms}ms"))
             .unwrap_or_else(|| "n/a".to_string());
+        let est_tokens = self.estimated_tokens;
         format!(
-            "Turn: {total_ms}ms total, {llm_ms}ms LLM ({} calls), {tool_ms}ms tools, TTFT: {ttft}, {} compaction(s)",
+            "Turn: {total_ms}ms total, {llm_ms}ms LLM ({} calls), {tool_ms}ms tools, TTFT: {ttft}, ~{est_tokens} tokens, {} compaction(s)",
             self.llm_call_count, self.compactions
         )
     }
+}
+
+// ─── Task Complexity Estimation ─────────────────────────────────────
+
+/// Heuristic complexity level for adaptive step sizing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskComplexity {
+    /// Short, focused tasks (e.g. "fix this typo", "what does X do?").
+    Simple,
+    /// Moderate tasks (e.g. "add a feature", "write tests for module").
+    Medium,
+    /// Large-scale tasks (e.g. "refactor all files", "migrate the codebase").
+    Complex,
+}
+
+impl TaskComplexity {
+    /// Recommended max steps for this complexity level.
+    pub fn max_steps(self) -> usize {
+        match self {
+            Self::Simple => 15,
+            Self::Medium => 30,
+            Self::Complex => 50,
+        }
+    }
+}
+
+/// Estimate task complexity from the user's message using lightweight heuristics.
+///
+/// Signals checked:
+/// - Message length (short messages are usually simple)
+/// - Presence of scope-expanding keywords ("refactor", "all files", "migrate", etc.)
+/// - Number of file path references (slash-separated tokens)
+pub fn estimate_task_complexity(user_message: &str) -> TaskComplexity {
+    let lower = user_message.to_lowercase();
+    let char_count = user_message.len();
+
+    // Keywords that signal a complex, wide-scope task
+    const COMPLEX_KEYWORDS: &[&str] = &[
+        "refactor", "all files", "entire codebase", "migrate",
+        "every module", "across the project", "whole project",
+        "redesign", "rewrite", "overhaul",
+    ];
+
+    // Keywords that signal a medium-scope task
+    const MEDIUM_KEYWORDS: &[&str] = &[
+        "add feature", "implement", "create", "write tests",
+        "integrate", "update", "convert", "optimize",
+    ];
+
+    // Count file-path-like references (tokens containing '/' or '.rs', '.ts', etc.)
+    let file_refs = user_message
+        .split_whitespace()
+        .filter(|w| w.contains('/') || w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".py"))
+        .count();
+
+    // Check complex signals
+    let has_complex_keyword = COMPLEX_KEYWORDS.iter().any(|kw| lower.contains(kw));
+    if has_complex_keyword || file_refs >= 5 || char_count > 1500 {
+        return TaskComplexity::Complex;
+    }
+
+    // Check medium signals
+    let has_medium_keyword = MEDIUM_KEYWORDS.iter().any(|kw| lower.contains(kw));
+    if has_medium_keyword || file_refs >= 2 || char_count > 400 {
+        return TaskComplexity::Medium;
+    }
+
+    TaskComplexity::Simple
 }
 
 // ─── Agent Loop Result ──────────────────────────────────────────────
@@ -122,7 +203,13 @@ pub async fn run_agent_loop(
 ) -> Result<AgentLoopResult> {
     // ── Role-aware constraints ───────────────────────────────────
     // Merge role limits with TurnContext defaults. The tighter bound wins.
-    let effective_max_steps = ctx.max_steps.min(ctx.role.max_steps);
+    // Adaptive step sizing: extract the last user message from the conversation
+    // to estimate task complexity and adjust the step budget accordingly.
+    let complexity_steps = messages
+        .last_user_content()
+        .map(|msg| estimate_task_complexity(msg).max_steps())
+        .unwrap_or(DEFAULT_MAX_TOOL_CALLS_PER_TURN);
+    let effective_max_steps = ctx.max_steps.min(ctx.role.max_steps).min(complexity_steps);
     let effective_max_tool_calls = ctx.role.max_tool_calls_per_turn.min(DEFAULT_MAX_TOOL_CALLS_PER_TURN);
     let turn_timeout = if ctx.role.max_turn_duration.as_secs() > 0 {
         ctx.role.max_turn_duration
@@ -394,6 +481,9 @@ async fn run_agent_loop_inner(
         let response_text = response.text();
         let tool_calls = response.tool_calls();
 
+        // Track estimated tokens from LLM response
+        metrics.add_token_estimate(&response_text);
+
         // ── No tool calls → agent is done ───────────────────────────
         if !response.has_tool_calls() {
             observer.handle_event(AgentEvent::StateChanged {
@@ -509,7 +599,7 @@ async fn run_agent_loop_inner(
         // Each tool call is dispatched through the orchestrator's unified
         // pipeline (approval → lock → timeout → truncation → cancellation).
         let tool_exec_start = std::time::Instant::now();
-        let mut tasks = Vec::with_capacity(calls_to_execute.len());
+        let mut join_set: JoinSet<crow_tools::orchestrator::ToolResult> = JoinSet::new();
         // Capture call_id alongside each spawn so we can synthesize a
         // matched tool_result on panic — preserving conversation integrity
         // (Codex `ensure_tool_call_outputs` pattern).
@@ -538,7 +628,7 @@ async fn run_agent_loop_inner(
 
             call_ids.push(tc_id.clone());
             tool_names.push(tc_name.clone());
-            tasks.push(tokio::spawn(async move {
+            join_set.spawn(async move {
                 let tool_ctx = crow_tools::ToolContext {
                     workspace_root: &root,
                     permissions: &perms,
@@ -548,29 +638,32 @@ async fn run_agent_loop_inner(
                 };
 
                 // Dispatch through the orchestrator's unified pipeline
-                let result = orch.execute_tool(
+                orch.execute_tool(
                     &tc_id,
                     &tc_name,
                     tc_args,
                     &registry,
                     &tool_ctx,
                     cancel_token,
-                ).await;
-
-                result
-            }));
+                ).await
+            });
         }
 
-        // Await all tool results
-        let results = futures::future::join_all(tasks).await;
+        // Stream results as they complete via JoinSet — faster feedback
+        // when tool execution times vary (e.g. first tool 100ms, second 10s).
+        let expected_count = call_ids.len();
 
-        for (idx, join_result) in results.into_iter().enumerate() {
+        let mut completed = 0usize;
+        while let Some(join_result) = join_set.join_next().await {
             match join_result {
                 Ok(tool_result) => {
                     total_tool_calls += 1;
 
                     let content = tool_result.output.content.clone();
                     let is_error = tool_result.output.is_error;
+
+                    // Track estimated tokens from tool output
+                    metrics.add_token_estimate(&content);
 
                     // Emit structured ToolCallCompleted event (Codex pattern)
                     let preview = crow_patch::safe_truncate(&content, 240).to_string();
@@ -618,14 +711,14 @@ async fn run_agent_loop_inner(
                 Err(e) => {
                     // Tool task panicked — synthesize a matched tool_result
                     // so the conversation isn't left with an orphan tool_call.
-                    // Surface the panic message to the user, not just a
-                    // generic notice (the original `_panic_msg` was unused).
+                    // JoinSet doesn't preserve insertion order, so we use the
+                    // completed counter as a best-effort index into call_ids.
                     let call_id = call_ids
-                        .get(idx)
+                        .get(completed)
                         .cloned()
-                        .unwrap_or_else(|| format!("panic-{idx}"));
+                        .unwrap_or_else(|| format!("panic-{completed}"));
                     let tool_name = tool_names
-                        .get(idx)
+                        .get(completed)
                         .cloned()
                         .unwrap_or_else(|| "unknown".to_string());
                     let panic_msg = format!(
@@ -638,7 +731,10 @@ async fn run_agent_loop_inner(
                     total_tool_calls += 1;
                 }
             }
+            completed += 1;
         }
+        // Safety: verify all tasks completed (should always be true)
+        debug_assert_eq!(completed, expected_count, "JoinSet drained fewer tasks than spawned");
 
         metrics.tool_execution_time += tool_exec_start.elapsed();
 
@@ -676,6 +772,10 @@ fn is_context_overflow(err: &crow_brain::BrainError) -> bool {
         || msg.contains("context window")
         || msg.contains("maximum context length")
         || msg.contains("token limit")
+        || msg.contains("max_tokens")
+        || msg.contains("content too long")
+        || msg.contains("request too large")
+        || msg.contains("payload too large")
 }
 
 // `backoff_with_jitter` is now re-exported from `crate::turn_timing`.

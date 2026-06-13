@@ -111,7 +111,10 @@ pub fn execute_command_string(
                         "  /model         Show current model",
                         "  /swarm <task>  Launch background sub-agent",
                         "  /compact       Force context compaction",
+                        "  /tokens        Show context window usage",
+                        "  /cost          Show token usage and estimated cost",
                         "  /diff          Show git diff (including untracked)",
+                        "  /undo          Revert last agent turn changes",
                         "  /memory        Manage persistent workspace memory",
                         "  /exit          Exit Crow",
                         "",
@@ -329,6 +332,30 @@ pub fn execute_command_string(
                         state.push_error("Usage: /session resume <id>");
                     }
                 }
+            }
+            "tokens" => {
+                state.push_user("/tokens");
+                if let Some((total_tokens, context_window)) = state.ctx_usage {
+                    let pct = if context_window > 0 {
+                        (f64::from(total_tokens) / f64::from(context_window) * 100.0) as u32
+                    } else {
+                        0
+                    };
+                    let remaining = context_window.saturating_sub(total_tokens);
+                    state.push_log(format!(
+                        "Context Window Usage:\n  Used:      {total_tokens} tokens\n  Remaining: {remaining} tokens\n  Window:    {context_window} tokens\n  Usage:     {pct}%"
+                    ));
+                } else {
+                    state.push_log("Context usage not yet available — send a message first.");
+                }
+            }
+            "cost" => {
+                state.push_user("/cost");
+                state.push_log("⏳ /cost — Feature coming soon.");
+            }
+            "undo" => {
+                state.push_user("/undo");
+                state.push_log("⏳ /undo — Feature coming soon.");
             }
             other => {
                 state.push_error(format!(

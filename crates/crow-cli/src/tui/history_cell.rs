@@ -275,7 +275,7 @@ impl HistoryCell for LogCell {
     }
 }
 
-/// Error cell.
+/// Error cell with prominent red left border.
 #[derive(Debug, Clone)]
 pub struct ErrorCell {
     pub payload: String,
@@ -284,19 +284,29 @@ pub struct ErrorCell {
 impl HistoryCell for ErrorCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        let wrap_width = width.saturating_sub(6).max(1) as usize;
+        let wrap_width = width.saturating_sub(8).max(1) as usize;
         let wrapped = textwrap::wrap(&self.payload, wrap_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let prefix = if i == 0 {
-                format!("{GUTTER}✘ ")
-            } else {
-                format!("{GUTTER}  ")
-            };
+
+        // Top border
+        lines.push(Line::from(vec![
+            GUTTER.to_string().set_style(Styles::error()),
+            "┌─ Error ".set_style(Styles::error().bold()),
+            "─".repeat(wrap_width.saturating_sub(10).max(1)).set_style(Styles::error()),
+        ]));
+
+        for line in wrapped.iter() {
             lines.push(Line::from(vec![
-                prefix.set_style(Styles::error()),
+                format!("{GUTTER}│ ").set_style(Styles::error()),
                 line.to_string().set_style(Styles::error()),
             ]));
         }
+
+        // Bottom border
+        lines.push(Line::from(vec![
+            format!("{GUTTER}└").set_style(Styles::error()),
+            "─".repeat(wrap_width.saturating_sub(2).max(1)).set_style(Styles::error()),
+        ]));
+
         lines
     }
 
@@ -513,5 +523,71 @@ impl HistoryCell for ToolCallCell {
 
     fn raw_text(&self) -> &str {
         &self.preview
+    }
+}
+
+/// Compact turn completion summary. Renders as a visual separator line:
+/// `━━ 5 tools · 2.3s · ~1.2k tokens ━━━━━━━━━━━━━━━`
+#[derive(Debug, Clone)]
+pub struct SummaryCell {
+    pub tool_count: usize,
+    pub duration_ms: u64,
+    pub tokens: u64,
+}
+
+impl SummaryCell {
+    fn format_duration(&self) -> String {
+        if self.duration_ms >= 60_000 {
+            let secs = self.duration_ms / 1000;
+            format!("{}m{:02}s", secs / 60, secs % 60)
+        } else if self.duration_ms >= 1_000 {
+            format!("{:.1}s", self.duration_ms as f64 / 1000.0)
+        } else {
+            format!("{}ms", self.duration_ms)
+        }
+    }
+
+    fn format_tokens(&self) -> String {
+        if self.tokens >= 1_000_000 {
+            format!("{:.1}M", self.tokens as f64 / 1_000_000.0)
+        } else if self.tokens >= 1_000 {
+            format!("{:.1}k", self.tokens as f64 / 1_000.0)
+        } else {
+            format!("{}", self.tokens)
+        }
+    }
+}
+
+impl HistoryCell for SummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let summary_text = format!(
+            " {} tool{} · {} · ~{} tokens ",
+            self.tool_count,
+            if self.tool_count == 1 { "" } else { "s" },
+            self.format_duration(),
+            self.format_tokens(),
+        );
+
+        let available = width.saturating_sub(4) as usize;
+        let text_len = summary_text.len();
+        let padding_left = 2;
+        let padding_right = available.saturating_sub(text_len + padding_left);
+
+        let line = Line::from(vec![
+            GUTTER.set_style(ratatui::style::Style::new()),
+            "━".repeat(padding_left).fg(colors::divider()),
+            summary_text.fg(colors::text_secondary()).dim(),
+            "━".repeat(padding_right).fg(colors::divider()),
+        ]);
+
+        vec![line]
+    }
+
+    fn kind_label(&self) -> &'static str {
+        "Summary"
+    }
+
+    fn raw_text(&self) -> &str {
+        ""
     }
 }

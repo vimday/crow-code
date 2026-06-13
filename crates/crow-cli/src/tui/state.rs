@@ -113,6 +113,10 @@ pub struct AppState {
     pub streaming_token_estimate: f64,
     /// When the current streaming turn started (for elapsed time display).
     pub streaming_start_time: Option<Instant>,
+    /// When the active streaming cell was last rebuilt (throttle at 50ms).
+    pub last_cell_update: Option<Instant>,
+    /// Buffer length at last cell rebuild (throttle at 100-char delta).
+    pub last_cell_buffer_len: usize,
     /// The agent's current deterministic execution phase (if active)
     pub turn_phase: Option<String>,
 
@@ -256,6 +260,20 @@ impl AppState {
             from_cache,
         )));
     }
+
+    /// Push a turn completion summary separator.
+    pub fn push_summary(
+        &mut self,
+        tool_count: usize,
+        duration_ms: u64,
+        tokens: u64,
+    ) {
+        self.history.push(Box::new(history_cell::SummaryCell {
+            tool_count,
+            duration_ms,
+            tokens,
+        }));
+    }
 }
 
 impl AppState {
@@ -293,6 +311,8 @@ impl AppState {
             is_streaming: false,
             streaming_token_estimate: 0.0,
             streaming_start_time: None,
+            last_cell_update: None,
+            last_cell_buffer_len: 0,
             turn_phase: None,
             ctx_usage: None,
             status_message: None,

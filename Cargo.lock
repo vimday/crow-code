@@ -547,7 +547,6 @@ dependencies = [
  "crow-verifier",
  "crow-workspace",
  "dirs",
- "futures",
  "pretty_assertions",
  "serde",
  "serde_json",
