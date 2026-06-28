@@ -351,11 +351,85 @@ pub fn execute_command_string(
             }
             "cost" => {
                 state.push_user("/cost");
-                state.push_log("⏳ /cost — Feature coming soon.");
+                let prompt_tok = state.cumulative_prompt_tokens;
+                let completion_tok = state.cumulative_completion_tokens;
+                let total = prompt_tok + completion_tok;
+                if total == 0 {
+                    state.push_log(
+                        "No token usage recorded yet. Usage tracking requires API responses with usage data."
+                    );
+                } else {
+                    state.push_log(format!(
+                        "Session Token Usage:\n  Prompt:     {prompt_tok} tokens\n  Completion: {completion_tok} tokens\n  Total:      {total} tokens\n  Model:      {}",
+                        state.model_info
+                    ));
+                }
             }
             "undo" => {
                 state.push_user("/undo");
-                state.push_log("⏳ /undo — Feature coming soon.");
+                let workspace = cfg.workspace.clone();
+                let tx_undo = tx.clone();
+                tokio::spawn(async move {
+                    // Check for uncommitted changes first
+                    let status_output = tokio::process::Command::new("git")
+                        .args(["status", "--porcelain"])
+                        .current_dir(&workspace)
+                        .output()
+                        .await;
+
+                    match status_output {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            if stdout.trim().is_empty() {
+                                let _ = tx_undo.send(TuiMessage::AgentEvent(
+                                    AgentEvent::Log("No changes to undo — working tree is clean.".into())
+                                ));
+                                return;
+                            }
+
+                            // Restore all tracked (modified/deleted) files
+                            let checkout = tokio::process::Command::new("git")
+                                .args(["checkout", "HEAD", "--", "."])
+                                .current_dir(&workspace)
+                                .output()
+                                .await;
+
+                            // Clean untracked files that were added
+                            let clean = tokio::process::Command::new("git")
+                                .args(["clean", "-fd"])
+                                .current_dir(&workspace)
+                                .output()
+                                .await;
+
+                            let mut report = String::from("✅ Reverted workspace changes:\n");
+                            // Count what was reverted
+                            for line in stdout.lines() {
+                                let status = line.get(0..2).unwrap_or("  ");
+                                let file = line.get(3..).unwrap_or("?");
+                                let action = match status.trim() {
+                                    "M" => "restored",
+                                    "A" | "??" => "deleted",
+                                    "D" => "restored",
+                                    _ => "reverted",
+                                };
+                                report.push_str(&format!("  {action}: {file}\n"));
+                            }
+
+                            if checkout.is_err() || clean.is_err() {
+                                report.push_str("\n⚠ Some files may not have been fully reverted.");
+                            }
+
+                            let _ = tx_undo.send(TuiMessage::AgentEvent(
+                                AgentEvent::Log(report)
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = tx_undo.send(TuiMessage::AgentEvent(
+                                AgentEvent::Error(format!("Failed to check git status: {e}"))
+                            ));
+                        }
+                    }
+                });
             }
             other => {
                 state.push_error(format!(

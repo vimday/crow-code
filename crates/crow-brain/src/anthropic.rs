@@ -8,7 +8,7 @@
 //!
 //! This client handles these differences transparently behind the `LlmClient` trait.
 
-use crate::{ChatMessage, ChatRole, LlmClient};
+use crate::{AgentResponse, AgentResponseBlock, ChatMessage, ChatRole, LlmClient, ToolCallRequest};
 use async_trait::async_trait;
 use reqwest::{header, Client};
 use serde_json::json;
@@ -71,16 +71,16 @@ impl AnthropicClient {
         })
     }
 
-    async fn _generate(
+    /// Build the Anthropic conversation array from `ChatMessage`s.
+    ///
+    /// When `native_tools` is true, assistant messages with `tool_calls` are
+    /// emitted as content-block arrays (text + tool_use blocks) and tool-result
+    /// messages use `tool_result` content blocks instead of plain text.
+    fn build_conversation(
         &self,
         messages: &[ChatMessage],
-        temperature: Option<f64>,
-    ) -> Result<String, BrainError> {
-        let base = self.base_url.trim_end_matches('/');
-        let url = format!("{base}/messages");
-
-        // Anthropic separates system messages from the conversation.
-        // All system messages are concatenated into a single top-level `system` field.
+        native_tools: bool,
+    ) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
         let mut system_parts: Vec<serde_json::Value> = Vec::new();
         let mut conversation: Vec<serde_json::Value> = Vec::new();
 
@@ -94,16 +94,12 @@ impl AnthropicClient {
                 "type": "text",
                 "text": msg.content
             });
-            // Cache breakpoint on the last system message
             if self.prompt_caching && i == system_messages.len() - 1 {
                 block["cache_control"] = json!({"type": "ephemeral"});
             }
             system_parts.push(block);
         }
 
-        // Non-system messages become the conversation array.
-        // Anthropic requires alternating user/assistant messages.
-        // We merge consecutive same-role messages.
         let mut last_role: Option<&str> = None;
         for msg in messages {
             if msg.role == ChatRole::System {
@@ -116,40 +112,146 @@ impl AnthropicClient {
                 ChatRole::System => unreachable!(),
             };
 
-            // For tool results, format with the tool call ID
-            let content = if msg.role == ChatRole::Tool {
-                if let Some(ref tc_id) = msg.tool_call_id {
-                    format!("[Tool Result ({tc_id})]\n{}", msg.content)
+            if native_tools {
+                // ── Native tool calling format ─────────────────────
+                match msg.role {
+                    ChatRole::Assistant => {
+                        // Build content blocks: text + tool_use blocks
+                        let mut content_blocks: Vec<serde_json::Value> = Vec::new();
+                        if !msg.content.is_empty() {
+                            content_blocks.push(json!({
+                                "type": "text",
+                                "text": msg.content
+                            }));
+                        }
+                        if let Some(ref tcs) = msg.tool_calls {
+                            for tc in tcs {
+                                content_blocks.push(json!({
+                                    "type": "tool_use",
+                                    "id": tc.id,
+                                    "name": tc.name,
+                                    "input": tc.arguments
+                                }));
+                            }
+                        }
+                        if content_blocks.is_empty() {
+                            content_blocks.push(json!({"type": "text", "text": ""}));
+                        }
+                        // Anthropic requires alternation; merge if same role
+                        if last_role == Some("assistant") {
+                            if let Some(last) = conversation.last_mut() {
+                                if let Some(arr) = last["content"].as_array_mut() {
+                                    arr.extend(content_blocks);
+                                }
+                            }
+                        } else {
+                            conversation.push(json!({
+                                "role": "assistant",
+                                "content": content_blocks
+                            }));
+                        }
+                        last_role = Some("assistant");
+                    }
+                    ChatRole::Tool => {
+                        // tool_result content block
+                        let tool_result = json!({
+                            "type": "tool_result",
+                            "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
+                            "content": msg.content
+                        });
+                        if last_role == Some("user") {
+                            if let Some(last) = conversation.last_mut() {
+                                if let Some(arr) = last["content"].as_array_mut() {
+                                    arr.push(tool_result);
+                                } else {
+                                    // Previous user message was a plain string;
+                                    // upgrade to content-block array.
+                                    let prev_text = last["content"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string();
+                                    last["content"] = json!([
+                                        {"type": "text", "text": prev_text},
+                                        tool_result
+                                    ]);
+                                }
+                            }
+                        } else {
+                            conversation.push(json!({
+                                "role": "user",
+                                "content": [tool_result]
+                            }));
+                        }
+                        last_role = Some("user");
+                    }
+                    ChatRole::User => {
+                        if last_role == Some("user") {
+                            if let Some(last) = conversation.last_mut() {
+                                if let Some(arr) = last["content"].as_array_mut() {
+                                    arr.push(json!({"type": "text", "text": msg.content}));
+                                } else if let Some(prev) = last["content"].as_str() {
+                                    last["content"] =
+                                        json!(format!("{}\n\n{}", prev, msg.content));
+                                }
+                            }
+                        } else {
+                            conversation.push(json!({
+                                "role": "user",
+                                "content": msg.content
+                            }));
+                        }
+                        last_role = Some("user");
+                    }
+                    ChatRole::System => unreachable!(),
+                }
+            } else {
+                // ── Legacy text-only format ────────────────────────
+                let content = if msg.role == ChatRole::Tool {
+                    if let Some(ref tc_id) = msg.tool_call_id {
+                        format!("[Tool Result ({tc_id})]\n{}", msg.content)
+                    } else {
+                        msg.content.clone()
+                    }
                 } else {
                     msg.content.clone()
-                }
-            } else {
-                msg.content.clone()
-            };
+                };
 
-            if last_role == Some(role) {
-                // Merge with previous message
-                if let Some(last) = conversation.last_mut() {
-                    if let Some(prev_content) = last["content"].as_str() {
-                        last["content"] = json!(format!("{}\n\n{}", prev_content, content));
+                if last_role == Some(role) {
+                    if let Some(last) = conversation.last_mut() {
+                        if let Some(prev_content) = last["content"].as_str() {
+                            last["content"] =
+                                json!(format!("{}\n\n{}", prev_content, content));
+                        }
                     }
+                } else {
+                    conversation.push(json!({
+                        "role": role,
+                        "content": content
+                    }));
+                    last_role = Some(role);
                 }
-            } else {
-                conversation.push(json!({
-                    "role": role,
-                    "content": content
-                }));
-                last_role = Some(role);
             }
         }
 
-        // Anthropic requires at least one user message
         if conversation.is_empty() {
             conversation.push(json!({
                 "role": "user",
                 "content": "Please proceed with the task."
             }));
         }
+
+        (system_parts, conversation)
+    }
+
+    async fn _generate(
+        &self,
+        messages: &[ChatMessage],
+        temperature: Option<f64>,
+    ) -> Result<String, BrainError> {
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{base}/messages");
+
+        let (system_parts, conversation) = self.build_conversation(messages, false);
 
         let mut body = json!({
             "model": self.model,
@@ -206,66 +308,14 @@ impl AnthropicClient {
         messages: &[ChatMessage],
         temperature: Option<f64>,
         observer: &mut dyn crate::compiler::StreamObserver,
-    ) -> Result<String, BrainError> {
+    ) -> Result<(String, crate::usage::TokenUsage), BrainError> {
         use eventsource_stream::Eventsource;
         use futures_util::StreamExt;
 
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{base}/messages");
 
-        let mut system_parts: Vec<serde_json::Value> = Vec::new();
-        let mut conversation: Vec<serde_json::Value> = Vec::new();
-
-        let system_messages: Vec<&ChatMessage> = messages
-            .iter()
-            .filter(|m| m.role == ChatRole::System)
-            .collect();
-
-        for (i, msg) in system_messages.iter().enumerate() {
-            let mut block = serde_json::json!({
-                "type": "text",
-                "text": msg.content
-            });
-            if self.prompt_caching && i == system_messages.len() - 1 {
-                block["cache_control"] = serde_json::json!({"type": "ephemeral"});
-            }
-            system_parts.push(block);
-        }
-
-        let mut last_role: Option<&str> = None;
-        for msg in messages {
-            if msg.role == ChatRole::System {
-                continue;
-            }
-
-            let role = match msg.role {
-                ChatRole::User | ChatRole::Tool => "user",
-                ChatRole::Assistant => "assistant",
-                ChatRole::System => unreachable!(),
-            };
-
-            if last_role == Some(role) {
-                if let Some(last) = conversation.last_mut() {
-                    if let Some(content) = last["content"].as_str() {
-                        last["content"] =
-                            serde_json::json!(format!("{}\n\n{}", content, msg.content));
-                    }
-                }
-            } else {
-                conversation.push(serde_json::json!({
-                    "role": role,
-                    "content": msg.content
-                }));
-                last_role = Some(role);
-            }
-        }
-
-        if conversation.is_empty() {
-            conversation.push(serde_json::json!({
-                "role": "user",
-                "content": "Please proceed with the task."
-            }));
-        }
+        let (system_parts, conversation) = self.build_conversation(messages, false);
 
         let mut body = serde_json::json!({
             "model": self.model,
@@ -300,6 +350,7 @@ impl AnthropicClient {
 
         let mut stream = resp.bytes_stream().eventsource();
         let mut full_text = String::new();
+        let mut usage = crate::usage::TokenUsage::default();
 
         while let Some(event_res) = stream.next().await {
             match event_res {
@@ -321,6 +372,29 @@ impl AnthropicClient {
                                         }
                                     }
                                 }
+                            } else if ty == "message_start" {
+                                // Initial usage from message_start event
+                                if let Some(u) = data.get("message").and_then(|m| m.get("usage")) {
+                                    usage.prompt_tokens = u.get("input_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                    usage.completion_tokens = u.get("output_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                    usage.cache_creation_input_tokens = u.get("cache_creation_input_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                    usage.cache_read_input_tokens = u.get("cache_read_input_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                }
+                            } else if ty == "message_delta" {
+                                // Final output token count from message_delta event
+                                if let Some(u) = data.get("usage") {
+                                    usage.completion_tokens = u.get("output_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                }
                             }
                         }
                     }
@@ -335,7 +409,272 @@ impl AnthropicClient {
             return Err(BrainError::MissingField("Empty stream response".into()));
         }
 
-        Ok(full_text)
+        Ok((full_text, usage))
+    }
+    /// Convert OpenAI-format tool definitions to Anthropic format.
+    ///
+    /// OpenAI: `{ type: "function", function: { name, description, parameters } }`
+    /// Anthropic: `{ name, description, input_schema }`
+    fn convert_tools_to_anthropic(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        tools
+            .iter()
+            .filter_map(|tool| {
+                let func = tool.get("function")?;
+                let name = func.get("name")?.as_str()?;
+                let description = func
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                let input_schema = func
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+
+                Some(json!({
+                    "name": name,
+                    "description": description,
+                    "input_schema": input_schema
+                }))
+            })
+            .collect()
+    }
+
+    async fn _generate_streaming_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        mut observer: Option<&mut dyn crate::compiler::ToolStreamObserver>,
+    ) -> Result<AgentResponse, BrainError> {
+        use eventsource_stream::Eventsource;
+        use futures_util::StreamExt;
+
+        let base = self.base_url.trim_end_matches('/');
+        let url = format!("{base}/messages");
+
+        let (system_parts, conversation) = self.build_conversation(messages, true);
+
+        let mut body = json!({
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": conversation,
+            "stream": true
+        });
+
+        if !system_parts.is_empty() {
+            body["system"] = json!(system_parts);
+        }
+
+        // Convert and attach tools
+        if !tools.is_empty() {
+            let anthropic_tools = Self::convert_tools_to_anthropic(tools);
+            body["tools"] = json!(anthropic_tools);
+        }
+
+        // Retry loop
+        let mut retries = 0;
+        let max_retries = 3;
+        let mut delay_ms: u64 = 1000;
+
+        let resp = loop {
+            match self.client.post(&url).json(&body).send().await {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        break r;
+                    }
+                    let code = status.as_u16();
+                    if [429, 500, 502, 503, 529].contains(&code) && retries < max_retries {
+                        retries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                        continue;
+                    }
+                    let raw_text = r.text().await.unwrap_or_default();
+                    return Err(BrainError::ApiError {
+                        status: code,
+                        body: raw_text,
+                    });
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        retries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 2;
+                        continue;
+                    }
+                    return Err(BrainError::Transport(e));
+                }
+            }
+        };
+
+        let mut stream = resp.bytes_stream().eventsource();
+        let mut full_text = String::new();
+        let mut usage = crate::usage::TokenUsage::default();
+
+        // Tool call accumulation: indexed by content_block index
+        // Each entry: (id, name, arguments_json_buffer)
+        let mut tool_calls: std::collections::HashMap<u64, (String, String, String)> =
+            std::collections::HashMap::new();
+        // Track the current content block index for delta routing
+        let mut current_block_index: u64 = 0;
+
+        while let Some(event_res) = stream.next().await {
+            match event_res {
+                Ok(event) => {
+                    let data_str = event.data;
+                    if data_str == "[DONE]" {
+                        break;
+                    }
+
+                    let data = match serde_json::from_str::<serde_json::Value>(&data_str) {
+                        Ok(d) => d,
+                        Err(_) => continue,
+                    };
+
+                    let event_type = match data.get("type").and_then(|t| t.as_str()) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+
+                    match event_type {
+                        "content_block_start" => {
+                            // Track the block index
+                            if let Some(idx) = data.get("index").and_then(serde_json::Value::as_u64) {
+                                current_block_index = idx;
+                            }
+                            // Check if it's a tool_use block
+                            if let Some(content_block) = data.get("content_block") {
+                                if content_block.get("type").and_then(|t| t.as_str())
+                                    == Some("tool_use")
+                                {
+                                    let id = content_block
+                                        .get("id")
+                                        .and_then(|i| i.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let name = content_block
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+
+                                    if let Some(ref mut obs) = observer {
+                                        obs.on_tool_call_start(&id, &name);
+                                    }
+
+                                    tool_calls.insert(
+                                        current_block_index,
+                                        (id, name, String::new()),
+                                    );
+                                }
+                            }
+                        }
+                        "content_block_delta" => {
+                            if let Some(idx) = data.get("index").and_then(serde_json::Value::as_u64) {
+                                current_block_index = idx;
+                            }
+                            if let Some(delta) = data.get("delta") {
+                                let delta_type =
+                                    delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                                match delta_type {
+                                    "text_delta" => {
+                                        if let Some(text) =
+                                            delta.get("text").and_then(|t| t.as_str())
+                                        {
+                                            if !text.is_empty() {
+                                                full_text.push_str(text);
+                                                if let Some(ref mut obs) = observer {
+                                                    obs.on_text_chunk(text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "input_json_delta" => {
+                                        if let Some(partial_json) = delta
+                                            .get("partial_json")
+                                            .and_then(|p| p.as_str())
+                                        {
+                                            if let Some(entry) =
+                                                tool_calls.get_mut(&current_block_index)
+                                            {
+                                                entry.2.push_str(partial_json);
+                                                if let Some(ref mut obs) = observer {
+                                                    obs.on_tool_call_args_chunk(
+                                                        &entry.0,
+                                                        partial_json,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {} // ignore thinking_delta, etc.
+                                }
+                            }
+                        }
+                        "message_start" => {
+                            // Capture initial usage from message_start event
+                            if let Some(u) = data.get("message").and_then(|m| m.get("usage")) {
+                                usage.prompt_tokens = u.get("input_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as u32;
+                                usage.completion_tokens = u.get("output_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as u32;
+                                usage.cache_creation_input_tokens = u.get("cache_creation_input_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as u32;
+                                usage.cache_read_input_tokens = u.get("cache_read_input_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as u32;
+                            }
+                        }
+                        "message_delta" => {
+                            // Final output token count from message_delta event
+                            if let Some(u) = data.get("usage") {
+                                usage.completion_tokens = u.get("output_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as u32;
+                            }
+                        }
+                        "message_stop" => break,
+                        _ => {} // content_block_stop, ping, etc.
+                    }
+                }
+                Err(e) => {
+                    return Err(BrainError::Config(format!("Stream error: {e}")));
+                }
+            }
+        }
+
+        // Build the response blocks
+        let mut blocks = Vec::new();
+        if !full_text.is_empty() {
+            blocks.push(AgentResponseBlock::Text(full_text));
+        }
+
+        // Sort tool calls by block index and add to response
+        let mut sorted_calls: Vec<(u64, (String, String, String))> =
+            tool_calls.into_iter().collect();
+        sorted_calls.sort_by_key(|(idx, _)| *idx);
+
+        for (_, (id, name, args_str)) in sorted_calls {
+            let arguments: serde_json::Value = serde_json::from_str(&args_str)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+            blocks.push(AgentResponseBlock::ToolCall(ToolCallRequest {
+                id,
+                name,
+                arguments,
+            }));
+        }
+
+        if blocks.is_empty() {
+            return Err(BrainError::MissingField(
+                "Empty stream response with no tool calls".into(),
+            ));
+        }
+
+        Ok(AgentResponse { blocks, usage: Some(usage) })
     }
 }
 
@@ -360,10 +699,21 @@ impl LlmClient for AnthropicClient {
         observer: Option<&mut dyn crate::compiler::StreamObserver>,
     ) -> Result<String, BrainError> {
         if let Some(obs) = observer {
-            self._generate_streaming(messages, temperature, obs).await
+            let (text, _usage) = self._generate_streaming(messages, temperature, obs).await?;
+            Ok(text)
         } else {
             self._generate(messages, temperature).await
         }
+    }
+
+    async fn generate_streaming_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[serde_json::Value],
+        observer: Option<&mut dyn crate::compiler::ToolStreamObserver>,
+    ) -> Result<AgentResponse, BrainError> {
+        self._generate_streaming_with_tools(messages, tools, observer)
+            .await
     }
 }
 

@@ -588,7 +588,8 @@ impl LlmClient for ReqwestLlmClient {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": api_messages,
-            "stream": true
+            "stream": true,
+            "stream_options": { "include_usage": true }
         });
 
         // Include tool definitions
@@ -647,6 +648,7 @@ impl LlmClient for ReqwestLlmClient {
 
         let mut stream = resp.bytes_stream().eventsource();
         let mut full_text = String::new();
+        let mut usage: Option<crate::usage::TokenUsage> = None;
 
         // Tool call accumulation state
         // Map from index to (id, name, arguments_buffer)
@@ -725,6 +727,21 @@ impl LlmClient for ReqwestLlmClient {
                                 }
                             }
                         }
+
+                        // Capture usage from the final chunk (sent when include_usage is true)
+                        if let Some(u) = data.get("usage") {
+                            let prompt = u.get("prompt_tokens")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0) as u32;
+                            let completion = u.get("completion_tokens")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0) as u32;
+                            usage = Some(crate::usage::TokenUsage {
+                                prompt_tokens: prompt,
+                                completion_tokens: completion,
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
                 Err(e) => {
@@ -762,7 +779,7 @@ impl LlmClient for ReqwestLlmClient {
             ));
         }
 
-        Ok(crate::AgentResponse { blocks })
+        Ok(crate::AgentResponse { blocks, usage })
     }
 }
 

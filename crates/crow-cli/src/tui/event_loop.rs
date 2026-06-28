@@ -610,12 +610,16 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
         }
         // ── High-granularity events (Yomi-inspired) ─────────────────────
         AgentEvent::TokenUsage {
+            prompt_tokens,
+            completion_tokens,
             total_tokens,
             context_window,
-            ..
         } => {
             // Update context window usage for status bar (Yomi pattern)
             state.ctx_usage = Some((total_tokens, context_window));
+            // Accumulate session-level totals for /cost
+            state.cumulative_prompt_tokens += prompt_tokens;
+            state.cumulative_completion_tokens += completion_tokens;
         }
         AgentEvent::StateChanged { from, to } => {
             if state.view_mode == ViewMode::Audit {

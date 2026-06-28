@@ -124,6 +124,12 @@ pub struct AppState {
     /// Last known total token usage and context window size.
     pub ctx_usage: Option<(u32, u32)>,
 
+    // ── Cumulative Token Usage (session-level) ──────────────────────
+    /// Total prompt tokens accumulated across all turns in this session.
+    pub cumulative_prompt_tokens: u32,
+    /// Total completion tokens accumulated across all turns in this session.
+    pub cumulative_completion_tokens: u32,
+
     // ── Timed Status Messages (Yomi StatusMessage pattern) ──────────
     /// Transient message displayed in the status bar center section.
     pub status_message: Option<StatusMessage>,
@@ -315,6 +321,8 @@ impl AppState {
             last_cell_buffer_len: 0,
             turn_phase: None,
             ctx_usage: None,
+            cumulative_prompt_tokens: 0,
+            cumulative_completion_tokens: 0,
             status_message: None,
             status_message_timeout: None,
             status_indicator: None,

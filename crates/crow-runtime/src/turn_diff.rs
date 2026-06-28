@@ -183,6 +183,45 @@ impl TurnDiffTracker {
         diff_text.push_str(&unified);
         Some(diff_text)
     }
+
+    /// Revert all tracked files to their baseline state.
+    ///
+    /// For modified files, restores the original content.
+    /// For newly created files, deletes them.
+    /// Returns a summary of what was reverted.
+    pub fn revert(&self) -> Vec<(PathBuf, RevertAction)> {
+        let mut results = Vec::new();
+        let mut paths: Vec<&PathBuf> = self.baselines.keys().collect();
+        paths.sort();
+
+        for path in paths {
+            let baseline = self.baselines.get(path);
+            let was_created = self.created.contains(path);
+
+            if was_created {
+                // File was created during this turn — delete it
+                if path.exists() {
+                    if fs::remove_file(path).is_ok() {
+                        results.push((path.clone(), RevertAction::Deleted));
+                    } else {
+                        results.push((path.clone(), RevertAction::Failed("could not delete".into())));
+                    }
+                }
+            } else if let Some(Some(original_content)) = baseline {
+                // File existed before — restore original content
+                let current = fs::read(path).ok();
+                if current.as_deref() != Some(original_content.as_slice()) {
+                    if fs::write(path, original_content).is_ok() {
+                        results.push((path.clone(), RevertAction::Restored));
+                    } else {
+                        results.push((path.clone(), RevertAction::Failed("could not write".into())));
+                    }
+                }
+            }
+        }
+
+        results
+    }
 }
 
 /// Type of change detected for a file.
@@ -201,6 +240,17 @@ impl std::fmt::Display for ChangeKind {
             Self::Deleted => write!(f, "deleted"),
         }
     }
+}
+
+/// Result of reverting a file change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevertAction {
+    /// File was restored to its original content.
+    Restored,
+    /// File was deleted (it was created during the turn).
+    Deleted,
+    /// Revert failed with a reason.
+    Failed(String),
 }
 
 /// Normalize a path for consistent comparison.

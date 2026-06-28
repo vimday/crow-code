@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Error as SerdeError;
 
+use crate::usage::TokenUsage;
+
 // ─── Chat Message Protocol ─────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -100,6 +102,7 @@ pub enum AgentResponseBlock {
 #[derive(Debug, Clone)]
 pub struct AgentResponse {
     pub blocks: Vec<AgentResponseBlock>,
+    pub usage: Option<TokenUsage>,
 }
 
 impl AgentResponse {
@@ -210,6 +213,7 @@ pub trait LlmClient: Send + Sync {
         let text = self.generate(messages).await?;
         Ok(AgentResponse {
             blocks: vec![AgentResponseBlock::Text(text)],
+            usage: None,
         })
     }
 }
