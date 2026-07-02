@@ -4,6 +4,9 @@
 //! compiled into an [`IntentPlan`] containing atomic [`EditOp`]s with
 //! preconditions, base snapshot anchoring, and fuzzy-match hunks.
 
+pub mod applier;
+pub mod parser;
+pub mod seek_sequence;
 pub mod types;
 pub mod util;
 
