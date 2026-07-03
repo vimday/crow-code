@@ -48,6 +48,114 @@ pub struct ToolResult {
     pub from_cache: bool,
 }
 
+/// Composite timeout/cancellation policy for tool execution.
+/// Inspired by Codex's ExecExpiration pattern.
+#[derive(Debug, Clone)]
+pub enum ExecExpiration {
+    /// Fixed timeout duration.
+    Timeout(Duration),
+    /// Use the orchestrator's default timeout.
+    DefaultTimeout,
+    /// Cancel-only: no timeout, just watch the token.
+    Cancellation(CancellationToken),
+    /// Both: race timeout against cancellation.
+    TimeoutOrCancellation {
+        timeout: Duration,
+        cancellation: CancellationToken,
+    },
+}
+
+impl ExecExpiration {
+    /// Create from optional timeout + optional cancellation token.
+    pub fn from_parts(
+        timeout: Option<Duration>,
+        cancellation: Option<CancellationToken>,
+    ) -> Self {
+        match (timeout, cancellation) {
+            (Some(t), Some(c)) => Self::TimeoutOrCancellation {
+                timeout: t,
+                cancellation: c,
+            },
+            (Some(t), None) => Self::Timeout(t),
+            (None, Some(c)) => Self::Cancellation(c),
+            (None, None) => Self::DefaultTimeout,
+        }
+    }
+
+    /// Resolve the effective timeout duration (using default if needed).
+    pub fn effective_timeout(&self, default: Duration) -> Option<Duration> {
+        match self {
+            Self::Timeout(d) => Some(*d),
+            Self::DefaultTimeout => Some(default),
+            Self::Cancellation(_) => None,
+            Self::TimeoutOrCancellation { timeout, .. } => Some(*timeout),
+        }
+    }
+
+    /// Get the cancellation token, if any.
+    pub fn cancellation_token(&self) -> Option<&CancellationToken> {
+        match self {
+            Self::Cancellation(c) | Self::TimeoutOrCancellation { cancellation: c, .. } => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Execute a future with this expiration policy.
+    /// Returns the result or an error indicating timeout/cancellation.
+    pub async fn execute<F, T>(
+        &self,
+        default_timeout: Duration,
+        future: F,
+    ) -> Result<T, ExpirationError>
+    where
+        F: std::future::Future<Output = T>,
+    {
+        match self {
+            Self::Timeout(d) => tokio::time::timeout(*d, future)
+                .await
+                .map_err(|_| ExpirationError::Timeout(*d)),
+            Self::DefaultTimeout => tokio::time::timeout(default_timeout, future)
+                .await
+                .map_err(|_| ExpirationError::Timeout(default_timeout)),
+            Self::Cancellation(token) => {
+                tokio::select! {
+                    result = future => Ok(result),
+                    _ = token.cancelled() => Err(ExpirationError::Cancelled),
+                }
+            }
+            Self::TimeoutOrCancellation {
+                timeout,
+                cancellation,
+            } => {
+                tokio::select! {
+                    result = tokio::time::timeout(*timeout, future) => {
+                        result.map_err(|_| ExpirationError::Timeout(*timeout))
+                    }
+                    _ = cancellation.cancelled() => Err(ExpirationError::Cancelled),
+                }
+            }
+        }
+    }
+}
+
+/// Error from an expiration policy.
+#[derive(Debug, Clone)]
+pub enum ExpirationError {
+    Timeout(Duration),
+    Cancelled,
+}
+
+impl std::fmt::Display for ExpirationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout(d) => write!(f, "timed out after {d:?}"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for ExpirationError {}
+
 /// Approval decision for a tool call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalDecision {
@@ -541,5 +649,76 @@ mod orchestrator_helpers_tests {
         assert!(is_transient_failure(&rate_limit));
         assert!(!is_transient_failure(&success));
         assert!(!is_transient_failure(&perm));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod exec_expiration_tests {
+    use super::*;
+
+    #[test]
+    fn from_parts_both() {
+        let token = CancellationToken::new();
+        let exp = ExecExpiration::from_parts(Some(Duration::from_secs(5)), Some(token));
+        assert!(matches!(exp, ExecExpiration::TimeoutOrCancellation { .. }));
+    }
+
+    #[test]
+    fn from_parts_timeout_only() {
+        let exp = ExecExpiration::from_parts(Some(Duration::from_secs(5)), None);
+        assert!(matches!(exp, ExecExpiration::Timeout(_)));
+    }
+
+    #[test]
+    fn from_parts_cancel_only() {
+        let token = CancellationToken::new();
+        let exp = ExecExpiration::from_parts(None, Some(token));
+        assert!(matches!(exp, ExecExpiration::Cancellation(_)));
+    }
+
+    #[test]
+    fn from_parts_neither() {
+        let exp = ExecExpiration::from_parts(None, None);
+        assert!(matches!(exp, ExecExpiration::DefaultTimeout));
+    }
+
+    #[test]
+    fn effective_timeout_resolves_default() {
+        let exp = ExecExpiration::DefaultTimeout;
+        assert_eq!(
+            exp.effective_timeout(Duration::from_secs(30)),
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_timeout_fires() {
+        let exp = ExecExpiration::Timeout(Duration::from_millis(10));
+        let result = exp
+            .execute(Duration::from_secs(30), async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                42
+            })
+            .await;
+        assert!(matches!(result, Err(ExpirationError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn execute_cancellation_fires() {
+        let token = CancellationToken::new();
+        let exp = ExecExpiration::Cancellation(token.clone());
+        let token2 = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            token2.cancel();
+        });
+        let result = exp
+            .execute(Duration::from_secs(30), async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                42
+            })
+            .await;
+        assert!(matches!(result, Err(ExpirationError::Cancelled)));
     }
 }

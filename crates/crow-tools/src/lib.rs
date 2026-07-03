@@ -19,6 +19,7 @@
 pub mod background;
 pub mod bash;
 pub mod bash_validation;
+pub mod command_safety;
 pub mod diff_utils;
 pub mod file_edit;
 pub mod file_lock;
@@ -31,6 +32,7 @@ pub mod orchestrator;
 pub mod parallel;
 pub mod permission;
 pub mod recon;
+pub mod seatbelt;
 pub mod subagent;
 pub mod truncation;
 
