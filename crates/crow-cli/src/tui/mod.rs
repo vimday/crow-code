@@ -5,6 +5,7 @@ pub mod components;
 pub mod diff_render;
 pub mod event_loop;
 pub mod history_cell;
+pub mod keymap;
 pub mod markdown_stream;
 pub mod render;
 pub mod shimmer;

@@ -146,6 +146,10 @@ pub struct AppState {
     // ── Quit Hint (Codex "press again to quit" pattern) ─────────────
     /// When set, display "Ctrl+C again to quit" until this instant.
     pub quit_hint_until: Option<Instant>,
+
+    // ── Session Start (for /status duration tracking) ───────────────
+    /// When this TUI session was created.
+    pub session_start: Instant,
 }
 
 /// Transient status bar message with severity level and optional auto-clear.
@@ -328,6 +332,7 @@ impl AppState {
             status_indicator: None,
             show_shortcuts_overlay: false,
             quit_hint_until: None,
+            session_start: Instant::now(),
         }
     }
 

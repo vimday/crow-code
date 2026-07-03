@@ -5,6 +5,50 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+// ── Slash Command Registry ──────────────────────────────────────────────────
+
+/// Slash command definition for autocomplete and help rendering.
+pub struct SlashCommand {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub usage: &'static str,
+}
+
+/// All available slash commands.
+pub fn all_commands() -> Vec<SlashCommand> {
+    vec![
+        SlashCommand { name: "help", description: "Show available commands", usage: "/help" },
+        SlashCommand { name: "status", description: "Show session status (model, workspace, view mode)", usage: "/status" },
+        SlashCommand { name: "model", description: "Switch model/provider", usage: "/model <provider>" },
+        SlashCommand { name: "clear", description: "Clear conversation and start fresh session", usage: "/clear" },
+        SlashCommand { name: "compact", description: "Force context compaction", usage: "/compact" },
+        SlashCommand { name: "diff", description: "Show git diff (including untracked)", usage: "/diff" },
+        SlashCommand { name: "undo", description: "Revert workspace to clean state", usage: "/undo" },
+        SlashCommand { name: "tokens", description: "Show context window usage", usage: "/tokens" },
+        SlashCommand { name: "cost", description: "Show token usage and estimated cost", usage: "/cost" },
+        SlashCommand { name: "copy", description: "Copy last agent message to clipboard", usage: "/copy" },
+        SlashCommand { name: "view", description: "Set view mode (focus|evidence|audit)", usage: "/view <mode>" },
+        SlashCommand { name: "memory", description: "Manage persistent workspace memory", usage: "/memory [add|clear|show]" },
+        SlashCommand { name: "session", description: "List or resume saved sessions", usage: "/session [list|resume <id>]" },
+        SlashCommand { name: "swarm", description: "Launch background sub-agent", usage: "/swarm <task>" },
+        SlashCommand { name: "exit", description: "Exit the application", usage: "/exit" },
+        SlashCommand { name: "quit", description: "Exit the application", usage: "/quit" },
+    ]
+}
+
+/// Get autocomplete suggestions for a partial command input.
+///
+/// The input may or may not start with `/`; the leading slash is stripped
+/// before matching. Returns all commands whose name starts with the
+/// remaining prefix.
+pub fn autocomplete_commands(partial: &str) -> Vec<SlashCommand> {
+    let needle = partial.trim_start_matches('/');
+    all_commands()
+        .into_iter()
+        .filter(|c| c.name.starts_with(needle))
+        .collect()
+}
+
 pub fn execute_shell_command(bash_cmd: String, tx: mpsc::UnboundedSender<TuiMessage>) {
     tokio::spawn(async move {
         let output = tokio::process::Command::new("sh")
@@ -101,41 +145,33 @@ pub fn execute_command_string(
             }
             "help" | "?" => {
                 state.push_user("/help");
-                state.push_log(
-                    [
-                        "Commands:",
-                        "  /help          Show this message",
-                        "  /status        Workspace health",
-                        "  /clear         Clear conversation and start fresh session",
-                        "  /view <mode>   Set view (focus|evidence|audit)",
-                        "  /model         Show current model",
-                        "  /swarm <task>  Launch background sub-agent",
-                        "  /compact       Force context compaction",
-                        "  /tokens        Show context window usage",
-                        "  /cost          Show token usage and estimated cost",
-                        "  /diff          Show git diff (including untracked)",
-                        "  /undo          Revert last agent turn changes",
-                        "  /memory        Manage persistent workspace memory",
-                        "  /exit          Exit Crow",
-                        "",
-                        "Shortcuts:",
-                        "  Ctrl+C         Interrupt / quit (press twice)",
-                        "  Ctrl+D         Quit immediately",
-                        "  Ctrl+J         Insert newline",
-                        "  Ctrl+L         Clear screen",
-                        "  Ctrl+U         Clear input",
-                        "  Esc            Interrupt running task",
-                        "  ?              Toggle shortcut overlay",
-                        "  !<cmd>         Execute shell command",
-                    ]
-                    .join("\n"),
-                );
+                let mut help_text = String::from("Commands:\n");
+                for cmd in all_commands() {
+                    help_text.push_str(&format!("  {:<14}{}", cmd.usage, cmd.description));
+                    help_text.push('\n');
+                }
+                help_text.push_str("\nShortcuts:\n");
+                help_text.push_str("  Ctrl+C         Interrupt / quit (press twice)\n");
+                help_text.push_str("  Ctrl+D         Quit immediately\n");
+                help_text.push_str("  Ctrl+J         Insert newline\n");
+                help_text.push_str("  Ctrl+L         Clear screen\n");
+                help_text.push_str("  Ctrl+U         Clear input\n");
+                help_text.push_str("  Esc            Interrupt running task\n");
+                help_text.push_str("  ?              Toggle shortcut overlay\n");
+                help_text.push_str("  !<cmd>         Execute shell command");
+                state.push_log(help_text);
             }
             "status" => {
                 state.push_user("/status");
+                let session_duration = state.session_start.elapsed();
+                let mins = session_duration.as_secs() / 60;
+                let secs = session_duration.as_secs() % 60;
+                let total_tokens = state.cumulative_prompt_tokens + state.cumulative_completion_tokens;
+                let turns = state.history.iter().filter(|c| c.kind_label() == "User").count();
                 state.push_log(format!(
-                    "Model: {}\nWorkspace: {}\nWrite Mode: {}\nView: {:?}",
-                    state.model_info, state.workspace_name, state.write_mode, state.view_mode,
+                    "Session Status:\n  Model:      {}\n  Workspace:  {}\n  Write Mode: {}\n  View:       {:?}\n  Git Branch: {}\n  Duration:   {mins}m {secs}s\n  Turns:      {turns}\n  Tokens:     {total_tokens}",
+                    state.model_info, state.workspace_name, state.write_mode,
+                    state.view_mode, state.git_branch,
                 ));
             }
             "model" => {
@@ -430,6 +466,23 @@ pub fn execute_command_string(
                         }
                     }
                 });
+            }
+            "copy" => {
+                state.push_user("/copy");
+                let last_agent_text = state
+                    .history
+                    .iter()
+                    .rev()
+                    .find(|c| c.kind_label() == "Agent")
+                    .map(|c| c.raw_text().to_string());
+                if let Some(text) = last_agent_text {
+                    state.push_log(format!(
+                        "Captured last agent message ({} chars). Use terminal copy to paste.",
+                        text.len()
+                    ));
+                } else {
+                    state.push_error("No agent messages to copy.");
+                }
             }
             other => {
                 state.push_error(format!(

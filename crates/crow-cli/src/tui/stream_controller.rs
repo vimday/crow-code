@@ -83,6 +83,14 @@ pub struct StreamController {
     below_exit_since: Option<Instant>,
     /// Timestamp of the last catch-up exit (for re-entry hold).
     last_catch_up_exit: Option<Instant>,
+
+    // ── Two-Region Streaming State ──────────────────────────────
+    /// Lines that have been committed to the stable region (finalized).
+    stable_lines: Vec<String>,
+    /// Lines currently held back because they look like a partial table.
+    table_holdback: Vec<String>,
+    /// Whether we're currently inside a potential table sequence.
+    in_table_sequence: bool,
 }
 
 impl StreamController {
@@ -99,6 +107,9 @@ impl StreamController {
         self.mode = ChunkingMode::Smooth;
         self.below_exit_since = None;
         self.last_catch_up_exit = None;
+        self.stable_lines.clear();
+        self.table_holdback.clear();
+        self.in_table_sequence = false;
     }
 
     /// Returns true if the controller is actively buffering a stream.
@@ -120,16 +131,35 @@ impl StreamController {
     ///
     /// The delta is fed through the newline-gated markdown renderer.
     /// Completed lines are buffered in `pending` for tick-driven drain.
+    /// Lines that look like markdown pipe-table rows are held back until
+    /// the table is complete (a non-pipe line arrives or the stream ends).
     pub fn push_chunk(&mut self, chunk: &str) {
         let renderer = crate::render::TerminalRenderer::new();
         if let Some(rendered) = self.stream_state.push(&renderer, chunk) {
             let now = Instant::now();
             for line in rendered.lines() {
-                self.pending.push(StreamCell {
-                    
-                    payload: line.to_string(),
-                });
-                self.enqueue_times.push(now);
+                let trimmed = line.trim_start();
+                if trimmed.starts_with('|') {
+                    // Pipe-table row detected — hold it back.
+                    self.table_holdback.push(line.to_string());
+                    self.in_table_sequence = true;
+                } else {
+                    // Non-pipe line: flush any accumulated table holdback
+                    // first, then enqueue this line normally.
+                    if self.in_table_sequence {
+                        for held in self.table_holdback.drain(..) {
+                            self.pending.push(StreamCell {
+                                payload: held,
+                            });
+                            self.enqueue_times.push(now);
+                        }
+                        self.in_table_sequence = false;
+                    }
+                    self.pending.push(StreamCell {
+                        payload: line.to_string(),
+                    });
+                    self.enqueue_times.push(now);
+                }
             }
         }
     }
@@ -175,12 +205,13 @@ impl StreamController {
         if let Some(flushed) = self.stream_state.flush(&renderer) {
             for line in flushed.lines() {
                 self.pending.push(StreamCell {
-                    
                     payload: line.to_string(),
                 });
                 self.enqueue_times.push(now);
             }
         }
+        // Flush any held-back table lines on stream end.
+        self.flush_holdback();
         self.active = false;
     }
 
@@ -209,7 +240,12 @@ impl StreamController {
         // If stream ended, flush everything immediately
         if !self.active {
             self.enqueue_times.clear();
-            return self.pending.drain(..).collect();
+            let drained: Vec<StreamCell> = self.pending.drain(..).collect();
+            // Commit everything we just drained to stable.
+            for cell in &drained {
+                self.stable_lines.push(cell.payload.clone());
+            }
+            return drained;
         }
 
         let now = Instant::now();
@@ -237,15 +273,21 @@ impl StreamController {
         };
 
         self.enqueue_times.drain(..batch_size);
-        self.pending.drain(..batch_size).collect()
+        let drained: Vec<StreamCell> = self.pending.drain(..batch_size).collect();
+        // Commit drained lines to the stable region.
+        self.commit_to_stable(&drained);
+        drained
     }
 
     /// Force-drain all pending content immediately. Used when the turn
     /// is interrupted or on error recovery.
     pub fn drain_all(&mut self) -> Vec<StreamCell> {
         self.active = false;
+        self.flush_holdback();
         self.enqueue_times.clear();
-        self.pending.drain(..).collect()
+        let drained: Vec<StreamCell> = self.pending.drain(..).collect();
+        self.commit_to_stable(&drained);
+        drained
     }
 
     // ── Adaptive Chunking Hysteresis (Codex parity) ─────────────
@@ -312,6 +354,34 @@ impl StreamController {
     fn is_severe_backlog(&self, queued_lines: usize, oldest_age: Option<Duration>) -> bool {
         queued_lines >= SEVERE_QUEUE_DEPTH_LINES
             || oldest_age.is_some_and(|age| age >= SEVERE_OLDEST_AGE)
+    }
+
+    // ── Two-Region Streaming ────────────────────────────────────
+
+    /// Move drained lines into the stable region (finalized scrollback).
+    fn commit_to_stable(&mut self, cells: &[StreamCell]) {
+        for cell in cells {
+            self.stable_lines.push(cell.payload.clone());
+        }
+    }
+
+    /// Force the table holdback buffer to commit. Called when the stream
+    /// ends so that any trailing table rows are not lost.
+    pub fn flush_holdback(&mut self) {
+        if self.table_holdback.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for held in self.table_holdback.drain(..) {
+            self.pending.push(StreamCell { payload: held });
+            self.enqueue_times.push(now);
+        }
+        self.in_table_sequence = false;
+    }
+
+    /// Returns the number of lines in the stable (finalized) region.
+    pub fn stable_line_count(&self) -> usize {
+        self.stable_lines.len()
     }
 }
 

@@ -20,6 +20,7 @@ pub mod registry;
 pub mod role;
 pub mod session;
 pub mod session_store;
+pub mod shell_env;
 pub mod subagent;
 pub mod turn_context;
 pub mod turn_diff;
