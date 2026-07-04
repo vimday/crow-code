@@ -324,6 +324,197 @@ fn estimate_message_tokens(messages: &[ChatMessage]) -> u32 {
     (base_tokens + framing_overhead) as u32
 }
 
+// ─── Model Capability Info ─────────────────────────────────────────
+
+/// Comprehensive model capability metadata.
+/// Inspired by Codex's model-provider-info crate.
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+    /// Canonical model identifier.
+    pub model_id: &'static str,
+    /// Provider name (e.g., "anthropic", "openai", "deepseek").
+    pub provider: &'static str,
+    /// Context window size in tokens.
+    pub context_window: u32,
+    /// Maximum output tokens.
+    pub max_output_tokens: u32,
+    /// Whether the model supports native tool calling.
+    pub supports_tool_calling: bool,
+    /// Whether the model supports streaming responses.
+    pub supports_streaming: bool,
+    /// Whether the model supports vision/image inputs.
+    pub supports_vision: bool,
+    /// Whether the model supports system prompts natively.
+    pub supports_system_prompt: bool,
+    /// Whether the model supports extended thinking/reasoning.
+    pub supports_extended_thinking: bool,
+    /// Whether remote compaction (summarize via API) is supported.
+    pub supports_remote_compaction: bool,
+    /// Token threshold at which auto-compaction should trigger.
+    /// Typically ~80% of context_window.
+    pub auto_compact_threshold: u32,
+    /// Whether the model supports prompt caching (Anthropic-specific).
+    pub supports_prompt_caching: bool,
+    /// Cost per 1M input tokens in USD (approximate).
+    pub cost_per_1m_input: f64,
+    /// Cost per 1M output tokens in USD (approximate).
+    pub cost_per_1m_output: f64,
+}
+
+impl ModelInfo {
+    /// Estimate cost for a given token usage.
+    #[must_use]
+    pub fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64 {
+        let input_cost = f64::from(input_tokens) * self.cost_per_1m_input / 1_000_000.0;
+        let output_cost = f64::from(output_tokens) * self.cost_per_1m_output / 1_000_000.0;
+        input_cost + output_cost
+    }
+
+    /// Check if a message count would exceed the context window.
+    #[must_use]
+    pub fn would_exceed_context(&self, estimated_tokens: u32) -> bool {
+        estimated_tokens > self.context_window
+    }
+
+    /// Check if auto-compaction should be triggered.
+    #[must_use]
+    pub fn should_auto_compact(&self, current_tokens: u32) -> bool {
+        self.supports_remote_compaction && current_tokens > self.auto_compact_threshold
+    }
+}
+
+/// Look up comprehensive model info.
+///
+/// Returns capability metadata for known models, or `None` for
+/// unknown/custom models. Uses [`resolve_model_alias`] internally.
+#[must_use]
+pub fn model_info(model: &str) -> Option<ModelInfo> {
+    let canonical = resolve_model_alias(model);
+    match canonical.as_str() {
+        // ── Anthropic ─────────────────────────────────────────────
+        "claude-opus-4-7" => Some(ModelInfo {
+            model_id: "claude-opus-4-7",
+            provider: "anthropic",
+            context_window: 1_000_000,
+            max_output_tokens: 64_000,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_system_prompt: true,
+            supports_extended_thinking: true,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 800_000,
+            supports_prompt_caching: true,
+            cost_per_1m_input: 15.0,
+            cost_per_1m_output: 75.0,
+        }),
+        "claude-sonnet-4-6" => Some(ModelInfo {
+            model_id: "claude-sonnet-4-6",
+            provider: "anthropic",
+            context_window: 200_000,
+            max_output_tokens: 64_000,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_system_prompt: true,
+            supports_extended_thinking: true,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 160_000,
+            supports_prompt_caching: true,
+            cost_per_1m_input: 3.0,
+            cost_per_1m_output: 15.0,
+        }),
+
+        // ── OpenAI ────────────────────────────────────────────────
+        m if m.starts_with("gpt-5") => Some(ModelInfo {
+            model_id: "gpt-5",
+            provider: "openai",
+            context_window: 1_000_000,
+            max_output_tokens: 64_000,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_system_prompt: true,
+            supports_extended_thinking: false,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 800_000,
+            supports_prompt_caching: false,
+            cost_per_1m_input: 2.0,
+            cost_per_1m_output: 8.0,
+        }),
+        m if m.starts_with("gpt-4o") => Some(ModelInfo {
+            model_id: "gpt-4o",
+            provider: "openai",
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_system_prompt: true,
+            supports_extended_thinking: false,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 100_000,
+            supports_prompt_caching: false,
+            cost_per_1m_input: 2.50,
+            cost_per_1m_output: 10.0,
+        }),
+        m if m.starts_with("o3") => Some(ModelInfo {
+            model_id: "o3",
+            provider: "openai",
+            context_window: 200_000,
+            max_output_tokens: 100_000,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_system_prompt: true,
+            supports_extended_thinking: true,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 160_000,
+            supports_prompt_caching: false,
+            cost_per_1m_input: 2.0,
+            cost_per_1m_output: 8.0,
+        }),
+
+        // ── DeepSeek ──────────────────────────────────────────────
+        m if m.starts_with("deepseek") => Some(ModelInfo {
+            model_id: "deepseek-chat",
+            provider: "deepseek",
+            context_window: 128_000,
+            max_output_tokens: 8_192,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: false,
+            supports_system_prompt: true,
+            supports_extended_thinking: false,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 100_000,
+            supports_prompt_caching: false,
+            cost_per_1m_input: 0.14,
+            cost_per_1m_output: 0.28,
+        }),
+
+        // ── Google Gemini ─────────────────────────────────────────
+        m if m.starts_with("gemini") => Some(ModelInfo {
+            model_id: "gemini-2.5-pro",
+            provider: "google",
+            context_window: 1_000_000,
+            max_output_tokens: 65_536,
+            supports_tool_calling: true,
+            supports_streaming: true,
+            supports_vision: true,
+            supports_system_prompt: true,
+            supports_extended_thinking: true,
+            supports_remote_compaction: true,
+            auto_compact_threshold: 800_000,
+            supports_prompt_caching: false,
+            cost_per_1m_input: 1.25,
+            cost_per_1m_output: 10.0,
+        }),
+
+        _ => None,
+    }
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -432,5 +623,111 @@ mod tests {
         // Unknown models skip preflight
         let result = preflight_context_check(&msgs, "my-custom-model", 64_000);
         assert!(result.is_ok());
+    }
+
+    // ── ModelInfo tests ─────────────────────────────────────────
+
+    #[test]
+    fn model_info_returns_some_for_known_models() {
+        let info = model_info("claude-sonnet-4-6").expect("sonnet should have info");
+        assert_eq!(info.model_id, "claude-sonnet-4-6");
+        assert_eq!(info.provider, "anthropic");
+        assert_eq!(info.context_window, 200_000);
+        assert!(info.supports_tool_calling);
+        assert!(info.supports_vision);
+        assert!(info.supports_prompt_caching);
+
+        let info = model_info("gpt-4o").expect("gpt-4o should have info");
+        assert_eq!(info.provider, "openai");
+        assert_eq!(info.context_window, 128_000);
+
+        let info = model_info("deepseek-chat").expect("deepseek should have info");
+        assert_eq!(info.provider, "deepseek");
+        assert!(!info.supports_vision);
+
+        let info = model_info("gemini-2.5-pro").expect("gemini should have info");
+        assert_eq!(info.provider, "google");
+        assert!(info.supports_extended_thinking);
+
+        let info = model_info("o3").expect("o3 should have info");
+        assert_eq!(info.provider, "openai");
+        assert!(info.supports_extended_thinking);
+    }
+
+    #[test]
+    fn model_info_returns_none_for_unknown_models() {
+        assert!(model_info("my-custom-model").is_none());
+        assert!(model_info("llama3:8b").is_none());
+        assert!(model_info("mixtral-8x7b").is_none());
+    }
+
+    #[test]
+    fn model_info_estimate_cost_computes_correctly() {
+        let info = model_info("claude-sonnet-4-6").expect("sonnet should have info");
+        // 1M input tokens at $3/1M + 500K output tokens at $15/1M = $3 + $7.5 = $10.5
+        let cost = info.estimate_cost(1_000_000, 500_000);
+        assert!((cost - 10.5).abs() < 0.001, "expected ~$10.5, got ${cost}");
+
+        // Zero tokens → zero cost
+        let cost = info.estimate_cost(0, 0);
+        assert!((cost).abs() < f64::EPSILON, "expected $0, got ${cost}");
+    }
+
+    #[test]
+    fn model_info_should_auto_compact_triggers_at_threshold() {
+        let info = model_info("claude-sonnet-4-6").expect("sonnet should have info");
+        // Threshold is 160_000 for sonnet
+        assert!(!info.should_auto_compact(100_000));
+        assert!(!info.should_auto_compact(160_000)); // at threshold, not above
+        assert!(info.should_auto_compact(160_001)); // just above threshold
+        assert!(info.should_auto_compact(200_000));
+    }
+
+    #[test]
+    fn model_info_would_exceed_context_detects_overflow() {
+        let info = model_info("claude-sonnet-4-6").expect("sonnet should have info");
+        assert!(!info.would_exceed_context(199_999));
+        assert!(!info.would_exceed_context(200_000)); // at limit, not above
+        assert!(info.would_exceed_context(200_001)); // just above
+    }
+
+    #[test]
+    fn model_info_alias_resolution_works() {
+        // "sonnet" alias should resolve through to claude-sonnet-4-6 info
+        let info = model_info("sonnet").expect("sonnet alias should resolve");
+        assert_eq!(info.model_id, "claude-sonnet-4-6");
+        assert_eq!(info.provider, "anthropic");
+
+        // "opus" alias should resolve through to claude-opus-4-7 info
+        let info = model_info("opus").expect("opus alias should resolve");
+        assert_eq!(info.model_id, "claude-opus-4-7");
+        assert_eq!(info.cost_per_1m_input, 15.0);
+
+        // "deepseek" alias
+        let info = model_info("deepseek").expect("deepseek alias should resolve");
+        assert_eq!(info.model_id, "deepseek-chat");
+
+        // "gemini" alias
+        let info = model_info("gemini").expect("gemini alias should resolve");
+        assert_eq!(info.model_id, "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn model_info_starts_with_matches_variants() {
+        // gpt-4o variants
+        let info = model_info("gpt-4o-2024-08-06").expect("gpt-4o variant should match");
+        assert_eq!(info.model_id, "gpt-4o");
+
+        // gpt-5 variants
+        let info = model_info("gpt-5-turbo").expect("gpt-5 variant should match");
+        assert_eq!(info.model_id, "gpt-5");
+
+        // o3 variants
+        let info = model_info("o3-mini").expect("o3-mini should match");
+        assert_eq!(info.model_id, "o3");
+
+        // deepseek variants
+        let info = model_info("deepseek-coder").expect("deepseek-coder should match");
+        assert_eq!(info.model_id, "deepseek-chat");
     }
 }

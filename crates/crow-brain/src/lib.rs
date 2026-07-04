@@ -25,8 +25,8 @@ pub use compiler::{
 };
 pub use fallback::FallbackLlmClient;
 pub use model_registry::{
-    detect_provider_from_model, max_tokens_for_model, model_token_limit, preflight_context_check,
-    resolve_model_alias, ModelTokenLimit,
+    detect_provider_from_model, max_tokens_for_model, model_info, model_token_limit,
+    preflight_context_check, resolve_model_alias, ModelInfo, ModelTokenLimit,
 };
 pub use router::{build_client, describe_provider};
 pub use usage::TokenUsage;
