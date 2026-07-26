@@ -8,8 +8,8 @@ use ratatui::style::{Color, Styled, Stylize};
 use ratatui::text::Line;
 use std::fmt;
 
-use super::theme::{chars, colors, Styles};
 use super::markdown_stream;
+use super::theme::{chars, colors, Styles};
 
 /// Left gutter matching Codex's LIVE_PREFIX_COLS.
 const GUTTER: &str = "  ";
@@ -71,9 +71,7 @@ impl HistoryCell for UserMessageCell {
             } else {
                 "  ".set_style(prefix_style)
             };
-            lines.push(
-                Line::from(vec![prefix, line.to_string().set_style(style)]).style(style),
-            );
+            lines.push(Line::from(vec![prefix, line.to_string().set_style(style)]).style(style));
         }
 
         // Bottom padding (tinted) + untinted spacer
@@ -291,7 +289,9 @@ impl HistoryCell for ErrorCell {
         lines.push(Line::from(vec![
             GUTTER.to_string().set_style(Styles::error()),
             "┌─ Error ".set_style(Styles::error().bold()),
-            "─".repeat(wrap_width.saturating_sub(10).max(1)).set_style(Styles::error()),
+            "─"
+                .repeat(wrap_width.saturating_sub(10).max(1))
+                .set_style(Styles::error()),
         ]));
 
         for line in wrapped.iter() {
@@ -304,7 +304,9 @@ impl HistoryCell for ErrorCell {
         // Bottom border
         lines.push(Line::from(vec![
             format!("{GUTTER}└").set_style(Styles::error()),
-            "─".repeat(wrap_width.saturating_sub(2).max(1)).set_style(Styles::error()),
+            "─"
+                .repeat(wrap_width.saturating_sub(2).max(1))
+                .set_style(Styles::error()),
         ]));
 
         lines
@@ -487,9 +489,7 @@ impl HistoryCell for ToolCallCell {
             meta.fg(Color::DarkGray),
         ];
         if self.retry_count > 0 {
-            header_spans.push(
-                format!(" ↻{}", self.retry_count).fg(Color::Yellow),
-            );
+            header_spans.push(format!(" ↻{}", self.retry_count).fg(Color::Yellow));
         }
         if matches!(self.status, ToolCardStatus::Cached) {
             header_spans.push(" cached".fg(Color::Cyan).dim());

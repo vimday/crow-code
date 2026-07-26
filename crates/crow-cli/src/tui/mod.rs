@@ -1,4 +1,6 @@
+pub mod agent_status_feed;
 pub mod app;
+pub mod color;
 pub mod commands;
 pub mod component;
 pub mod components;
@@ -11,7 +13,6 @@ pub mod render;
 pub mod shimmer;
 pub mod state;
 pub mod stream_controller;
+pub mod terminal_palette;
 pub mod terminal_title;
 pub mod theme;
-pub mod color;
-pub mod terminal_palette;

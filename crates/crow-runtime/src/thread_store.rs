@@ -132,12 +132,7 @@ pub trait ThreadStore: Send + Sync {
     fn save_turn(&self, turn: &Turn) -> anyhow::Result<()>;
 
     /// Get turns for a thread ordered by index ascending, with pagination.
-    fn get_turns(
-        &self,
-        thread_id: &str,
-        limit: usize,
-        offset: usize,
-    ) -> anyhow::Result<Vec<Turn>>;
+    fn get_turns(&self, thread_id: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<Turn>>;
 
     /// Get the most recent turn for a thread.
     fn last_turn(&self, thread_id: &str) -> anyhow::Result<Option<Turn>>;
@@ -301,12 +296,7 @@ impl ThreadStore for InMemoryThreadStore {
         Ok(())
     }
 
-    fn get_turns(
-        &self,
-        thread_id: &str,
-        limit: usize,
-        offset: usize,
-    ) -> anyhow::Result<Vec<Turn>> {
+    fn get_turns(&self, thread_id: &str, limit: usize, offset: usize) -> anyhow::Result<Vec<Turn>> {
         let turns = self
             .turns
             .lock()
@@ -340,18 +330,12 @@ impl ThreadStore for InMemoryThreadStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("turn lock poisoned: {e}"))?;
 
-        let matching: Vec<_> = turns
-            .iter()
-            .filter(|t| t.thread_id == thread_id)
-            .collect();
+        let matching: Vec<_> = turns.iter().filter(|t| t.thread_id == thread_id).collect();
 
         let total_turns = matching.len() as u32;
         let total_input_tokens: u64 = matching.iter().map(|t| u64::from(t.input_tokens)).sum();
         let total_output_tokens: u64 = matching.iter().map(|t| u64::from(t.output_tokens)).sum();
-        let total_tool_calls: u32 = matching
-            .iter()
-            .map(|t| t.tool_calls.len() as u32)
-            .sum();
+        let total_tool_calls: u32 = matching.iter().map(|t| t.tool_calls.len() as u32).sum();
         let total_duration_ms: u64 = matching.iter().map(|t| t.duration_ms).sum();
 
         let estimated_cost_usd = (total_input_tokens as f64 / 1_000_000.0) * INPUT_COST_PER_M

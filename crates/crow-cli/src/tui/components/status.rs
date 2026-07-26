@@ -4,9 +4,9 @@ use ratatui::style::Stylize;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::tui::shimmer::shimmer_spans;
 use crate::tui::state::AppState;
 use crate::tui::theme::{chars, colors};
-use crate::tui::shimmer::shimmer_spans;
 
 const DETAILS_PREFIX: &str = "  └ ";
 
@@ -94,7 +94,7 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
                 right_parts.push(format!("{:.1}% ({cw_k}K)", pct * 100.0));
             }
         }
-        
+
         // streaming tokens
         if self.state.is_streaming {
             let tokens = self.state.streaming_token_estimate;
@@ -110,37 +110,62 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
         let right_text = format!(" {} ", right_parts.join(" · "));
         let right_w = right_text.chars().count() as u16;
 
-        let right_color = self.state.ctx_usage.map(|(tokens, cw)| {
-            if cw == 0 { return colors::text_muted(); }
-            let pct = tokens as f32 / cw as f32;
-            if pct >= 0.9 { colors::accent_error() }
-            else if pct >= 0.7 { colors::accent_warning() }
-            else { colors::text_muted() }
-        }).unwrap_or(colors::text_muted());
+        let right_color = self
+            .state
+            .ctx_usage
+            .map(|(tokens, cw)| {
+                if cw == 0 {
+                    return colors::text_muted();
+                }
+                let pct = tokens as f32 / cw as f32;
+                if pct >= 0.9 {
+                    colors::accent_error()
+                } else if pct >= 0.7 {
+                    colors::accent_warning()
+                } else {
+                    colors::text_muted()
+                }
+            })
+            .unwrap_or(colors::text_muted());
 
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(0), Constraint::Length(right_w)])
-            .split(Rect { x: area.x, y: area.y, width: area.width, height: 1 });
+            .split(Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            });
 
         Paragraph::new(right_text.fg(right_color)).render(chunks[1], buf);
 
         // ── Left side (Action + Details) ──
         let mut spans = Vec::new();
-        
+
         let mut has_action = false;
 
         // 1. Spinner & Header
         if let Some(ref action) = self.state.active_action {
             has_action = true;
             let frame = chars::SPINNER[self.state.spinner_idx % chars::SPINNER.len()];
-            spans.push(Span::styled(frame, ratatui::style::Style::new().fg(colors::accent_system()).bold()));
+            spans.push(Span::styled(
+                frame,
+                ratatui::style::Style::new()
+                    .fg(colors::accent_system())
+                    .bold(),
+            ));
             spans.push(" ".into());
             spans.extend(shimmer_spans(action));
         } else if let Some(ref ind) = self.state.status_indicator {
             has_action = true;
             let frame = chars::SPINNER[self.state.spinner_idx % chars::SPINNER.len()];
-            spans.push(Span::styled(frame, ratatui::style::Style::new().fg(colors::accent_system()).bold()));
+            spans.push(Span::styled(
+                frame,
+                ratatui::style::Style::new()
+                    .fg(colors::accent_system())
+                    .bold(),
+            ));
             spans.push(" ".into());
             if self.state.is_streaming {
                 spans.extend(shimmer_spans(&ind.header));
@@ -154,7 +179,10 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
                 crate::tui::state::StatusLevel::Error => colors::accent_error(),
                 crate::tui::state::StatusLevel::Tip => colors::text_muted(),
             };
-            spans.push(Span::styled(msg.content.clone(), ratatui::style::Style::new().fg(color)));
+            spans.push(Span::styled(
+                msg.content.clone(),
+                ratatui::style::Style::new().fg(color),
+            ));
         }
 
         if has_action {
@@ -180,7 +208,10 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
         }
 
         let mut lines = Vec::new();
-        lines.push(truncate_line_with_ellipsis(Line::from(spans), chunks[0].width as usize));
+        lines.push(truncate_line_with_ellipsis(
+            Line::from(spans),
+            chunks[0].width as usize,
+        ));
 
         // Progress bar (slim) when the indicator carries a percent.
         if area.height > 1 {
@@ -224,23 +255,32 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
                     // Simple wrap logic
                     let wrap_opts = textwrap::Options::new(area.width.saturating_sub(4) as usize);
                     let wrapped = textwrap::wrap(details, wrap_opts);
-                    for (i, wline) in wrapped.iter().enumerate().take(area.height.saturating_sub(1) as usize) {
+                    for (i, wline) in wrapped
+                        .iter()
+                        .enumerate()
+                        .take(area.height.saturating_sub(1) as usize)
+                    {
                         if i == 0 {
                             lines.push(Line::from(vec![
                                 DETAILS_PREFIX.dim(),
                                 wline.to_string().dim(),
                             ]));
                         } else {
-                            lines.push(Line::from(vec![
-                                "    ".dim(),
-                                wline.to_string().dim(),
-                            ]));
+                            lines.push(Line::from(vec!["    ".dim(), wline.to_string().dim()]));
                         }
                     }
                 }
             }
         }
 
-        Paragraph::new(Text::from(lines)).render(Rect { x: chunks[0].x, y: area.y, width: chunks[0].width, height: area.height }, buf);
+        Paragraph::new(Text::from(lines)).render(
+            Rect {
+                x: chunks[0].x,
+                y: area.y,
+                width: chunks[0].width,
+                height: area.height,
+            },
+            buf,
+        );
     }
 }

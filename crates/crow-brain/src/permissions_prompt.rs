@@ -116,10 +116,7 @@ mod tests {
 
     #[test]
     fn test_full_access_prompt() {
-        let prompt = PermissionsPrompt::new(
-            PromptPermissionMode::DangerFullAccess,
-            "/workspace",
-        );
+        let prompt = PermissionsPrompt::new(PromptPermissionMode::DangerFullAccess, "/workspace");
         let rendered = prompt.render();
         assert!(rendered.contains("full_access"));
         assert!(rendered.contains("unrestricted"));
@@ -129,10 +126,8 @@ mod tests {
 
     #[test]
     fn test_workspace_write_prompt() {
-        let prompt = PermissionsPrompt::new(
-            PromptPermissionMode::WorkspaceWrite,
-            "/home/user/project",
-        );
+        let prompt =
+            PermissionsPrompt::new(PromptPermissionMode::WorkspaceWrite, "/home/user/project");
         let rendered = prompt.render();
         assert!(rendered.contains("workspace_write"));
         assert!(rendered.contains("/home/user/project"));
@@ -140,10 +135,7 @@ mod tests {
 
     #[test]
     fn test_read_only_prompt() {
-        let prompt = PermissionsPrompt::new(
-            PromptPermissionMode::ReadOnly,
-            "/workspace",
-        );
+        let prompt = PermissionsPrompt::new(PromptPermissionMode::ReadOnly, "/workspace");
         let rendered = prompt.render();
         assert!(rendered.contains("read_only"));
         assert!(rendered.contains("READ-ONLY"));

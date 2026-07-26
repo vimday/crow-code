@@ -4,11 +4,18 @@ use crate::runtime::SessionRuntime;
 use crow_patch::SnapshotId;
 use crow_runtime::cancel::CancellationToken;
 use crow_runtime::context::ConversationManager;
-use crow_runtime::event::EngineEvent;
+use crow_runtime::event::{EngineEvent, OrchestrationEvent};
 use crow_runtime::session::{Session, SessionStore};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
+
+fn now_micros() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros()
+}
 
 /// Represents the deterministic state of an agent Turn lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +37,7 @@ pub enum ForkSnapshot {
 /// A specific operational command sent to the Thread Manager.
 pub enum Op {
     Input(String),
+    Auto(String),
     Interrupt,
     Clear,
     Compact(CancellationToken),
@@ -137,7 +145,7 @@ impl ThreadManager {
                     // Refuse if actively processing
                     return;
                 }
-                
+
                 let mut msgs = self.messages.lock().await;
                 match snapshot {
                     ForkSnapshot::TruncateBeforeNthUserMessage(n) => {
@@ -210,7 +218,170 @@ impl ThreadManager {
                 let token = CancellationToken::new();
                 self.spawn_swarm(prompt, token).await;
             }
+            Op::Auto(prompt) => {
+                let mut state = self.thread_state.lock().await;
+                if state.status == TurnStatus::InProgress {
+                    return;
+                }
+                let token = CancellationToken::new();
+                state.status = TurnStatus::InProgress;
+                state.cancellation = Some(token.clone());
+                state.turn_id = Some(format!("auto-{}", now_micros() as u32));
+                state.phase = TurnPhase::Planning;
+                state.started_at = Some(Instant::now());
+                drop(state);
+                self.spawn_auto(prompt, token);
+            }
         }
+    }
+
+    fn spawn_auto(&self, prompt: String, token: CancellationToken) {
+        let rt_clone = Arc::clone(&self.runtime);
+        let msgs_clone = Arc::clone(&self.messages);
+        let cfg_clone = self.config.clone();
+        let ui_tx = self.ui_tx.clone();
+        let thread_state = Arc::clone(&self.thread_state);
+        let strategy = match cfg_clone.auto_mode.strategy {
+            crate::config::AutoOrchestrationStrategy::Fast => {
+                crow_runtime::auto::AutoStrategy::Fast
+            }
+            crate::config::AutoOrchestrationStrategy::Balanced => {
+                crow_runtime::auto::AutoStrategy::Balanced
+            }
+            crate::config::AutoOrchestrationStrategy::Thorough => {
+                crow_runtime::auto::AutoStrategy::Thorough
+            }
+        };
+        let auto_cfg = crow_runtime::auto::AutoRunConfig {
+            max_parallel_agents: cfg_clone.auto_mode.max_parallel_agents,
+            max_agent_depth: cfg_clone.auto_mode.max_agent_depth,
+            strategy,
+        };
+        let plan = crow_runtime::auto::build_auto_plan(&prompt, &auto_cfg);
+        let run_id = format!("auto-{:08x}", now_micros() as u32);
+
+        tokio::spawn(async move {
+            let send_orchestration = |event| {
+                let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Orchestration(event)));
+            };
+            send_orchestration(OrchestrationEvent::AutoStarted {
+                run_id: run_id.clone(),
+                prompt: prompt.clone(),
+                agent_count: plan.agents.len(),
+            });
+
+            let mut success = true;
+            for spec in plan.agents {
+                if token.is_cancelled() {
+                    success = false;
+                    break;
+                }
+                send_orchestration(OrchestrationEvent::PhaseStarted {
+                    run_id: run_id.clone(),
+                    phase: spec.phase.as_str().to_string(),
+                });
+
+                let reservation = match rt_clone.task_registry.reserve(
+                    spec.name.clone(),
+                    spec.prompt.clone(),
+                    spec.phase.task_kind(),
+                ) {
+                    Ok(reservation) => reservation,
+                    Err(e) => {
+                        success = false;
+                        send_orchestration(OrchestrationEvent::AutoCompleted {
+                            run_id: run_id.clone(),
+                            success: false,
+                            summary: format!("Could not reserve agent slot: {e:?}"),
+                        });
+                        break;
+                    }
+                };
+                let agent_id = reservation.id().to_string();
+                send_orchestration(OrchestrationEvent::AgentStarted {
+                    run_id: run_id.clone(),
+                    agent_id: agent_id.clone(),
+                    name: spec.name.clone(),
+                    role: spec.role.clone(),
+                });
+                let _ = rt_clone.task_registry.set_running(&agent_id);
+                let _ = rt_clone
+                    .task_registry
+                    .set_preview(&agent_id, spec.prompt.clone());
+                send_orchestration(OrchestrationEvent::AgentPreview {
+                    run_id: run_id.clone(),
+                    agent_id: agent_id.clone(),
+                    preview: spec.prompt.clone(),
+                });
+
+                // First slice wires deterministic lifecycle and status; execution remains
+                // in the primary turn path until subagent scheduling is fully parallelized.
+                tokio::task::yield_now().await;
+                if spec.read_only {
+                    let _ = rt_clone.task_registry.set_completed(
+                        &agent_id,
+                        Some("Prepared read-only orchestration context.".to_string()),
+                    );
+                } else {
+                    let _ = rt_clone.task_registry.set_completed(
+                        &agent_id,
+                        Some("Primary execution is delegated to normal turn handling.".to_string()),
+                    );
+                }
+                let _ = reservation.commit();
+                send_orchestration(OrchestrationEvent::AgentCompleted {
+                    run_id: run_id.clone(),
+                    agent_id,
+                    success: true,
+                });
+            }
+
+            if token.is_cancelled() {
+                success = false;
+            }
+            if success {
+                let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
+                    "Auto orchestration prepared. Running primary implementation turn…".into(),
+                )));
+                // Execute the requested task through the proven native turn path after
+                // surfacing the orchestration lifecycle to the TUI.
+                let mut observer = crow_runtime::event::ChannelEventHandler::with_cancellation(
+                    ui_tx.clone(),
+                    token.clone(),
+                );
+                let mut local_msgs = msgs_clone.lock().await.clone();
+                let result = rt_clone
+                    .execute_native_turn(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
+                    .await;
+                success = result.is_ok() && !token.is_cancelled();
+                if success {
+                    *msgs_clone.lock().await = local_msgs;
+                }
+                let _ = ui_tx.send(EngineEvent::TurnComplete(success, None));
+            } else {
+                let _ = ui_tx.send(EngineEvent::TurnComplete(false, None));
+            }
+
+            send_orchestration(OrchestrationEvent::AutoCompleted {
+                run_id,
+                success,
+                summary: if success {
+                    "auto run completed".to_string()
+                } else {
+                    "auto run stopped before completion".to_string()
+                },
+            });
+            let mut state = thread_state.lock().await;
+            state.status = if success {
+                TurnStatus::Completed(None)
+            } else {
+                TurnStatus::Aborted
+            };
+            state.cancellation = None;
+            state.phase = TurnPhase::Complete;
+            drop(state);
+            let _ = ui_tx.send(EngineEvent::SessionComplete);
+        });
     }
 
     fn spawn_turn(&self, prompt: String, token: CancellationToken) {
@@ -230,8 +401,6 @@ impl ThreadManager {
 
             // Clone messages to prevent locking ConversationManager for the duration of the run
             let mut local_msgs = msgs_clone.lock().await.clone();
-
-
 
             let result = rt_clone
                 .execute_native_turn(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
@@ -258,7 +427,8 @@ impl ThreadManager {
                 *msgs_clone.lock().await = local_msgs.clone();
                 match result {
                     Ok(native_result) => {
-                        state.status = TurnStatus::Completed(Some(native_result.snapshot_id.clone()));
+                        state.status =
+                            TurnStatus::Completed(Some(native_result.snapshot_id.clone()));
                         let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Turn(
                             TurnEvent::Completed {
                                 turn_id: state.turn_id.clone().unwrap_or_default(),
@@ -271,7 +441,8 @@ impl ThreadManager {
                         let timing_summary = if let Some(ref snap) = native_result.timing_snapshot {
                             crow_runtime::event::TurnTimingSummary {
                                 total_ms: snap.total_ms,
-                                tool_ms: native_result.metrics.tool_execution_time.as_millis() as u64,
+                                tool_ms: native_result.metrics.tool_execution_time.as_millis()
+                                    as u64,
                                 llm_calls: native_result.metrics.llm_call_count,
                                 compactions: native_result.metrics.compactions,
                                 ttft_ms: snap.ttft_ms,
@@ -279,7 +450,8 @@ impl ThreadManager {
                         } else {
                             crow_runtime::event::TurnTimingSummary {
                                 total_ms: 0,
-                                tool_ms: native_result.metrics.tool_execution_time.as_millis() as u64,
+                                tool_ms: native_result.metrics.tool_execution_time.as_millis()
+                                    as u64,
                                 llm_calls: native_result.metrics.llm_call_count,
                                 compactions: native_result.metrics.compactions,
                                 ttft_ms: None,

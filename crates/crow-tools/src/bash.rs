@@ -102,9 +102,7 @@ impl Tool for BashTool {
 
         if parsed.background.unwrap_or(false) {
             if let Some(bg_mgr) = &ctx.background_manager {
-                let task_id = bg_mgr
-                    .spawn(parsed.command.clone(), &cwd_path)
-                    .await?;
+                let task_id = bg_mgr.spawn(parsed.command.clone(), &cwd_path).await?;
                 return Ok(ToolOutput::success(format!("Background task spawned successfully.\nTask ID: {task_id}\nUse 'bash_status' to check its output and status.")));
             } else {
                 return Ok(ToolOutput::error(
@@ -256,10 +254,11 @@ fn head_tail_truncate(s: &str, budget: usize) -> String {
         &s[idx..]
     };
 
-    let truncated_bytes = s.len().saturating_sub(head.len()).saturating_sub(tail.len());
-    let marker = format!(
-        "\n\n[... truncated {truncated_bytes} bytes — head + tail shown ...]\n\n"
-    );
+    let truncated_bytes = s
+        .len()
+        .saturating_sub(head.len())
+        .saturating_sub(tail.len());
+    let marker = format!("\n\n[... truncated {truncated_bytes} bytes — head + tail shown ...]\n\n");
     format!("{head}{marker}{tail}")
 }
 
@@ -269,9 +268,7 @@ mod tests {
 
     #[test]
     fn head_tail_truncate_preserves_endpoints() {
-        let s: String = (0..10000)
-            .map(|i| format!("line {i}\n"))
-            .collect();
+        let s: String = (0..10000).map(|i| format!("line {i}\n")).collect();
         let truncated = head_tail_truncate(&s, 1024);
         assert!(truncated.contains("line 0"));
         // Tail should still contain something near the end.

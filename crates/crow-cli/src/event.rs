@@ -132,6 +132,11 @@ impl Drop for CliEventHandler {
 impl EventHandler for CliEventHandler {
     fn handle_event(&mut self, event: AgentEvent) {
         match event {
+            AgentEvent::Orchestration(ev) => {
+                if self.view_mode != ViewMode::Focus {
+                    self.print_trace("Auto", &format!("{ev:?}"), Color::AnsiValue(141));
+                }
+            }
             AgentEvent::Turn(turn_ev) => match turn_ev {
                 TurnEvent::Started { turn_id } => {
                     if self.view_mode == ViewMode::Audit {
@@ -166,9 +171,7 @@ impl EventHandler for CliEventHandler {
                         self.print_trace("Phase", &format!("{phase}"), Color::AnsiValue(245));
                     }
                 }
-                TurnEvent::DiffGenerated {
-                    files_changed, ..
-                } => {
+                TurnEvent::DiffGenerated { files_changed, .. } => {
                     self.print_trace(
                         "Diff",
                         &format!("{files_changed} file(s) changed"),

@@ -272,7 +272,7 @@ impl IntentCompiler {
         let prompt = custom_prompt.unwrap_or(crate::compactor::DEFAULT_COMPACTION_PROMPT);
 
         let mut conversation = messages.to_vec();
-        
+
         let compaction_prompt = crate::prompt::CompactionPrompt::new(prompt).build();
         conversation.push(ChatMessage::user(compaction_prompt));
 
@@ -367,7 +367,7 @@ impl IntentCompiler {
                     // Semantic validation: enforce constraints serde can't check.
                     if let Err(reason) = action.validate() {
                         conversation.push(ChatMessage::assistant(response.clone()));
-                        
+
                         let err_prompt = crate::prompt::PromptBuilder::new()
                             .with_validation_feedback(&reason.to_string())
                             .build();
@@ -386,7 +386,7 @@ impl IntentCompiler {
                     // Self-healing: append the failed attempt and error as
                     // assistant + user messages for the next retry.
                     conversation.push(ChatMessage::assistant(response.clone()));
-                    
+
                     let err_prompt = crate::prompt::PromptBuilder::new()
                         .with_error_feedback(&e.to_string())
                         .build();

@@ -72,8 +72,7 @@ impl Goal {
 
     /// Whether the goal is still eligible for another continuation turn.
     pub fn should_continue(&self) -> bool {
-        self.status == GoalStatus::InProgress
-            && self.continuation_count < self.max_continuations
+        self.status == GoalStatus::InProgress && self.continuation_count < self.max_continuations
     }
 
     /// Record token usage from a completed turn. Returns `true` when the
@@ -115,10 +114,7 @@ impl Goal {
         if let Some(budget) = self.token_budget {
             use std::fmt::Write;
             let remaining = budget.saturating_sub(self.accumulated_tokens);
-            let _ = write!(
-                prompt,
-                " / {budget} (remaining: {remaining})",
-            );
+            let _ = write!(prompt, " / {budget} (remaining: {remaining})",);
         }
 
         prompt.push_str(

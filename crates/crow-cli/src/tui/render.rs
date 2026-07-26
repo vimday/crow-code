@@ -10,7 +10,6 @@ use super::theme::{chars, colors, Styles};
 // Re-export MarkdownStreamState for state.rs
 pub use crate::render::MarkdownStreamState;
 
-
 // ── Spinner frames from theme ────────────────────────────────────────────────
 const SPINNER: &[&str] = chars::SPINNER;
 
@@ -50,8 +49,15 @@ pub fn render_app(
     let main_area = main_split[0];
     let side_area = main_split[1];
 
-    let status_lines = if state.is_streaming || state.active_action.is_some() || state.status_indicator.is_some() {
-        if state.status_indicator.as_ref().is_some_and(|i| i.details.is_some()) {
+    let status_lines = if state.is_streaming
+        || state.active_action.is_some()
+        || state.status_indicator.is_some()
+    {
+        if state
+            .status_indicator
+            .as_ref()
+            .is_some_and(|i| i.details.is_some())
+        {
             4 // Status header + 3 details lines max
         } else {
             1
@@ -81,7 +87,8 @@ pub fn render_app(
     }
 
     use ratatui::widgets::Widget;
-    crate::tui::components::status::StatusIndicatorWidget::new(state).render(chunks[2], f.buffer_mut());
+    crate::tui::components::status::StatusIndicatorWidget::new(state)
+        .render(chunks[2], f.buffer_mut());
     render_footer_hints(f, state, chunks[3]);
 
     // Group the bottom areas for passing to composer
@@ -151,6 +158,17 @@ fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
         "    Write:  ".set_style(Styles::evidence()),
         state.write_mode.as_str().set_style(Styles::warning()),
     ]));
+
+    if !state.auto_run.agents.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
+            "AUTO HUD".set_style(Styles::evidence()),
+        ]));
+        for line in crate::tui::agent_status_feed::render_agent_lines(&state.auto_run) {
+            lines.push(line);
+        }
+    }
 
     let p = Paragraph::new(lines).block(block);
     f.render_widget(p, area);

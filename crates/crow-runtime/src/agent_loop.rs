@@ -132,21 +132,36 @@ pub fn estimate_task_complexity(user_message: &str) -> TaskComplexity {
 
     // Keywords that signal a complex, wide-scope task
     const COMPLEX_KEYWORDS: &[&str] = &[
-        "refactor", "all files", "entire codebase", "migrate",
-        "every module", "across the project", "whole project",
-        "redesign", "rewrite", "overhaul",
+        "refactor",
+        "all files",
+        "entire codebase",
+        "migrate",
+        "every module",
+        "across the project",
+        "whole project",
+        "redesign",
+        "rewrite",
+        "overhaul",
     ];
 
     // Keywords that signal a medium-scope task
     const MEDIUM_KEYWORDS: &[&str] = &[
-        "add feature", "implement", "create", "write tests",
-        "integrate", "update", "convert", "optimize",
+        "add feature",
+        "implement",
+        "create",
+        "write tests",
+        "integrate",
+        "update",
+        "convert",
+        "optimize",
     ];
 
     // Count file-path-like references (tokens containing '/' or '.rs', '.ts', etc.)
     let file_refs = user_message
         .split_whitespace()
-        .filter(|w| w.contains('/') || w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".py"))
+        .filter(|w| {
+            w.contains('/') || w.ends_with(".rs") || w.ends_with(".ts") || w.ends_with(".py")
+        })
         .count();
 
     // Check complex signals
@@ -210,7 +225,10 @@ pub async fn run_agent_loop(
         .map(|msg| estimate_task_complexity(msg).max_steps())
         .unwrap_or(DEFAULT_MAX_TOOL_CALLS_PER_TURN);
     let effective_max_steps = ctx.max_steps.min(ctx.role.max_steps).min(complexity_steps);
-    let effective_max_tool_calls = ctx.role.max_tool_calls_per_turn.min(DEFAULT_MAX_TOOL_CALLS_PER_TURN);
+    let effective_max_tool_calls = ctx
+        .role
+        .max_tool_calls_per_turn
+        .min(DEFAULT_MAX_TOOL_CALLS_PER_TURN);
     let turn_timeout = if ctx.role.max_turn_duration.as_secs() > 0 {
         ctx.role.max_turn_duration
     } else {
@@ -222,7 +240,13 @@ pub async fn run_agent_loop(
     // safety net for the main agent loop.
     match tokio::time::timeout(
         turn_timeout,
-        run_agent_loop_inner(ctx, messages, observer, effective_max_steps, effective_max_tool_calls),
+        run_agent_loop_inner(
+            ctx,
+            messages,
+            observer,
+            effective_max_steps,
+            effective_max_tool_calls,
+        ),
     )
     .await
     {
@@ -233,9 +257,10 @@ pub async fn run_agent_loop(
                 turn_id: ctx.turn_id.clone(),
                 reason: format!("Turn exceeded {}s timeout", turn_timeout.as_secs()),
             }));
-            ctx.status_tracker.set(AgentStatus::Errored(
-                format!("Turn timeout after {}s", turn_timeout.as_secs()),
-            ));
+            ctx.status_tracker.set(AgentStatus::Errored(format!(
+                "Turn timeout after {}s",
+                turn_timeout.as_secs()
+            )));
             messages.sanitize();
             let snapshot = ctx.timing.snapshot().await;
             Ok(AgentLoopResult {
@@ -281,9 +306,8 @@ async fn run_agent_loop_inner(
     // ── Inject environment context at turn start (Codex pattern) ─
     // Give the agent situational awareness about its runtime
     // environment: OS, shell, date, cwd.
-    let env_ctx = crow_brain::environment::CrowEnvironmentContext::from_workspace(
-        &ctx.workspace_root,
-    );
+    let env_ctx =
+        crow_brain::environment::CrowEnvironmentContext::from_workspace(&ctx.workspace_root);
     let env_block = env_ctx.render();
     if !env_block.is_empty() {
         // Inject as a synthetic user message so the agent sees it
@@ -306,9 +330,9 @@ async fn run_agent_loop_inner(
     loop {
         step += 1;
         if step > effective_max_steps {
-            ctx.status_tracker.set(AgentStatus::Errored(
-                format!("Exceeded {effective_max_steps} steps"),
-            ));
+            ctx.status_tracker.set(AgentStatus::Errored(format!(
+                "Exceeded {effective_max_steps} steps"
+            )));
             anyhow::bail!(
                 "Agent loop exceeded {effective_max_steps} steps without completing. Aborting."
             );
@@ -331,12 +355,10 @@ async fn run_agent_loop_inner(
             // Ensure conversation state is valid before returning.
             messages.sanitize();
             observer.handle_event(AgentEvent::Log("Turn cancelled by user.".into()));
-            observer.handle_event(AgentEvent::Turn(
-                crate::event::TurnEvent::Aborted {
-                    turn_id: ctx.turn_id.clone(),
-                    reason: "Cancelled by user".into(),
-                },
-            ));
+            observer.handle_event(AgentEvent::Turn(crate::event::TurnEvent::Aborted {
+                turn_id: ctx.turn_id.clone(),
+                reason: "Cancelled by user".into(),
+            }));
             ctx.status_tracker.set(AgentStatus::Interrupted);
             let snapshot = ctx.timing.snapshot().await;
             return Ok(AgentLoopResult {
@@ -383,7 +405,10 @@ async fn run_agent_loop_inner(
             from: "WaitingForInput".into(),
             to: "Streaming".into(),
         });
-        observer.handle_event(AgentEvent::Thinking(step as u32, effective_max_steps as u32));
+        observer.handle_event(AgentEvent::Thinking(
+            step as u32,
+            effective_max_steps as u32,
+        ));
 
         // ── Stream LLM response with tools (inner retry loop) ───────
         let response = {
@@ -466,7 +491,8 @@ async fn run_agent_loop_inner(
                             });
                         }
 
-                        tokio::time::sleep(crate::turn_timing::backoff_with_jitter(retry_count)).await;
+                        tokio::time::sleep(crate::turn_timing::backoff_with_jitter(retry_count))
+                            .await;
                     }
                     Err(e) => break Err(e),
                 }
@@ -518,13 +544,11 @@ async fn run_agent_loop_inner(
                     )));
                 }
                 // Emit structured diff event (replaces the old `let _ = diff;` discard)
-                observer.handle_event(AgentEvent::Turn(
-                    crate::event::TurnEvent::DiffGenerated {
-                        turn_id: ctx.turn_id.clone(),
-                        diff_text,
-                        files_changed: change_summary.len(),
-                    },
-                ));
+                observer.handle_event(AgentEvent::Turn(crate::event::TurnEvent::DiffGenerated {
+                    turn_id: ctx.turn_id.clone(),
+                    diff_text,
+                    files_changed: change_summary.len(),
+                }));
             }
             drop(diff_guard);
 
@@ -645,7 +669,8 @@ async fn run_agent_loop_inner(
                     &registry,
                     &tool_ctx,
                     cancel_token,
-                ).await
+                )
+                .await
             });
         }
 
@@ -694,9 +719,10 @@ async fn run_agent_loop_inner(
 
                     // Safe preview for the legacy ActionComplete event
                     let preview = crow_patch::safe_truncate(&content, 120);
-                    observer.handle_event(AgentEvent::ActionComplete(
-                        format!("{}: {preview}", tool_result.name),
-                    ));
+                    observer.handle_event(AgentEvent::ActionComplete(format!(
+                        "{}: {preview}",
+                        tool_result.name
+                    )));
 
                     if is_error {
                         observer.handle_event(AgentEvent::Log(format!(
@@ -734,7 +760,10 @@ async fn run_agent_loop_inner(
             completed += 1;
         }
         // Safety: verify all tasks completed (should always be true)
-        debug_assert_eq!(completed, expected_count, "JoinSet drained fewer tasks than spawned");
+        debug_assert_eq!(
+            completed, expected_count,
+            "JoinSet drained fewer tasks than spawned"
+        );
 
         metrics.tool_execution_time += tool_exec_start.elapsed();
 

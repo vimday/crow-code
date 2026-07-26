@@ -103,8 +103,14 @@ fn render_diff_line(line_num: usize, kind: DiffLineKind, text: &str) -> Line<'st
         _ => ratatui::style::Style::new().fg(fg_color).dim(),
     };
     spans.push(Span::styled(num_str, num_style));
-    spans.push(Span::styled(format!(" {sign} "), ratatui::style::Style::new().fg(fg_color)));
-    spans.push(Span::styled(text.to_string(), ratatui::style::Style::new().fg(fg_color)));
+    spans.push(Span::styled(
+        format!(" {sign} "),
+        ratatui::style::Style::new().fg(fg_color),
+    ));
+    spans.push(Span::styled(
+        text.to_string(),
+        ratatui::style::Style::new().fg(fg_color),
+    ));
 
     Line::from(spans)
 }
@@ -116,20 +122,11 @@ fn render_raw_diff_lines(text: &str) -> Vec<Line<'static>> {
     for raw_line in text.lines() {
         let line = if raw_line.starts_with("+++") || raw_line.starts_with("---") {
             // File header lines
-            Line::from(vec![
-                "  ".into(),
-                raw_line.to_string().bold().dim(),
-            ])
+            Line::from(vec!["  ".into(), raw_line.to_string().bold().dim()])
         } else if raw_line.starts_with('+') {
-            Line::from(vec![
-                "  ".into(),
-                raw_line.to_string().fg(Color::Green),
-            ])
+            Line::from(vec!["  ".into(), raw_line.to_string().fg(Color::Green)])
         } else if raw_line.starts_with('-') {
-            Line::from(vec![
-                "  ".into(),
-                raw_line.to_string().fg(Color::Red),
-            ])
+            Line::from(vec!["  ".into(), raw_line.to_string().fg(Color::Red)])
         } else if raw_line.starts_with("@@") {
             Line::from(vec![
                 "  ".into(),
@@ -137,10 +134,7 @@ fn render_raw_diff_lines(text: &str) -> Vec<Line<'static>> {
             ])
         } else if raw_line.starts_with("diff ") {
             // diff --git a/... b/...
-            Line::from(vec![
-                "  ".into(),
-                raw_line.to_string().bold(),
-            ])
+            Line::from(vec!["  ".into(), raw_line.to_string().bold()])
         } else if raw_line.starts_with("── ") {
             // Section headers (our own: "── Staged ──", "── Untracked ──")
             Line::from(vec![
@@ -148,10 +142,7 @@ fn render_raw_diff_lines(text: &str) -> Vec<Line<'static>> {
                 raw_line.to_string().bold().fg(colors::accent_system()),
             ])
         } else {
-            Line::from(vec![
-                "  ".into(),
-                raw_line.to_string().dim(),
-            ])
+            Line::from(vec!["  ".into(), raw_line.to_string().dim()])
         };
         lines.push(line);
     }

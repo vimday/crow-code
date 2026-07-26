@@ -149,13 +149,14 @@ impl SubagentWorker {
         };
 
         // Register task in the task registry
-        let task_def = crate::registry::AgentTask {
-            id: self.id.clone(),
-            name: format!("Subagent-{}", self.role.name),
-            description: task.to_string(),
-            status: crate::registry::TaskStatus::Running,
-            output: None,
-        };
+        let task_def = crate::registry::AgentTask::with_kind(
+            format!("Subagent-{}", self.role.name),
+            task.to_string(),
+            crate::registry::AgentTaskKind::Execute,
+        );
+        let mut task_def = task_def;
+        task_def.id = self.id.clone();
+        task_def.status = crate::registry::TaskStatus::Running;
         self.task_registry.register(task_def);
 
         // Build TurnContext for the subagent (Codex pattern: immutable per-turn snapshot)
@@ -262,6 +263,9 @@ impl EventHandler for SubagentEventHandler<'_> {
     fn handle_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::StreamChunk(c) => self.parent.handle_event(AgentEvent::StreamChunk(c)),
+            AgentEvent::Orchestration(ev) => {
+                self.parent.handle_event(AgentEvent::Orchestration(ev))
+            }
             AgentEvent::Thinking(a, b) => self.parent.handle_event(AgentEvent::Thinking(a, b)),
             AgentEvent::ActionStart(msg) => self.parent.handle_event(AgentEvent::ActionStart(
                 format!("[{}:{}] {}", self.role.name, self.id, msg),
@@ -308,9 +312,12 @@ impl EventHandler for SubagentEventHandler<'_> {
             AgentEvent::Markdown(msg) => self.parent.handle_event(AgentEvent::Markdown(msg)),
             // Pass through new high-granularity events with subagent context
             AgentEvent::TokenUsage { .. } => self.parent.handle_event(event),
-            AgentEvent::StateChanged { from, to } => self.parent.handle_event(AgentEvent::Log(
-                format!("  [{}:{}] State: {} → {}", self.role.name, self.id, from, to),
-            )),
+            AgentEvent::StateChanged { from, to } => {
+                self.parent.handle_event(AgentEvent::Log(format!(
+                    "  [{}:{}] State: {} → {}",
+                    self.role.name, self.id, from, to
+                )))
+            }
             AgentEvent::Retrying {
                 attempt,
                 max_attempts,

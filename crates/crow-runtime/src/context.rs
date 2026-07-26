@@ -27,9 +27,7 @@ fn is_confirmation_result(content: &str) -> bool {
         return false;
     }
     let lower = content.to_lowercase();
-    CONFIRMATION_PATTERNS
-        .iter()
-        .any(|pat| lower.contains(pat))
+    CONFIRMATION_PATTERNS.iter().any(|pat| lower.contains(pat))
 }
 
 /// Conversation-level statistics for the InfoBar gauge and /tokens command.
@@ -113,10 +111,7 @@ impl ConversationManager {
     }
 
     /// Internal constructor that accepts an explicit budget.
-    fn new_with_budget(
-        mut sys_msgs: Vec<ChatMessage>,
-        budget: crate::budget::ModelBudget,
-    ) -> Self {
+    fn new_with_budget(mut sys_msgs: Vec<ChatMessage>, budget: crate::budget::ModelBudget) -> Self {
         let max_system_bytes = budget.max_system_bytes;
 
         let sys_bytes: usize = sys_msgs.iter().map(|s| s.content.len()).sum();

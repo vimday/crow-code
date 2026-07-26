@@ -161,8 +161,7 @@ impl<'a> SystemPromptBuilder<'a> {
         for def in tool_defs {
             let name = def["function"]["name"].as_str().unwrap_or("unknown");
             let desc = def["function"]["description"].as_str().unwrap_or("");
-            self.tool_instructions
-                .push(format!("- **{name}**: {desc}"));
+            self.tool_instructions.push(format!("- **{name}**: {desc}"));
         }
         self
     }

@@ -389,6 +389,9 @@ pub async fn run_tui_loop(
 fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
     state.task_start_time = Some(Instant::now());
     match event {
+        AgentEvent::Orchestration(ev) => {
+            state.apply_orchestration_event(&ev);
+        }
         AgentEvent::Turn(turn_ev) => {
             use crate::event::TurnEvent;
             match turn_ev {
@@ -411,6 +414,7 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 TurnEvent::PhaseChanged { phase, .. } => {
                     let label = match &phase {
                         TurnPhase::Materializing => "📦 Materializing".to_string(),
+                        TurnPhase::Planning => "🧭 Planning".to_string(),
                         TurnPhase::BuildingRepoMap => "🗺️ Building repo map".to_string(),
                         TurnPhase::Compacting => "🔄 Compacting context".to_string(),
                         TurnPhase::EpistemicLoop { step, max_steps } => {
@@ -466,7 +470,10 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             // ≥100 chars have been added since the last rebuild, OR ≥50ms
             // has elapsed. This avoids cloning the entire buffer on every
             // single token arrival.
-            let chars_since = state.streaming_buffer.len().saturating_sub(state.last_cell_buffer_len);
+            let chars_since = state
+                .streaming_buffer
+                .len()
+                .saturating_sub(state.last_cell_buffer_len);
             let elapsed_ok = state
                 .last_cell_update
                 .is_none_or(|t| t.elapsed() >= Duration::from_millis(50));

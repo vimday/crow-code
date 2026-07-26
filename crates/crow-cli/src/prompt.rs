@@ -137,11 +137,7 @@ impl PromptBuilder {
     }
 
     /// Inject permission and policy context so the agent is aware of its boundaries.
-    pub fn with_permission_context(
-        mut self,
-        mode: &str,
-        workspace_root: &str,
-    ) -> Self {
+    pub fn with_permission_context(mut self, mode: &str, workspace_root: &str) -> Self {
         self.permission_context = format!(
             "## Policy\n\
             - Permission mode: {mode}\n\

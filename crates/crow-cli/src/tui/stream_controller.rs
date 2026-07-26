@@ -148,9 +148,7 @@ impl StreamController {
                     // first, then enqueue this line normally.
                     if self.in_table_sequence {
                         for held in self.table_holdback.drain(..) {
-                            self.pending.push(StreamCell {
-                                payload: held,
-                            });
+                            self.pending.push(StreamCell { payload: held });
                             self.enqueue_times.push(now);
                         }
                         self.in_table_sequence = false;
@@ -176,7 +174,6 @@ impl StreamController {
         if let Some(flushed) = self.stream_state.flush(&renderer) {
             for line in flushed.lines() {
                 self.pending.push(StreamCell {
-                    
                     payload: line.to_string(),
                 });
                 self.enqueue_times.push(now);
@@ -187,7 +184,6 @@ impl StreamController {
         let rendered = renderer.render_markdown(md);
         for line in rendered.lines() {
             self.pending.push(StreamCell {
-                
                 payload: line.to_string(),
             });
             self.enqueue_times.push(now);
@@ -398,7 +394,6 @@ mod tests {
         // Simulate 5 buffered lines
         for i in 0..5 {
             ctrl.pending.push(StreamCell {
-                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);
@@ -420,7 +415,6 @@ mod tests {
         // Simulate 10 lines (above ENTER_QUEUE_DEPTH_LINES = 8)
         for i in 0..10 {
             ctrl.pending.push(StreamCell {
-                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);
@@ -440,7 +434,6 @@ mod tests {
         let now = Instant::now();
         for i in 0..10 {
             ctrl.pending.push(StreamCell {
-                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);
@@ -462,7 +455,6 @@ mod tests {
         let now = Instant::now();
         for i in 0..8 {
             ctrl.pending.push(StreamCell {
-                
                 payload: format!("line {i}"),
             });
             ctrl.enqueue_times.push(now);

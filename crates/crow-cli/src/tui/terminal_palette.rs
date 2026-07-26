@@ -78,8 +78,18 @@ mod imp {
         // Fallback to our COLORFGBG heuristics to detect light/dark since we don't have the custom crossterm fork
         if let Ok(theme) = std::env::var("CROW_THEME") {
             match theme.to_ascii_lowercase().as_str() {
-                "light" => return Some(DefaultColors { fg: (0, 0, 0), bg: (255, 255, 255) }),
-                "dark" => return Some(DefaultColors { fg: (255, 255, 255), bg: (0, 0, 0) }),
+                "light" => {
+                    return Some(DefaultColors {
+                        fg: (0, 0, 0),
+                        bg: (255, 255, 255),
+                    })
+                }
+                "dark" => {
+                    return Some(DefaultColors {
+                        fg: (255, 255, 255),
+                        bg: (0, 0, 0),
+                    })
+                }
                 _ => {}
             }
         }
@@ -89,13 +99,19 @@ mod imp {
                 if let Some(last) = parts.last() {
                     if let Ok(bg_idx) = last.parse::<u8>() {
                         if bg_idx > 8 {
-                            return Some(DefaultColors { fg: (0, 0, 0), bg: (255, 255, 255) });
+                            return Some(DefaultColors {
+                                fg: (0, 0, 0),
+                                bg: (255, 255, 255),
+                            });
                         }
                     }
                 }
             }
         }
-        Some(DefaultColors { fg: (255, 255, 255), bg: (20, 20, 30) }) // Base fallback for typical dark terminal
+        Some(DefaultColors {
+            fg: (255, 255, 255),
+            bg: (20, 20, 30),
+        }) // Base fallback for typical dark terminal
     }
 
     pub(super) fn requery_default_colors() {}

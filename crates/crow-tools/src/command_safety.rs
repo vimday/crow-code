@@ -158,7 +158,9 @@ pub fn classify_command(cmd: &str) -> CommandAnalysis {
         let level = classify_program(program);
         analysis.programs.push((program.clone(), level));
         if level != SafetyLevel::Safe {
-            analysis.reasons.push(format!("'{program}' classified as {level}"));
+            analysis
+                .reasons
+                .push(format!("'{program}' classified as {level}"));
         }
         analysis.level = analysis.level.escalate(level);
     }
@@ -175,52 +177,72 @@ fn classify_program(name: &str) -> SafetyLevel {
     // and fall through to HashSet membership only for the check.
 
     static SAFE: &[&str] = &[
-        "cat", "echo", "head", "tail", "wc", "sort", "uniq", "grep", "rg",
-        "find", "fd", "ls", "tree", "pwd", "whoami", "date", "env", "printenv",
-        "which", "type", "file", "stat", "du", "df", "uname", "hostname",
-        "diff", "cmp", "jq", "yq", "sed", "awk", "tr", "cut", "tee",
-        "basename", "dirname", "realpath", "readlink",
-        "true", "false", "test", "[",
-        "bat", "exa", "less", "more", "man", "help",
-        "printf", "cal", "bc", "expr",
-        "strings", "xxd", "hexdump", "od",
-        "fmt", "fold", "nl", "rev", "tac", "paste", "join", "comm",
-        "expand", "unexpand", "column",
+        "cat", "echo", "head", "tail", "wc", "sort", "uniq", "grep", "rg", "find", "fd", "ls",
+        "tree", "pwd", "whoami", "date", "env", "printenv", "which", "type", "file", "stat", "du",
+        "df", "uname", "hostname", "diff", "cmp", "jq", "yq", "sed", "awk", "tr", "cut", "tee",
+        "basename", "dirname", "realpath", "readlink", "true", "false", "test", "[", "bat", "exa",
+        "less", "more", "man", "help", "printf", "cal", "bc", "expr", "strings", "xxd", "hexdump",
+        "od", "fmt", "fold", "nl", "rev", "tac", "paste", "join", "comm", "expand", "unexpand",
+        "column",
     ];
 
-    static WORKSPACE_WRITE: &[&str] = &[
-        "mkdir", "touch", "cp", "mv", "ln", "patch", "install",
-    ];
+    static WORKSPACE_WRITE: &[&str] = &["mkdir", "touch", "cp", "mv", "ln", "patch", "install"];
 
     static BUILD_TOOLS: &[&str] = &[
-        "cargo", "rustc", "python3", "python", "node", "npm", "npx",
-        "pip", "pip3", "yarn", "pnpm", "bun",
-        "git",
+        "cargo", "rustc", "python3", "python", "node", "npm", "npx", "pip", "pip3", "yarn", "pnpm",
+        "bun", "git",
     ];
 
     static DANGEROUS: &[&str] = &[
-        "rm", "rmdir", "shred", "truncate",
-        "sudo", "su", "doas",
-        "kill", "killall", "pkill", "xkill",
-        "reboot", "shutdown", "halt", "poweroff",
-        "mkfs", "fdisk", "dd",
+        "rm", "rmdir", "shred", "truncate", "sudo", "su", "doas", "kill", "killall", "pkill",
+        "xkill", "reboot", "shutdown", "halt", "poweroff", "mkfs", "fdisk", "dd",
     ];
 
     static SYSTEM_WRITE: &[&str] = &[
-        "chmod", "chown", "chgrp", "chattr",
-        "iptables", "ufw", "firewall-cmd",
-        "systemctl", "launchctl", "service",
-        "mount", "umount",
-        "crontab", "at",
-        "useradd", "userdel", "usermod", "groupadd", "groupdel",
-        "sysctl", "modprobe", "insmod", "rmmod",
+        "chmod",
+        "chown",
+        "chgrp",
+        "chattr",
+        "iptables",
+        "ufw",
+        "firewall-cmd",
+        "systemctl",
+        "launchctl",
+        "service",
+        "mount",
+        "umount",
+        "crontab",
+        "at",
+        "useradd",
+        "userdel",
+        "usermod",
+        "groupadd",
+        "groupdel",
+        "sysctl",
+        "modprobe",
+        "insmod",
+        "rmmod",
     ];
 
     static NETWORK: &[&str] = &[
-        "curl", "wget", "ssh", "scp", "sftp", "rsync",
-        "nc", "netcat", "ncat", "socat", "nmap",
-        "ftp", "telnet",
-        "ping", "traceroute", "dig", "nslookup", "host",
+        "curl",
+        "wget",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "nc",
+        "netcat",
+        "ncat",
+        "socat",
+        "nmap",
+        "ftp",
+        "telnet",
+        "ping",
+        "traceroute",
+        "dig",
+        "nslookup",
+        "host",
     ];
 
     // Build HashSets for O(1) lookup.
@@ -312,10 +334,7 @@ fn extract_programs(cmd: &str) -> Vec<String> {
 ///
 /// Skips leading `(` and env assignments (`VAR=val`).
 fn extract_first_word(segment: &str) -> Option<String> {
-    let stripped = segment
-        .trim()
-        .strip_prefix('(')
-        .unwrap_or(segment.trim());
+    let stripped = segment.trim().strip_prefix('(').unwrap_or(segment.trim());
 
     for word in stripped.split_whitespace() {
         // Skip env variable assignments (FOO=bar)
@@ -404,7 +423,12 @@ mod tests {
 
     #[test]
     fn classifies_more_safe_commands() {
-        for cmd in &["head -20 file", "tail -f log", "wc -l file", "find . -name '*.rs'"] {
+        for cmd in &[
+            "head -20 file",
+            "tail -f log",
+            "wc -l file",
+            "find . -name '*.rs'",
+        ] {
             let analysis = classify_command(cmd);
             assert_eq!(
                 analysis.level,
@@ -456,7 +480,11 @@ mod tests {
 
     #[test]
     fn classifies_more_dangerous_commands() {
-        for cmd in &["killall firefox", "shutdown -h now", "dd if=/dev/zero of=/dev/sda"] {
+        for cmd in &[
+            "killall firefox",
+            "shutdown -h now",
+            "dd if=/dev/zero of=/dev/sda",
+        ] {
             let analysis = classify_command(cmd);
             assert_eq!(
                 analysis.level,
@@ -470,7 +498,11 @@ mod tests {
 
     #[test]
     fn classifies_network_commands() {
-        for cmd in &["curl https://example.com", "wget file.tar.gz", "ssh user@host"] {
+        for cmd in &[
+            "curl https://example.com",
+            "wget file.tar.gz",
+            "ssh user@host",
+        ] {
             let analysis = classify_command(cmd);
             assert_eq!(
                 analysis.level,
@@ -484,7 +516,11 @@ mod tests {
 
     #[test]
     fn classifies_system_write_commands() {
-        for cmd in &["chmod 755 script.sh", "chown root:root file", "systemctl restart nginx"] {
+        for cmd in &[
+            "chmod 755 script.sh",
+            "chown root:root file",
+            "systemctl restart nginx",
+        ] {
             let analysis = classify_command(cmd);
             assert_eq!(
                 analysis.level,

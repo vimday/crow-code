@@ -166,10 +166,8 @@ impl AnthropicClient {
                                 } else {
                                     // Previous user message was a plain string;
                                     // upgrade to content-block array.
-                                    let prev_text = last["content"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string();
+                                    let prev_text =
+                                        last["content"].as_str().unwrap_or("").to_string();
                                     last["content"] = json!([
                                         {"type": "text", "text": prev_text},
                                         tool_result
@@ -190,8 +188,7 @@ impl AnthropicClient {
                                 if let Some(arr) = last["content"].as_array_mut() {
                                     arr.push(json!({"type": "text", "text": msg.content}));
                                 } else if let Some(prev) = last["content"].as_str() {
-                                    last["content"] =
-                                        json!(format!("{}\n\n{}", prev, msg.content));
+                                    last["content"] = json!(format!("{}\n\n{}", prev, msg.content));
                                 }
                             }
                         } else {
@@ -219,8 +216,7 @@ impl AnthropicClient {
                 if last_role == Some(role) {
                     if let Some(last) = conversation.last_mut() {
                         if let Some(prev_content) = last["content"].as_str() {
-                            last["content"] =
-                                json!(format!("{}\n\n{}", prev_content, content));
+                            last["content"] = json!(format!("{}\n\n{}", prev_content, content));
                         }
                     }
                 } else {
@@ -375,25 +371,35 @@ impl AnthropicClient {
                             } else if ty == "message_start" {
                                 // Initial usage from message_start event
                                 if let Some(u) = data.get("message").and_then(|m| m.get("usage")) {
-                                    usage.prompt_tokens = u.get("input_tokens")
+                                    usage.prompt_tokens = u
+                                        .get("input_tokens")
                                         .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or(0) as u32;
-                                    usage.completion_tokens = u.get("output_tokens")
+                                        .unwrap_or(0)
+                                        as u32;
+                                    usage.completion_tokens = u
+                                        .get("output_tokens")
                                         .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or(0) as u32;
-                                    usage.cache_creation_input_tokens = u.get("cache_creation_input_tokens")
+                                        .unwrap_or(0)
+                                        as u32;
+                                    usage.cache_creation_input_tokens = u
+                                        .get("cache_creation_input_tokens")
                                         .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or(0) as u32;
-                                    usage.cache_read_input_tokens = u.get("cache_read_input_tokens")
+                                        .unwrap_or(0)
+                                        as u32;
+                                    usage.cache_read_input_tokens = u
+                                        .get("cache_read_input_tokens")
                                         .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or(0) as u32;
+                                        .unwrap_or(0)
+                                        as u32;
                                 }
                             } else if ty == "message_delta" {
                                 // Final output token count from message_delta event
                                 if let Some(u) = data.get("usage") {
-                                    usage.completion_tokens = u.get("output_tokens")
+                                    usage.completion_tokens = u
+                                        .get("output_tokens")
                                         .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or(0) as u32;
+                                        .unwrap_or(0)
+                                        as u32;
                                 }
                             }
                         }
@@ -539,7 +545,8 @@ impl AnthropicClient {
                     match event_type {
                         "content_block_start" => {
                             // Track the block index
-                            if let Some(idx) = data.get("index").and_then(serde_json::Value::as_u64) {
+                            if let Some(idx) = data.get("index").and_then(serde_json::Value::as_u64)
+                            {
                                 current_block_index = idx;
                             }
                             // Check if it's a tool_use block
@@ -562,15 +569,14 @@ impl AnthropicClient {
                                         obs.on_tool_call_start(&id, &name);
                                     }
 
-                                    tool_calls.insert(
-                                        current_block_index,
-                                        (id, name, String::new()),
-                                    );
+                                    tool_calls
+                                        .insert(current_block_index, (id, name, String::new()));
                                 }
                             }
                         }
                         "content_block_delta" => {
-                            if let Some(idx) = data.get("index").and_then(serde_json::Value::as_u64) {
+                            if let Some(idx) = data.get("index").and_then(serde_json::Value::as_u64)
+                            {
                                 current_block_index = idx;
                             }
                             if let Some(delta) = data.get("delta") {
@@ -591,9 +597,8 @@ impl AnthropicClient {
                                         }
                                     }
                                     "input_json_delta" => {
-                                        if let Some(partial_json) = delta
-                                            .get("partial_json")
-                                            .and_then(|p| p.as_str())
+                                        if let Some(partial_json) =
+                                            delta.get("partial_json").and_then(|p| p.as_str())
                                         {
                                             if let Some(entry) =
                                                 tool_calls.get_mut(&current_block_index)
@@ -615,26 +620,31 @@ impl AnthropicClient {
                         "message_start" => {
                             // Capture initial usage from message_start event
                             if let Some(u) = data.get("message").and_then(|m| m.get("usage")) {
-                                usage.prompt_tokens = u.get("input_tokens")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as u32;
-                                usage.completion_tokens = u.get("output_tokens")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as u32;
-                                usage.cache_creation_input_tokens = u.get("cache_creation_input_tokens")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as u32;
-                                usage.cache_read_input_tokens = u.get("cache_read_input_tokens")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as u32;
+                                usage.prompt_tokens =
+                                    u.get("input_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                usage.completion_tokens =
+                                    u.get("output_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                usage.cache_creation_input_tokens =
+                                    u.get("cache_creation_input_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
+                                usage.cache_read_input_tokens =
+                                    u.get("cache_read_input_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
                             }
                         }
                         "message_delta" => {
                             // Final output token count from message_delta event
                             if let Some(u) = data.get("usage") {
-                                usage.completion_tokens = u.get("output_tokens")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as u32;
+                                usage.completion_tokens =
+                                    u.get("output_tokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(0) as u32;
                             }
                         }
                         "message_stop" => break,
@@ -674,7 +684,10 @@ impl AnthropicClient {
             ));
         }
 
-        Ok(AgentResponse { blocks, usage: Some(usage) })
+        Ok(AgentResponse {
+            blocks,
+            usage: Some(usage),
+        })
     }
 }
 

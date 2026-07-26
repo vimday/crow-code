@@ -204,7 +204,10 @@ impl TurnDiffTracker {
                     if fs::remove_file(path).is_ok() {
                         results.push((path.clone(), RevertAction::Deleted));
                     } else {
-                        results.push((path.clone(), RevertAction::Failed("could not delete".into())));
+                        results.push((
+                            path.clone(),
+                            RevertAction::Failed("could not delete".into()),
+                        ));
                     }
                 }
             } else if let Some(Some(original_content)) = baseline {
@@ -214,7 +217,8 @@ impl TurnDiffTracker {
                     if fs::write(path, original_content).is_ok() {
                         results.push((path.clone(), RevertAction::Restored));
                     } else {
-                        results.push((path.clone(), RevertAction::Failed("could not write".into())));
+                        results
+                            .push((path.clone(), RevertAction::Failed("could not write".into())));
                     }
                 }
             }

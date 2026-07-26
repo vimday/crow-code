@@ -58,6 +58,79 @@ impl From<WriteMode> for crow_tools::WriteMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoApprovalPolicy {
+    Ask,
+    SafeWrites,
+    NeverAsk,
+}
+
+impl AutoApprovalPolicy {
+    fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "ask" | "manual" => Some(Self::Ask),
+            "safe" | "safe-writes" | "safewrites" => Some(Self::SafeWrites),
+            "never" | "never-ask" | "neverask" | "full" => Some(Self::NeverAsk),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::SafeWrites => "safe-writes",
+            Self::NeverAsk => "never-ask",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoOrchestrationStrategy {
+    Balanced,
+    Fast,
+    Thorough,
+}
+
+impl AutoOrchestrationStrategy {
+    fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "balanced" => Some(Self::Balanced),
+            "fast" => Some(Self::Fast),
+            "thorough" | "deep" | "comprehensive" => Some(Self::Thorough),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Fast => "fast",
+            Self::Thorough => "thorough",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoModeConfig {
+    pub enabled_by_default: bool,
+    pub max_parallel_agents: usize,
+    pub max_agent_depth: usize,
+    pub approval_policy: AutoApprovalPolicy,
+    pub strategy: AutoOrchestrationStrategy,
+}
+
+impl Default for AutoModeConfig {
+    fn default() -> Self {
+        Self {
+            enabled_by_default: false,
+            max_parallel_agents: 4,
+            max_agent_depth: 2,
+            approval_policy: AutoApprovalPolicy::Ask,
+            strategy: AutoOrchestrationStrategy::Balanced,
+        }
+    }
+}
+
 // ─── File-based configuration shapes ───────────────────────────
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -90,9 +163,19 @@ struct LlmConfigFile {
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
+struct AutoModeConfigFile {
+    enabled_by_default: Option<bool>,
+    max_parallel_agents: Option<usize>,
+    max_agent_depth: Option<usize>,
+    approval_policy: Option<String>,
+    strategy: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
 struct WorkspaceConfigFile {
     map_budget: Option<usize>,
     write_mode: Option<String>,
+    auto_mode: Option<AutoModeConfigFile>,
 }
 
 // ─── Runtime configuration ──────────────────────────────────────
@@ -104,6 +187,7 @@ pub struct CrowConfig {
     pub llm: LlmProviderConfig,
     pub map_budget: usize,
     pub write_mode: WriteMode,
+    pub auto_mode: AutoModeConfig,
     pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
 }
 
@@ -208,6 +292,9 @@ impl CrowConfig {
                     }
                     if ws.write_mode.is_some() {
                         global_ws.write_mode = ws.write_mode;
+                    }
+                    if ws.auto_mode.is_some() {
+                        global_ws.auto_mode = ws.auto_mode;
                     }
                 } else {
                     file_cfg.workspace = Some(ws);
@@ -490,11 +577,37 @@ impl CrowConfig {
                 .unwrap_or(WriteMode::DangerFullAccess), // YOLO default
         };
 
+        let auto_file = file_ws.auto_mode.unwrap_or_default();
+        let approval_policy = match auto_file.approval_policy.as_deref() {
+            Some(raw) => AutoApprovalPolicy::from_str_opt(raw).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid workspace.auto_mode.approval_policy='{raw}'. Expected: ask|safe-writes|never-ask"
+                )
+            })?,
+            None => AutoApprovalPolicy::Ask,
+        };
+        let strategy = match auto_file.strategy.as_deref() {
+            Some(raw) => AutoOrchestrationStrategy::from_str_opt(raw).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid workspace.auto_mode.strategy='{raw}'. Expected: fast|balanced|thorough"
+                )
+            })?,
+            None => AutoOrchestrationStrategy::Balanced,
+        };
+        let auto_mode = AutoModeConfig {
+            enabled_by_default: auto_file.enabled_by_default.unwrap_or(false),
+            max_parallel_agents: auto_file.max_parallel_agents.unwrap_or(4).clamp(1, 8),
+            max_agent_depth: auto_file.max_agent_depth.unwrap_or(2).clamp(0, 3),
+            approval_policy,
+            strategy,
+        };
+
         Ok(Self {
             workspace: workspace_dir.to_path_buf(),
             llm,
             map_budget,
             write_mode,
+            auto_mode,
             mcp_servers: file_cfg.mcp_servers.unwrap_or_default(),
         })
     }
@@ -557,36 +670,112 @@ impl CrowConfig {
 mod tests {
     use super::*;
 
+    fn clear_llm_env() {
+        for key in [
+            "LLM_PROVIDER",
+            "LLM_BASE_URL",
+            "LLM_MODEL",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "KIMI_API_KEY",
+            "MOONSHOT_API_KEY",
+            "GLM_API_KEY",
+            "ZHIPU_API_KEY",
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "XAI_API_KEY",
+            "DOUBAO_API_KEY",
+            "VOLCENGINE_API_KEY",
+            "CROW_API_KEY",
+        ] {
+            env::remove_var(key);
+        }
+    }
+
+    fn write_ollama_config(dir: &tempfile::TempDir) {
+        std::fs::create_dir_all(dir.path().join(".crow")).unwrap();
+        std::fs::write(
+            dir.path().join(".crow/config.json"),
+            r#"{
+              "llm": {
+                "provider": "ollama",
+                "base_url": "http://localhost:11434/v1",
+                "model": "llama3"
+              }
+            }"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn auto_mode_defaults_are_conservative() {
+        clear_llm_env();
+        let dir = tempfile::tempdir().unwrap();
+        write_ollama_config(&dir);
+        let cfg = CrowConfig::load_for(dir.path()).unwrap();
+
+        assert!(!cfg.auto_mode.enabled_by_default);
+        assert_eq!(cfg.auto_mode.max_parallel_agents, 4);
+        assert_eq!(cfg.auto_mode.max_agent_depth, 2);
+        assert_eq!(cfg.auto_mode.approval_policy, AutoApprovalPolicy::Ask);
+        assert_eq!(cfg.auto_mode.strategy, AutoOrchestrationStrategy::Balanced);
+    }
+
+    #[test]
+    fn auto_mode_parses_workspace_config() {
+        clear_llm_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".crow")).unwrap();
+        std::fs::write(
+            dir.path().join(".crow/config.json"),
+            r#"{
+              "llm": {
+                "provider": "ollama",
+                "base_url": "http://localhost:11434/v1",
+                "model": "llama3"
+              },
+              "workspace": {
+                "auto_mode": {
+                  "enabled_by_default": true,
+                  "max_parallel_agents": 6,
+                  "max_agent_depth": 3,
+                  "approval_policy": "safe-writes",
+                  "strategy": "thorough"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let cfg = CrowConfig::load_for(dir.path()).unwrap();
+        assert!(cfg.auto_mode.enabled_by_default);
+        assert_eq!(cfg.auto_mode.max_parallel_agents, 6);
+        assert_eq!(cfg.auto_mode.max_agent_depth, 3);
+        assert_eq!(
+            cfg.auto_mode.approval_policy,
+            AutoApprovalPolicy::SafeWrites
+        );
+        assert_eq!(cfg.auto_mode.strategy, AutoOrchestrationStrategy::Thorough);
+    }
+
     #[test]
     fn test_custom_provider_fails_without_url_and_model() {
-        // Clear env vars that might interfere
-        env::remove_var("LLM_PROVIDER");
-        env::remove_var("LLM_BASE_URL");
-        env::remove_var("LLM_MODEL");
+        clear_llm_env();
+        let dir = tempfile::tempdir().unwrap();
 
         env::set_var("LLM_PROVIDER", "my_custom_provider");
-        // No BASE_URL or MODEL set => should fail fast
-        let result = CrowConfig::load();
+        let result = CrowConfig::load_for(dir.path());
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("requires an explicitly set LLM_BASE_URL"));
 
         env::set_var("LLM_BASE_URL", "http://localhost:11434/v1");
-        // No MODEL set => should fail fast
-        let result = CrowConfig::load();
+        let result = CrowConfig::load_for(dir.path());
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("requires an explicitly set LLM_MODEL"));
 
-        env::set_var("LLM_MODEL", "llama3");
-        // Now it should pass config load (though it may fail missing API key for OpenAICompatible,
-        // but custom doesn't require API key by default)
-
-        // Ensure no local .crow config throws off test inside mock environment
-        // Since we are running in the main workspace, it might pick up an openai key.
-        // Clean up environment variables for isolation in real test suites.
-        env::remove_var("LLM_PROVIDER");
-        env::remove_var("LLM_BASE_URL");
-        env::remove_var("LLM_MODEL");
+        clear_llm_env();
     }
 }

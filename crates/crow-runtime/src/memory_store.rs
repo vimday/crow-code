@@ -78,8 +78,9 @@ impl MemoryStore {
     ///
     /// Returns an error if the directory cannot be created.
     pub fn with_path(memories_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&memories_dir)
-            .with_context(|| format!("failed to create memories dir: {}", memories_dir.display()))?;
+        fs::create_dir_all(&memories_dir).with_context(|| {
+            format!("failed to create memories dir: {}", memories_dir.display())
+        })?;
         Ok(Self { memories_dir })
     }
 
@@ -98,8 +99,8 @@ impl MemoryStore {
     /// Returns an error if serialisation or file I/O fails.
     pub fn save_memory(&self, entry: &MemoryEntry) -> Result<()> {
         let path = self.memory_path(&entry.session_id);
-        let json = serde_json::to_string_pretty(entry)
-            .context("failed to serialise memory entry")?;
+        let json =
+            serde_json::to_string_pretty(entry).context("failed to serialise memory entry")?;
         fs::write(&path, json)
             .with_context(|| format!("failed to write memory file: {}", path.display()))?;
         tracing::debug!("saved memory for session {}", entry.session_id);
@@ -118,10 +119,12 @@ impl MemoryStore {
     pub fn load_all_memories(&self) -> Result<Vec<MemoryEntry>> {
         let mut entries = Vec::new();
 
-        let dir_iter = fs::read_dir(&self.memories_dir)
-            .with_context(|| {
-                format!("failed to read memories dir: {}", self.memories_dir.display())
-            })?;
+        let dir_iter = fs::read_dir(&self.memories_dir).with_context(|| {
+            format!(
+                "failed to read memories dir: {}",
+                self.memories_dir.display()
+            )
+        })?;
 
         for dir_entry in dir_iter {
             let dir_entry = match dir_entry {
@@ -212,7 +215,10 @@ impl MemoryStore {
 
         entry.usage_count = entry.usage_count.saturating_add(1);
         self.save_memory(&entry)?;
-        tracing::debug!("bumped usage count for session {session_id} to {}", entry.usage_count);
+        tracing::debug!(
+            "bumped usage count for session {session_id} to {}",
+            entry.usage_count
+        );
         Ok(())
     }
 

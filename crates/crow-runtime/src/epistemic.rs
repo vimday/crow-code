@@ -44,7 +44,10 @@ const MAX_EPISTEMIC_STEPS: usize = 30;
 /// Used by both the serial crucible and MCTS pre-exploration.
 use crate::event::{AgentEvent, EventHandler};
 
-#[deprecated(since = "0.2.0", note = "Use `agent_loop::run_agent_loop` instead. This module will be removed in a future version.")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `agent_loop::run_agent_loop` instead. This module will be removed in a future version."
+)]
 #[allow(clippy::too_many_arguments)]
 pub async fn run_epistemic_loop(
     compiler: &IntentCompiler,

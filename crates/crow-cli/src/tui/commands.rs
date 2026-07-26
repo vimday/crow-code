@@ -17,22 +17,101 @@ pub struct SlashCommand {
 /// All available slash commands.
 pub fn all_commands() -> Vec<SlashCommand> {
     vec![
-        SlashCommand { name: "help", description: "Show available commands", usage: "/help" },
-        SlashCommand { name: "status", description: "Show session status (model, workspace, view mode)", usage: "/status" },
-        SlashCommand { name: "model", description: "Switch model/provider", usage: "/model <provider>" },
-        SlashCommand { name: "clear", description: "Clear conversation and start fresh session", usage: "/clear" },
-        SlashCommand { name: "compact", description: "Force context compaction", usage: "/compact" },
-        SlashCommand { name: "diff", description: "Show git diff (including untracked)", usage: "/diff" },
-        SlashCommand { name: "undo", description: "Revert workspace to clean state", usage: "/undo" },
-        SlashCommand { name: "tokens", description: "Show context window usage", usage: "/tokens" },
-        SlashCommand { name: "cost", description: "Show token usage and estimated cost", usage: "/cost" },
-        SlashCommand { name: "copy", description: "Copy last agent message to clipboard", usage: "/copy" },
-        SlashCommand { name: "view", description: "Set view mode (focus|evidence|audit)", usage: "/view <mode>" },
-        SlashCommand { name: "memory", description: "Manage persistent workspace memory", usage: "/memory [add|clear|show]" },
-        SlashCommand { name: "session", description: "List or resume saved sessions", usage: "/session [list|resume <id>]" },
-        SlashCommand { name: "swarm", description: "Launch background sub-agent", usage: "/swarm <task>" },
-        SlashCommand { name: "exit", description: "Exit the application", usage: "/exit" },
-        SlashCommand { name: "quit", description: "Exit the application", usage: "/quit" },
+        SlashCommand {
+            name: "help",
+            description: "Show available commands",
+            usage: "/help",
+        },
+        SlashCommand {
+            name: "status",
+            description: "Show session status (model, workspace, view mode)",
+            usage: "/status",
+        },
+        SlashCommand {
+            name: "model",
+            description: "Switch model/provider",
+            usage: "/model <provider>",
+        },
+        SlashCommand {
+            name: "clear",
+            description: "Clear conversation and start fresh session",
+            usage: "/clear",
+        },
+        SlashCommand {
+            name: "compact",
+            description: "Force context compaction",
+            usage: "/compact",
+        },
+        SlashCommand {
+            name: "auto",
+            description: "Run a task with auto-mode orchestration",
+            usage: "/auto <task>",
+        },
+        SlashCommand {
+            name: "agent",
+            description: "Show auto-mode agent status",
+            usage: "/agent",
+        },
+        SlashCommand {
+            name: "agents",
+            description: "Show auto-mode agent status",
+            usage: "/agents",
+        },
+        SlashCommand {
+            name: "diff",
+            description: "Show git diff (including untracked)",
+            usage: "/diff",
+        },
+        SlashCommand {
+            name: "undo",
+            description: "Revert workspace to clean state",
+            usage: "/undo",
+        },
+        SlashCommand {
+            name: "tokens",
+            description: "Show context window usage",
+            usage: "/tokens",
+        },
+        SlashCommand {
+            name: "cost",
+            description: "Show token usage and estimated cost",
+            usage: "/cost",
+        },
+        SlashCommand {
+            name: "copy",
+            description: "Copy last agent message to clipboard",
+            usage: "/copy",
+        },
+        SlashCommand {
+            name: "view",
+            description: "Set view mode (focus|evidence|audit)",
+            usage: "/view <mode>",
+        },
+        SlashCommand {
+            name: "memory",
+            description: "Manage persistent workspace memory",
+            usage: "/memory [add|clear|show]",
+        },
+        SlashCommand {
+            name: "session",
+            description: "List or resume saved sessions",
+            usage: "/session [list|resume <id>]",
+        },
+        SlashCommand {
+            name: "swarm",
+            description: "Launch background sub-agent",
+            usage: "/swarm <task>",
+        },
+        SlashCommand {
+            name: "exit",
+            description: "Exit the application",
+            usage: "/exit",
+        },
+        SlashCommand {
+            name: "quit",
+            description: "Exit the application",
+            usage: "/quit",
+        },
     ]
 }
 
@@ -143,6 +222,24 @@ pub fn execute_command_string(
                     state.push_log("Launched asynchronous Sub-Agent Swarm Worker.");
                 }
             }
+            "auto" => {
+                let payload = parts.collect::<Vec<_>>().join(" ");
+                if payload.is_empty() {
+                    state.push_error("Usage: /auto <task description>");
+                } else {
+                    state.push_user(format!("/auto {payload}"));
+                    state.active_action = Some("Auto mode starting…".into());
+                    state.task_start_time = Some(Instant::now());
+                    let tm = thread_manager.clone();
+                    tokio::spawn(async move {
+                        tm.submit(crate::thread_manager::Op::Auto(payload)).await;
+                    });
+                }
+            }
+            "agents" | "agent" => {
+                state.push_user(format!("/{cmd}"));
+                state.push_result(state.format_agent_hud_summary());
+            }
             "help" | "?" => {
                 state.push_user("/help");
                 let mut help_text = String::from("Commands:\n");
@@ -166,8 +263,13 @@ pub fn execute_command_string(
                 let session_duration = state.session_start.elapsed();
                 let mins = session_duration.as_secs() / 60;
                 let secs = session_duration.as_secs() % 60;
-                let total_tokens = state.cumulative_prompt_tokens + state.cumulative_completion_tokens;
-                let turns = state.history.iter().filter(|c| c.kind_label() == "User").count();
+                let total_tokens =
+                    state.cumulative_prompt_tokens + state.cumulative_completion_tokens;
+                let turns = state
+                    .history
+                    .iter()
+                    .filter(|c| c.kind_label() == "User")
+                    .count();
                 state.push_log(format!(
                     "Session Status:\n  Model:      {}\n  Workspace:  {}\n  Write Mode: {}\n  View:       {:?}\n  Git Branch: {}\n  Duration:   {mins}m {secs}s\n  Turns:      {turns}\n  Tokens:     {total_tokens}",
                     state.model_info, state.workspace_name, state.write_mode,
@@ -307,17 +409,13 @@ pub fn execute_command_string(
                             {
                                 Ok(mut f) => {
                                     if let Err(e) = writeln!(f, "- {text}") {
-                                        state.push_error(format!(
-                                            "Failed to write to memory: {e}"
-                                        ));
+                                        state.push_error(format!("Failed to write to memory: {e}"));
                                     } else {
                                         state.push_log("Memory added successfully.");
                                     }
                                 }
                                 Err(e) => {
-                                    state.push_error(format!(
-                                        "Failed to open memory file: {e}"
-                                    ));
+                                    state.push_error(format!("Failed to open memory file: {e}"));
                                 }
                             }
                         }
@@ -361,9 +459,7 @@ pub fn execute_command_string(
                 } else if action == "resume" {
                     let maybe_id = parts.next();
                     if maybe_id.is_some() {
-                        state.push_log(
-                            "To resume a session, restart crow using: crow -r <id>",
-                        );
+                        state.push_log("To resume a session, restart crow using: crow -r <id>");
                     } else {
                         state.push_error("Usage: /session resume <id>");
                     }
@@ -417,9 +513,9 @@ pub fn execute_command_string(
                         Ok(output) => {
                             let stdout = String::from_utf8_lossy(&output.stdout);
                             if stdout.trim().is_empty() {
-                                let _ = tx_undo.send(TuiMessage::AgentEvent(
-                                    AgentEvent::Log("No changes to undo — working tree is clean.".into())
-                                ));
+                                let _ = tx_undo.send(TuiMessage::AgentEvent(AgentEvent::Log(
+                                    "No changes to undo — working tree is clean.".into(),
+                                )));
                                 return;
                             }
 
@@ -455,14 +551,12 @@ pub fn execute_command_string(
                                 report.push_str("\n⚠ Some files may not have been fully reverted.");
                             }
 
-                            let _ = tx_undo.send(TuiMessage::AgentEvent(
-                                AgentEvent::Log(report)
-                            ));
+                            let _ = tx_undo.send(TuiMessage::AgentEvent(AgentEvent::Log(report)));
                         }
                         Err(e) => {
-                            let _ = tx_undo.send(TuiMessage::AgentEvent(
-                                AgentEvent::Error(format!("Failed to check git status: {e}"))
-                            ));
+                            let _ = tx_undo.send(TuiMessage::AgentEvent(AgentEvent::Error(
+                                format!("Failed to check git status: {e}"),
+                            )));
                         }
                     }
                 });
@@ -574,4 +668,18 @@ pub fn execute_command_string(
 
     state.composer.clear();
     state.composer_cursor = 0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_list_includes_auto_and_agent() {
+        let names: std::collections::HashSet<_> =
+            all_commands().into_iter().map(|c| c.name).collect();
+        assert!(names.contains(&"auto"));
+        assert!(names.contains(&"agent"));
+        assert!(names.contains(&"agents"));
+    }
 }

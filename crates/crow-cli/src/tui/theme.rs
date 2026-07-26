@@ -118,8 +118,8 @@ impl ThemeConfig {
 
 // ── Terminal Color Detection (Codex-inspired) ────────────────────────────────
 
-use crate::tui::terminal_palette;
 use crate::tui::color;
+use crate::tui::terminal_palette;
 
 pub fn user_message_bg() -> ratatui::style::Color {
     if let Some(bg) = terminal_palette::default_bg() {

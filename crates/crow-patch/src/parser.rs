@@ -22,14 +22,9 @@ pub struct UpdateFileChunk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchHunk {
     /// Create a brand-new file with the given contents.
-    AddFile {
-        path: PathBuf,
-        contents: String,
-    },
+    AddFile { path: PathBuf, contents: String },
     /// Delete an existing file.
-    DeleteFile {
-        path: PathBuf,
-    },
+    DeleteFile { path: PathBuf },
     /// Apply one or more chunks of changes to an existing file,
     /// optionally moving it to a new path.
     UpdateFile {
@@ -344,7 +339,9 @@ mod tests {
 *** End Patch";
         let hunks = parse_patch(input).unwrap();
         assert_eq!(hunks.len(), 1);
-        assert!(matches!(&hunks[0], PatchHunk::DeleteFile { path } if path == &PathBuf::from("src/old.rs")));
+        assert!(
+            matches!(&hunks[0], PatchHunk::DeleteFile { path } if path == &PathBuf::from("src/old.rs"))
+        );
     }
 
     #[test]
@@ -364,10 +361,7 @@ mod tests {
             PatchHunk::UpdateFile { path, chunks, .. } => {
                 assert_eq!(path, &PathBuf::from("src/lib.rs"));
                 assert_eq!(chunks.len(), 1);
-                assert_eq!(
-                    chunks[0].context_anchor.as_deref(),
-                    Some("fn main")
-                );
+                assert_eq!(chunks[0].context_anchor.as_deref(), Some("fn main"));
                 assert_eq!(chunks[0].old_lines.len(), 3);
                 assert_eq!(chunks[0].new_lines.len(), 3);
             }

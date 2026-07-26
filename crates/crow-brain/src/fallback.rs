@@ -10,9 +10,7 @@
 //! online as long as ANY configured provider is healthy.
 
 use crate::client::BrainError;
-use crate::compiler::{
-    AgentResponse, ChatMessage, LlmClient, StreamObserver, ToolStreamObserver,
-};
+use crate::compiler::{AgentResponse, ChatMessage, LlmClient, StreamObserver, ToolStreamObserver};
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -81,10 +79,9 @@ impl BreakerState {
         };
 
         if count >= BREAKER_TRIP_THRESHOLD {
-            let prev_until = self.open_until_ms.swap(
-                now + BREAKER_OPEN_DURATION_SECS * 1000,
-                Ordering::Relaxed,
-            );
+            let prev_until = self
+                .open_until_ms
+                .swap(now + BREAKER_OPEN_DURATION_SECS * 1000, Ordering::Relaxed);
             return prev_until == 0;
         }
         false
@@ -249,7 +246,10 @@ impl LlmClient for FallbackLlmClient {
             if entry.breaker.is_open() && i + 1 < self.providers.len() {
                 continue;
             }
-            let result = entry.client.generate_streaming(messages, temperature, None).await;
+            let result = entry
+                .client
+                .generate_streaming(messages, temperature, None)
+                .await;
             self.after_attempt(i, &result);
             match result {
                 Ok(text) => return Ok(text),

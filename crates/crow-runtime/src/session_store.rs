@@ -74,14 +74,15 @@ impl WorkspaceSessionStore {
     /// Canonicalizes the workspace path so equivalent paths (symlinks,
     /// relative vs absolute) produce the same fingerprint.
     pub fn from_workspace(workspace_root: &Path) -> Result<Self> {
-        let canonical = fs::canonicalize(workspace_root)
-            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let canonical =
+            fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
         let sessions_root = home_dir()?
             .join(".crow")
             .join("sessions")
             .join(workspace_fingerprint(&canonical));
-        fs::create_dir_all(&sessions_root)
-            .with_context(|| format!("Failed to create session dir: {}", sessions_root.display()))?;
+        fs::create_dir_all(&sessions_root).with_context(|| {
+            format!("Failed to create session dir: {}", sessions_root.display())
+        })?;
         Ok(Self {
             sessions_root,
             workspace_root: canonical,
@@ -105,8 +106,7 @@ impl WorkspaceSessionStore {
         let path = self.session_path(session_id);
         self.rotate_if_needed(&path)?;
 
-        let line = serde_json::to_string(entry)
-            .context("Failed to serialize session entry")?;
+        let line = serde_json::to_string(entry).context("Failed to serialize session entry")?;
 
         use std::io::Write;
         let mut file = fs::OpenOptions::new()
@@ -303,10 +303,7 @@ impl SessionEntry {
     }
 
     /// Create a tool result entry.
-    pub fn tool_result(
-        tool_call_id: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
+    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: "tool".into(),
             content: content.into(),
@@ -343,15 +340,8 @@ pub struct SessionSummary {
 impl std::fmt::Display for SessionSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let id_short = &self.id[..8.min(self.id.len())];
-        let prompt = self
-            .first_prompt
-            .as_deref()
-            .unwrap_or("(empty)");
-        write!(
-            f,
-            "  {id_short} │ {prompt} │ {} entries",
-            self.entry_count
-        )
+        let prompt = self.first_prompt.as_deref().unwrap_or("(empty)");
+        write!(f, "  {id_short} │ {prompt} │ {} entries", self.entry_count)
     }
 }
 
@@ -365,8 +355,7 @@ fn unix_now() -> u64 {
 }
 
 fn home_dir() -> Result<PathBuf> {
-    dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
 }
 
 fn is_alias(reference: &str) -> bool {

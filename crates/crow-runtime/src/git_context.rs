@@ -82,9 +82,7 @@ impl GitContext {
 
     /// Whether this context has any meaningful content to inject.
     pub fn is_empty(&self) -> bool {
-        self.branch.is_none()
-            && self.recent_commits.is_empty()
-            && self.status.is_none()
+        self.branch.is_none() && self.recent_commits.is_empty() && self.status.is_none()
     }
 
     /// Render the git context as a formatted section for the system prompt.
@@ -129,10 +127,7 @@ impl GitContext {
             return String::new();
         }
 
-        format!(
-            "\n## Git Context\n\n{}\n",
-            sections.join("\n\n")
-        )
+        format!("\n## Git Context\n\n{}\n", sections.join("\n\n"))
     }
 
     /// Render git context as XML-tagged block (Codex `environment_context` pattern).
@@ -197,8 +192,7 @@ impl GitStatusSummary {
     /// Returns `None` if not inside a git repository.
     pub fn detect(workspace_root: &Path) -> Option<Self> {
         let branch = run_git(workspace_root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        let status_output =
-            run_git(workspace_root, &["status", "--porcelain"]).unwrap_or_default();
+        let status_output = run_git(workspace_root, &["status", "--porcelain"]).unwrap_or_default();
 
         let modified_count = status_output
             .lines()

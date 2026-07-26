@@ -238,7 +238,8 @@ impl Compactor {
                 break;
             }
             // Check if preceding message is an assistant with tool_calls
-            if k > 0 && messages[k - 1].role == ChatRole::Assistant
+            if k > 0
+                && messages[k - 1].role == ChatRole::Assistant
                 && messages[k - 1].tool_calls.is_some()
             {
                 k -= 1; // Include the assistant too
@@ -362,7 +363,10 @@ fn build_compacted_history(
 /// - Timeline of message roles and truncated content
 fn build_structured_summary(messages: &[ChatMessage]) -> String {
     let user_count = messages.iter().filter(|m| m.role == ChatRole::User).count();
-    let assistant_count = messages.iter().filter(|m| m.role == ChatRole::Assistant).count();
+    let assistant_count = messages
+        .iter()
+        .filter(|m| m.role == ChatRole::Assistant)
+        .count();
     let tool_count = messages.iter().filter(|m| m.role == ChatRole::Tool).count();
 
     // Collect tool names from tool_calls
@@ -492,7 +496,10 @@ fn extract_file_candidates(content: &str) -> Vec<String> {
             let ext = std::path::Path::new(candidate)
                 .extension()
                 .and_then(|e| e.to_str())?;
-            if interesting_extensions.iter().any(|ie| ext.eq_ignore_ascii_case(ie)) {
+            if interesting_extensions
+                .iter()
+                .any(|ie| ext.eq_ignore_ascii_case(ie))
+            {
                 Some(candidate.to_string())
             } else {
                 None
@@ -674,7 +681,10 @@ mod tests {
         let split = compactor.find_safe_split_point(&messages);
         // Should NOT split between the assistant(tool_calls) and tool_result
         // The split should be at or before index 1
-        assert!(split <= 1 || split >= 3, "split={split} would orphan a tool result");
+        assert!(
+            split <= 1 || split >= 3,
+            "split={split} would orphan a tool result"
+        );
     }
 
     #[test]

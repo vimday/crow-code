@@ -181,7 +181,6 @@ pub struct TurnContextBuilder {
     status_tracker: Option<Arc<crate::agent_status::AgentStatusTracker>>,
 }
 
-
 impl TurnContextBuilder {
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
@@ -223,18 +222,12 @@ impl TurnContextBuilder {
         self
     }
 
-    pub fn background_manager(
-        mut self,
-        bgm: Arc<crow_tools::BackgroundProcessManager>,
-    ) -> Self {
+    pub fn background_manager(mut self, bgm: Arc<crow_tools::BackgroundProcessManager>) -> Self {
         self.background_manager = Some(bgm);
         self
     }
 
-    pub fn subagent_delegator(
-        mut self,
-        delegator: Arc<dyn crow_tools::SubagentDelegator>,
-    ) -> Self {
+    pub fn subagent_delegator(mut self, delegator: Arc<dyn crow_tools::SubagentDelegator>) -> Self {
         self.subagent_delegator = Some(delegator);
         self
     }
@@ -286,26 +279,18 @@ impl TurnContextBuilder {
             model,
             provider: self.provider.unwrap_or_else(|| "unknown".to_string()),
             compiler: self.compiler.ok_or("TurnContext requires a compiler")?,
-            workspace_root: self
-                .workspace_root
-                .unwrap_or_else(|| PathBuf::from(".")),
+            workspace_root: self.workspace_root.unwrap_or_else(|| PathBuf::from(".")),
             budget,
             tool_registry: self
                 .tool_registry
                 .ok_or("TurnContext requires a tool_registry")?,
-            permissions: self
-                .permissions
-                .ok_or("TurnContext requires permissions")?,
-            file_state: self
-                .file_state
-                .ok_or("TurnContext requires file_state")?,
+            permissions: self.permissions.ok_or("TurnContext requires permissions")?,
+            file_state: self.file_state.ok_or("TurnContext requires file_state")?,
             background_manager: self
                 .background_manager
                 .ok_or("TurnContext requires background_manager")?,
             subagent_delegator: self.subagent_delegator,
-            cancel_token: self
-                .cancel_token
-                .unwrap_or_default(),
+            cancel_token: self.cancel_token.unwrap_or_default(),
             max_steps: self.max_steps.unwrap_or(40),
             started_at: Instant::now(),
             reasoning_effort: self.reasoning_effort,
@@ -313,7 +298,9 @@ impl TurnContextBuilder {
             role: self.role.unwrap_or_default(),
             diff_tracker: Arc::new(Mutex::new(crate::turn_diff::TurnDiffTracker::new())),
             mcp_manager: self.mcp_manager,
-            status_tracker: self.status_tracker.unwrap_or_else(|| Arc::new(crate::agent_status::AgentStatusTracker::new())),
+            status_tracker: self
+                .status_tracker
+                .unwrap_or_else(|| Arc::new(crate::agent_status::AgentStatusTracker::new())),
         })
     }
 }

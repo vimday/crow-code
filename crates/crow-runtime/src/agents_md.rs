@@ -144,12 +144,9 @@ pub fn discover_agents_md(cwd: &Path) -> Option<AgentsMdResult> {
 
     for dir in &path_chain {
         // Check standard filenames in the directory itself
-        if let Some(cf) = try_load_instruction_file(
-            dir,
-            AGENTS_MD_FILENAMES,
-            &project_root,
-            &mut seen_hashes,
-        ) {
+        if let Some(cf) =
+            try_load_instruction_file(dir, AGENTS_MD_FILENAMES, &project_root, &mut seen_hashes)
+        {
             total_bytes += cf.content.len();
             sources.push(cf.path.clone());
             let relative = cf.path.strip_prefix(&project_root).unwrap_or(&cf.path);
@@ -330,8 +327,11 @@ mod tests {
         // .crow/instructions.md
         let dotcrow = root.join(".crow");
         fs::create_dir_all(&dotcrow).expect("create .crow");
-        fs::write(dotcrow.join("instructions.md"), "# Custom Rules\nFollow these.")
-            .expect("write instructions");
+        fs::write(
+            dotcrow.join("instructions.md"),
+            "# Custom Rules\nFollow these.",
+        )
+        .expect("write instructions");
 
         let result = discover_agents_md(root).expect("should discover");
         assert_eq!(result.files.len(), 1);

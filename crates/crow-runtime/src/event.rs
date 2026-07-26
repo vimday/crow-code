@@ -39,6 +39,7 @@ pub enum TurnEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnPhase {
     Materializing,
+    Planning,
     BuildingRepoMap,
     Compacting,
     EpistemicLoop { step: u32, max_steps: u32 },
@@ -52,6 +53,7 @@ impl std::fmt::Display for TurnPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Materializing => write!(f, "Materializing"),
+            Self::Planning => write!(f, "Planning"),
             Self::BuildingRepoMap => write!(f, "Building Repo Map"),
             Self::Compacting => write!(f, "Compacting"),
             Self::EpistemicLoop { step, max_steps } => write!(f, "Epistemic [{step}/{max_steps}]"),
@@ -94,6 +96,41 @@ impl std::fmt::Display for ErrorPhase {
     }
 }
 
+/// Structured auto-orchestration lifecycle events.
+#[derive(Debug, Clone)]
+pub enum OrchestrationEvent {
+    AutoStarted {
+        run_id: String,
+        prompt: String,
+        agent_count: usize,
+    },
+    PhaseStarted {
+        run_id: String,
+        phase: String,
+    },
+    AgentStarted {
+        run_id: String,
+        agent_id: String,
+        name: String,
+        role: String,
+    },
+    AgentPreview {
+        run_id: String,
+        agent_id: String,
+        preview: String,
+    },
+    AgentCompleted {
+        run_id: String,
+        agent_id: String,
+        success: bool,
+    },
+    AutoCompleted {
+        run_id: String,
+        success: bool,
+        summary: String,
+    },
+}
+
 // ── Agent Events ────────────────────────────────────────────────────
 
 /// The primary event enum consumed by event handlers.
@@ -112,6 +149,7 @@ impl std::fmt::Display for ErrorPhase {
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Turn(TurnEvent),
+    Orchestration(OrchestrationEvent),
     Thinking(u32, u32),
     StreamChunk(String),
     ActionStart(String),

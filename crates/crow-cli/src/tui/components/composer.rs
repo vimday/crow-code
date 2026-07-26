@@ -102,8 +102,8 @@ impl<'a> ComposerComponent<'a> {
         let mut result = text.to_string();
         for (i, content) in self.paste_attachments.iter().enumerate() {
             let idx = i + 1; // 1-indexed
-            // Match the placeholder pattern we insert. Because the
-            // format_bytes output varies, match up to the `]`.
+                             // Match the placeholder pattern we insert. Because the
+                             // format_bytes output varies, match up to the `]`.
             let prefix = format!("[Pasted text #{idx}:");
             if let Some(start) = result.find(&prefix) {
                 if let Some(end_offset) = result[start..].find(']') {
@@ -260,8 +260,8 @@ impl<'a> Component for ComposerComponent<'a> {
                     if *selected_idx < candidates.len().saturating_sub(1) {
                         *selected_idx += 1;
                         if *selected_idx >= *scroll_offset + FILE_PICKER_MAX_VISIBLE {
-                            *scroll_offset = selected_idx
-                                .saturating_sub(FILE_PICKER_MAX_VISIBLE - 1);
+                            *scroll_offset =
+                                selected_idx.saturating_sub(FILE_PICKER_MAX_VISIBLE - 1);
                         }
                     }
                     return Ok(None);
@@ -414,7 +414,7 @@ impl<'a> Component for ComposerComponent<'a> {
         let composer_block = Block::default()
             .borders(Borders::TOP)
             .border_style(ratatui::style::Style::new().fg(ratatui::style::Color::DarkGray));
-        
+
         let inner_composer_area = composer_block.inner(composer_area);
         frame.render_widget(composer_block, composer_area);
 
@@ -545,8 +545,7 @@ impl<'a> Component for ComposerComponent<'a> {
 
                 frame.render_widget(Clear, popup_area);
 
-                let visible_end =
-                    (scroll_offset + FILE_PICKER_MAX_VISIBLE).min(candidates.len());
+                let visible_end = (scroll_offset + FILE_PICKER_MAX_VISIBLE).min(candidates.len());
                 let has_more_above = scroll_offset > 0;
                 let has_more_below = visible_end < candidates.len();
 
@@ -616,13 +615,14 @@ fn format_bytes(bytes: usize) -> String {
 /// Triggers when the immediately-preceding `@` is at start-of-line or
 /// follows whitespace; the query is the run of non-whitespace
 /// characters after it. Empty query is fine (just-typed `@`).
-fn current_at_token(
-    lines: &[String],
-    cursor: (usize, usize),
-) -> Option<(usize, String)> {
+fn current_at_token(lines: &[String], cursor: (usize, usize)) -> Option<(usize, String)> {
     let (row, col) = cursor;
     let line = lines.get(row)?;
-    let cursor_byte = line.char_indices().nth(col).map(|(b, _)| b).unwrap_or(line.len());
+    let cursor_byte = line
+        .char_indices()
+        .nth(col)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len());
     let head = &line[..cursor_byte];
     let at_pos = head.rfind('@')?;
     // Boundary check: at start-of-line or preceded by whitespace.
@@ -718,7 +718,9 @@ fn walk_files(
     if *count >= limit {
         return;
     }
-    let Ok(read) = std::fs::read_dir(dir) else { return; };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in read.flatten() {
         if *count >= limit {
             return;
@@ -735,7 +737,9 @@ fn walk_files(
             continue;
         }
         let path = entry.path();
-        let Ok(meta) = entry.file_type() else { continue; };
+        let Ok(meta) = entry.file_type() else {
+            continue;
+        };
         if meta.is_dir() {
             walk_files(root, &path, out, count, limit);
         } else if meta.is_file() {

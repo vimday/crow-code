@@ -67,10 +67,7 @@ pub enum ExecExpiration {
 
 impl ExecExpiration {
     /// Create from optional timeout + optional cancellation token.
-    pub fn from_parts(
-        timeout: Option<Duration>,
-        cancellation: Option<CancellationToken>,
-    ) -> Self {
+    pub fn from_parts(timeout: Option<Duration>, cancellation: Option<CancellationToken>) -> Self {
         match (timeout, cancellation) {
             (Some(t), Some(c)) => Self::TimeoutOrCancellation {
                 timeout: t,
@@ -95,7 +92,10 @@ impl ExecExpiration {
     /// Get the cancellation token, if any.
     pub fn cancellation_token(&self) -> Option<&CancellationToken> {
         match self {
-            Self::Cancellation(c) | Self::TimeoutOrCancellation { cancellation: c, .. } => Some(c),
+            Self::Cancellation(c)
+            | Self::TimeoutOrCancellation {
+                cancellation: c, ..
+            } => Some(c),
             _ => None,
         }
     }
@@ -369,8 +369,8 @@ impl ToolOrchestrator {
                 ),
             };
 
-            let should_retry = retry_count < max_retries
-                && (this_was_timeout || is_transient_failure(&output));
+            let should_retry =
+                retry_count < max_retries && (this_was_timeout || is_transient_failure(&output));
 
             if should_retry {
                 retry_count += 1;
@@ -464,15 +464,19 @@ impl ToolOrchestrator {
         if !self.config.file_ownership.is_empty() {
             let is_write_tool = matches!(tool_name, "file_write" | "file_edit" | "bash");
             if is_write_tool {
-                if let Some(path) = args.get("path").or_else(|| args.get("file")).and_then(|v| v.as_str()) {
-                    let owned = self.config.file_ownership.iter().any(|pattern| {
-                        path.contains(pattern) || glob_matches(pattern, path)
-                    });
+                if let Some(path) = args
+                    .get("path")
+                    .or_else(|| args.get("file"))
+                    .and_then(|v| v.as_str())
+                {
+                    let owned = self
+                        .config
+                        .file_ownership
+                        .iter()
+                        .any(|pattern| path.contains(pattern) || glob_matches(pattern, path));
                     if !owned {
                         return ApprovalDecision::Denied {
-                            reason: format!(
-                                "File '{path}' is outside this role's ownership scope"
-                            ),
+                            reason: format!("File '{path}' is outside this role's ownership scope"),
                         };
                     }
                 }
@@ -496,16 +500,27 @@ impl ToolOrchestrator {
 
         // Destructive command prefixes
         let write_indicators = [
-            "rm ", "rm\t", "rmdir",
-            "mv ", "mv\t",
-            "cp ", "cp\t",
-            "mkdir", "touch",
-            "chmod", "chown",
-            "sed -i", "sed --in-place",
-            "tee ", "tee\t",
-            ">", ">>",
+            "rm ",
+            "rm\t",
+            "rmdir",
+            "mv ",
+            "mv\t",
+            "cp ",
+            "cp\t",
+            "mkdir",
+            "touch",
+            "chmod",
+            "chown",
+            "sed -i",
+            "sed --in-place",
+            "tee ",
+            "tee\t",
+            ">",
+            ">>",
             "install ",
-            "npm install", "yarn add", "pip install",
+            "npm install",
+            "yarn add",
+            "pip install",
             "cargo add",
         ];
 
@@ -629,14 +644,20 @@ mod orchestrator_helpers_tests {
     fn dedup_key_is_order_independent() {
         let a = serde_json::json!({"path": "src/foo.rs", "limit": 100});
         let b = serde_json::json!({"limit": 100, "path": "src/foo.rs"});
-        assert_eq!(make_dedup_key("read_file", &a), make_dedup_key("read_file", &b));
+        assert_eq!(
+            make_dedup_key("read_file", &a),
+            make_dedup_key("read_file", &b)
+        );
     }
 
     #[test]
     fn dedup_key_distinguishes_different_args() {
         let a = serde_json::json!({"path": "src/foo.rs"});
         let b = serde_json::json!({"path": "src/bar.rs"});
-        assert_ne!(make_dedup_key("read_file", &a), make_dedup_key("read_file", &b));
+        assert_ne!(
+            make_dedup_key("read_file", &a),
+            make_dedup_key("read_file", &b)
+        );
     }
 
     #[test]

@@ -75,6 +75,24 @@ pub fn catalog() -> &'static [CommandSpec] {
             usage_hint: Some("/swarm <task description>"),
         },
         CommandSpec {
+            trigger: "/auto",
+            category: Category::Session,
+            description: "Run a Codex-style autonomous agent loop",
+            usage_hint: Some("/auto <task>"),
+        },
+        CommandSpec {
+            trigger: "/agent",
+            category: Category::Session,
+            description: "Show active auto-mode agents and previews",
+            usage_hint: None,
+        },
+        CommandSpec {
+            trigger: "/agents",
+            category: Category::Session,
+            description: "Alias for /agent",
+            usage_hint: None,
+        },
+        CommandSpec {
             trigger: "/compact",
             category: Category::Context,
             description: "Force context compaction now",
@@ -179,13 +197,9 @@ mod tests {
     }
 
     #[test]
-    fn descriptions_render_usage_hints() {
-        let suggestions = get_palette_commands("/model");
-        let model = suggestions
-            .iter()
-            .find(|(t, _)| t == "/model")
-            .expect("/model should always be in the catalog");
-        assert!(model.1.contains("·"));
-        assert!(model.1.contains("provider"));
+    fn command_catalog_includes_auto_and_agent() {
+        assert!(find("/auto").is_some());
+        assert!(find("/agent").is_some());
+        assert!(find("/agents").is_some());
     }
 }

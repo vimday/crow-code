@@ -206,14 +206,8 @@ fn default_bindings() -> HashMap<KeyAction, Vec<KeyBinding>> {
     m.insert(KeyAction::ScrollTop, vec![KeyBinding::plain("home")]);
     m.insert(KeyAction::ScrollBottom, vec![KeyBinding::plain("end")]);
 
-    m.insert(
-        KeyAction::HistoryPrev,
-        vec![KeyBinding::ctrl("p")],
-    );
-    m.insert(
-        KeyAction::HistoryNext,
-        vec![KeyBinding::ctrl("n")],
-    );
+    m.insert(KeyAction::HistoryPrev, vec![KeyBinding::ctrl("p")]);
+    m.insert(KeyAction::HistoryNext, vec![KeyBinding::ctrl("n")]);
 
     m.insert(KeyAction::FocusNext, vec![KeyBinding::plain("tab")]);
     m.insert(KeyAction::ToggleViewMode, vec![KeyBinding::ctrl("v")]);

@@ -20,7 +20,6 @@ use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-
 /// Policy configuration for seatbelt sandboxing.
 #[derive(Debug, Clone)]
 pub struct SeatbeltPolicy {
@@ -272,16 +271,14 @@ mod tests {
 
     #[test]
     fn no_network_removes_network_allow() {
-        let policy =
-            SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws")).without_network();
+        let policy = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws")).without_network();
         let profile = policy.generate_profile();
         assert!(!profile.contains("(allow network*)"));
     }
 
     #[test]
     fn no_subprocess_removes_process_allow() {
-        let policy =
-            SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws")).without_subprocess();
+        let policy = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws")).without_subprocess();
         let profile = policy.generate_profile();
         assert!(!profile.contains("(allow process-exec* process-fork)"));
     }
@@ -318,8 +315,7 @@ mod tests {
             std::env::set_var("HTTP_PROXY", "unix:///var/run/proxy.sock");
         }
 
-        let policy = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws"))
-            .with_proxy_support();
+        let policy = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws")).with_proxy_support();
 
         assert!(policy.read_paths.contains(&PathBuf::from("/var/run")));
 
@@ -339,8 +335,7 @@ mod tests {
         let before = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws"));
         let before_count = before.read_paths.len();
 
-        let after = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws"))
-            .with_proxy_support();
+        let after = SeatbeltPolicy::for_workspace(PathBuf::from("/tmp/ws")).with_proxy_support();
         assert_eq!(after.read_paths.len(), before_count);
 
         unsafe {

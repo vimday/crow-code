@@ -175,14 +175,13 @@ fn apply_chunks_to_content(
             continue;
         }
 
-        let seek_result =
-            seek_sequence(&lines, &chunk.old_lines, cursor).ok_or_else(|| {
-                ApplyError::SequenceNotFound {
-                    file: file_path.to_path_buf(),
-                    chunk_index: idx,
-                    context: chunk.context_anchor.clone(),
-                }
-            })?;
+        let seek_result = seek_sequence(&lines, &chunk.old_lines, cursor).ok_or_else(|| {
+            ApplyError::SequenceNotFound {
+                file: file_path.to_path_buf(),
+                chunk_index: idx,
+                context: chunk.context_anchor.clone(),
+            }
+        })?;
 
         if seek_result.match_tier != MatchTier::Exact {
             all_exact = false;
@@ -213,7 +212,9 @@ mod tests {
     use super::*;
     use crate::parser::parse_patch;
 
-    fn mock_fs<'a>(files: &'a [(&'a str, &'a str)]) -> impl Fn(&Path) -> std::io::Result<String> + 'a {
+    fn mock_fs<'a>(
+        files: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&Path) -> std::io::Result<String> + 'a {
         move |path: &Path| {
             for &(name, content) in files {
                 if path.ends_with(name) {

@@ -33,6 +33,60 @@ pub struct StatusIndicatorState {
     pub progress_pct: Option<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentHudEntry {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub phase: String,
+    pub preview: Option<String>,
+    pub done: bool,
+    pub success: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AutoRunState {
+    pub run_id: Option<String>,
+    pub prompt: Option<String>,
+    pub active_phase: Option<String>,
+    pub agents: Vec<AgentHudEntry>,
+    pub last_summary: Option<String>,
+}
+
+impl AutoRunState {
+    fn upsert_agent(&mut self, run_id: &str, agent_id: &str, name: String, role: String) {
+        if self.run_id.as_deref() != Some(run_id) {
+            self.run_id = Some(run_id.to_string());
+            self.agents.clear();
+        }
+        if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == agent_id) {
+            agent.name = name;
+            agent.role = role;
+            return;
+        }
+        self.agents.push(AgentHudEntry {
+            id: agent_id.to_string(),
+            name,
+            role,
+            phase: self.active_phase.clone().unwrap_or_default(),
+            preview: None,
+            done: false,
+            success: None,
+        });
+        self.agents.truncate(8);
+    }
+}
+
+fn truncate_preview(preview: &str) -> String {
+    let compact = preview.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= 240 {
+        return compact;
+    }
+    let mut out = compact.chars().take(239).collect::<String>();
+    out.push('…');
+    out
+}
+
 impl StatusIndicatorState {
     pub fn working() -> Self {
         Self {
@@ -84,6 +138,7 @@ pub struct AppState {
     pub cancellation: Option<CancellationToken>,
     pub active_swarms: Vec<(String, String)>,
     pub task_queue: std::collections::VecDeque<String>,
+    pub auto_run: AutoRunState,
 
     // Approval Model
     pub approval_state: ApprovalState,
@@ -260,24 +315,20 @@ impl AppState {
         retry_count: u32,
         from_cache: bool,
     ) {
-        self.history.push(Box::new(history_cell::ToolCallCell::from_completed(
-            tool_name,
-            duration_ms,
-            output_bytes,
-            is_error,
-            preview,
-            retry_count,
-            from_cache,
-        )));
+        self.history
+            .push(Box::new(history_cell::ToolCallCell::from_completed(
+                tool_name,
+                duration_ms,
+                output_bytes,
+                is_error,
+                preview,
+                retry_count,
+                from_cache,
+            )));
     }
 
     /// Push a turn completion summary separator.
-    pub fn push_summary(
-        &mut self,
-        tool_count: usize,
-        duration_ms: u64,
-        tokens: u64,
-    ) {
+    pub fn push_summary(&mut self, tool_count: usize, duration_ms: u64, tokens: u64) {
         self.history.push(Box::new(history_cell::SummaryCell {
             tool_count,
             duration_ms,
@@ -305,6 +356,7 @@ impl AppState {
             cancellation: None,
             active_swarms: Vec::new(),
             task_queue: std::collections::VecDeque::new(),
+            auto_run: AutoRunState::default(),
             approval_state: ApprovalState::None,
             allowed_safe_patterns: std::collections::HashSet::new(),
 
@@ -365,5 +417,118 @@ impl AppState {
     /// Approximate token estimation (Yomi pattern: ~4 chars per token).
     pub fn estimate_tokens(text: &str) -> f64 {
         text.len() as f64 / 4.0
+    }
+
+    pub fn apply_orchestration_event(&mut self, ev: &crow_runtime::event::OrchestrationEvent) {
+        use crow_runtime::event::OrchestrationEvent;
+
+        match ev {
+            OrchestrationEvent::AutoStarted {
+                run_id,
+                prompt,
+                agent_count,
+            } => {
+                self.auto_run = AutoRunState {
+                    run_id: Some(run_id.clone()),
+                    prompt: Some(prompt.clone()),
+                    active_phase: None,
+                    agents: Vec::with_capacity(*agent_count),
+                    last_summary: None,
+                };
+                self.active_action = Some(format!("Auto mode running {agent_count} agents…"));
+            }
+            OrchestrationEvent::PhaseStarted { run_id, phase } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                self.auto_run.active_phase = Some(phase.clone());
+                for agent in &mut self.auto_run.agents {
+                    if !agent.done {
+                        agent.phase = phase.clone();
+                    }
+                }
+                self.active_action = Some(format!("Auto phase: {phase}"));
+            }
+            OrchestrationEvent::AgentStarted {
+                run_id,
+                agent_id,
+                name,
+                role,
+            } => {
+                self.auto_run
+                    .upsert_agent(run_id, agent_id, name.clone(), role.clone());
+            }
+            OrchestrationEvent::AgentPreview {
+                run_id,
+                agent_id,
+                preview,
+            } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                if let Some(agent) = self
+                    .auto_run
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.id == *agent_id)
+                {
+                    agent.preview = Some(truncate_preview(preview));
+                }
+            }
+            OrchestrationEvent::AgentCompleted {
+                run_id,
+                agent_id,
+                success,
+            } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                if let Some(agent) = self
+                    .auto_run
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.id == *agent_id)
+                {
+                    agent.done = true;
+                    agent.success = Some(*success);
+                }
+            }
+            OrchestrationEvent::AutoCompleted {
+                run_id,
+                success,
+                summary,
+            } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                self.auto_run.last_summary = Some(summary.clone());
+                self.active_action = None;
+                if *success {
+                    self.push_log(format!("Auto mode complete: {summary}"));
+                } else {
+                    self.push_error(format!("Auto mode failed: {summary}"));
+                }
+            }
+        }
+    }
+
+    pub fn format_agent_hud_summary(&self) -> String {
+        crate::tui::agent_status_feed::format_agent_summary(&self.auto_run)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orchestration_events_update_agent_hud() {
+        let mut state = AppState::new("test-model".into(), "sandbox".into(), "repo".into());
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::AutoStarted {
+            run_id: "auto-1".into(),
+            prompt: "ship it".into(),
+            agent_count: 2,
+        });
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::AgentStarted {
+            run_id: "auto-1".into(),
+            agent_id: "a1".into(),
+            name: "explorer".into(),
+            role: "explorer".into(),
+        });
+        assert_eq!(state.auto_run.run_id.as_deref(), Some("auto-1"));
+        assert_eq!(state.auto_run.agents.len(), 1);
+        assert_eq!(state.auto_run.agents[0].name, "explorer");
     }
 }

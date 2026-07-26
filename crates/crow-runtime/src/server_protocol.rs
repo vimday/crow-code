@@ -361,8 +361,7 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_response_error_roundtrip() {
-        let resp =
-            JsonRpcResponse::error(Some(json!(1)), JsonRpcError::internal_error("boom"));
+        let resp = JsonRpcResponse::error(Some(json!(1)), JsonRpcError::internal_error("boom"));
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: JsonRpcResponse = serde_json::from_str(&serialized).unwrap();
 

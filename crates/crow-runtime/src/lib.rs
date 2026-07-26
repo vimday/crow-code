@@ -5,14 +5,15 @@
 pub mod agent_loop;
 pub mod agent_status;
 pub mod agents_md;
+pub mod auto;
 pub mod budget;
 pub mod cancel;
 pub mod context;
 pub mod epistemic;
 pub mod event;
 pub mod file_state;
-pub mod goal;
 pub mod git_context;
+pub mod goal;
 pub mod hooks;
 pub mod mcp;
 pub mod memory_store;
@@ -27,4 +28,3 @@ pub mod thread_store;
 pub mod turn_context;
 pub mod turn_diff;
 pub mod turn_timing;
-

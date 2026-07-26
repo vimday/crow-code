@@ -177,7 +177,8 @@ async fn run_plan(args: &[String]) -> Result<()> {
 async fn run_dry_run(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-    let mut messages = crow_runtime::context::ConversationManager::new_for_model(vec![], &cfg.llm.model);
+    let mut messages =
+        crow_runtime::context::ConversationManager::new_for_model(vec![], &cfg.llm.model);
     let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     runtime
         .execute_turn(
@@ -193,7 +194,8 @@ async fn run_dry_run(args: &[String]) -> Result<()> {
 async fn run_yolo(args: &[String]) -> Result<()> {
     let cfg = CrowConfig::load()?;
     let prompt = args.join(" ");
-    let mut messages = crow_runtime::context::ConversationManager::new_for_model(vec![], &cfg.llm.model);
+    let mut messages =
+        crow_runtime::context::ConversationManager::new_for_model(vec![], &cfg.llm.model);
     let runtime = crate::runtime::SessionRuntime::boot(&cfg).await?;
     let mut observer = crate::event::CliEventHandler::new(crate::event::ViewMode::default());
     runtime
@@ -326,6 +328,7 @@ mod tests {
         let cfg = config::CrowConfig {
             workspace: workspace.path().to_path_buf(),
             write_mode: config::WriteMode::SandboxOnly,
+            auto_mode: config::AutoModeConfig::default(),
             llm: Default::default(),
             map_budget: 1024,
             mcp_servers: Default::default(),

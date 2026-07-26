@@ -356,10 +356,7 @@ mod tests {
         let config: HooksConfig = serde_json::from_str(json).expect("parse config");
         assert_eq!(config.hooks.len(), 1);
         assert_eq!(config.hooks[0].event, HookEvent::PreToolUse);
-        assert_eq!(
-            config.hooks[0].tool_name_match.as_deref(),
-            Some("shell")
-        );
+        assert_eq!(config.hooks[0].tool_name_match.as_deref(), Some("shell"));
     }
 
     #[test]

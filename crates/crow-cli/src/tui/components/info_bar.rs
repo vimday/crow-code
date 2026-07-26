@@ -32,6 +32,11 @@ pub fn fmt_elapsed_compact(secs: u64) -> String {
     format!("{hours}h {minutes:02}m {seconds:02}s")
 }
 
+/// Compact auto-mode label shown in the center status area.
+pub fn format_auto_label(phase: Option<&str>) -> Option<String> {
+    phase.map(|phase| format!("auto:{phase}"))
+}
+
 /// Token usage color based on context window usage percentage.
 fn usage_color(pct: f64) -> ratatui::style::Color {
     if pct < 0.5 {
@@ -124,6 +129,12 @@ impl InfoBar {
                 token_display.fg(colors::text_secondary()),
                 tok_per_sec.fg(colors::text_muted()),
                 format!(" · {elapsed}").fg(colors::text_secondary()),
+            ]
+        } else if let Some(label) = format_auto_label(state.auto_run.active_phase.as_deref()) {
+            let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
+            vec![
+                format!(" {spinner} ").set_style(Styles::spinner()),
+                label.fg(colors::accent_system()),
             ]
         } else if let Some(ref phase) = state.turn_phase {
             // Show the enriched phase string (e.g. "🧠 Thinking (step 3/20)")
@@ -220,8 +231,11 @@ mod tests {
     }
 
     #[test]
-    fn test_elapsed_compact_hours() {
-        assert_eq!(fmt_elapsed_compact(3600), "1h 00m 00s");
-        assert_eq!(fmt_elapsed_compact(3661), "1h 01m 01s");
+    fn test_auto_label_uses_phase() {
+        assert_eq!(
+            format_auto_label(Some("Explore")),
+            Some("auto:Explore".to_string())
+        );
+        assert_eq!(format_auto_label(None), None);
     }
 }

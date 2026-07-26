@@ -13,7 +13,8 @@ Built with Rust. Verified in sandboxes. No cloud dependency.</p>
 Crow is a terminal-based AI coding agent that generates, verifies, and applies code changes to your workspace. It differs from typical AI coding tools in one key way: **every proposed change is sandbox-verified before touching your code**.
 
 **Production-ready capabilities:**
-- **Interactive TUI Workbench** — A ratatui-powered terminal UI with streaming markdown, session persistence, and multi-line editing.
+- **Interactive TUI Workbench** — A ratatui-powered terminal UI with streaming markdown, session persistence, multi-line editing, and an auto-agent HUD.
+- **Auto Mode Orchestration** — `/auto <task>` builds a deterministic Explore → Plan → Execute → Review → Verify agent loop with bounded parallelism.
 - **Monte Carlo Tree Search (MCTS) Crucible** — Parallel exploration and verification of code patches against immutable workspace snapshots.
 - **Epistemic Loop** — An autonomous reasoning cycle with structured tool use (file reads, shell commands, grep, subagent delegation).
 - **Multi-Provider LLM Support** — OpenAI-compatible and Anthropic APIs, with automatic error retry and exponential backoff.
@@ -110,6 +111,8 @@ After launching `crow`, type a natural language task and press Enter. The agent 
 | `Tab` | Switch focus (composer ↔ history) |
 | `PageUp/Down` | Scroll history |
 | `/help` | Show all slash commands |
+| `/auto <task>` | Run a task through the auto-mode orchestration loop |
+| `/agent` / `/agents` | Show the current auto-mode agent status feed |
 | `/model <provider>` | Hot-swap LLM provider (e.g. `/model kimi`) |
 | `!<cmd>` | Execute shell command (with approval dialog) |
 
@@ -170,7 +173,7 @@ A failed operation **never modifies your workspace** (zero-pollution guarantee).
 │  ┌──────────┬──────────┬──────────┬──────────┐ │
 │  │ History  │ Composer │ InfoBar  │ Cmd      │ │
 │  │ Component│ Component│ (tokens, │ Palette  │ │
-│  │          │ (focus)  │ ctx %)   │          │ │
+│  │ + AutoHUD│ (focus)  │ auto run)│          │ │
 │  └──────────┴──────────┴──────────┴──────────┘ │
 │  StreamController (tick-based line draining)    │
 │  StreamingMarkdownRenderer (newline-gated)      │
@@ -178,10 +181,11 @@ A failed operation **never modifies your workspace** (zero-pollution guarantee).
 │  ThreadManager ←→ ConversationManager          │
 │  ┌──────────────────────────────────────────┐  │
 │  │ SessionRuntime                           │  │
+│  │  → Auto Planner (bounded agent loop)     │  │
 │  │  → Materialization (frozen snapshot)     │  │
 │  │  → Epistemic Loop (ReconAction cycle)    │  │
 │  │  → Crucible (MCTS verification)          │  │
-│  │  → Subagent Workers (bounded 120s)       │  │
+│  │  → Subagent Workers (registry tracked)   │  │
 │  └──────────────────────────────────────────┘  │
 ├────────────────────────────────────────────────┤
 │  crow-brain  │ crow-patch │ crow-verifier      │
@@ -202,7 +206,9 @@ A failed operation **never modifies your workspace** (zero-pollution guarantee).
 | L2 — Crucible | `crow-verifier` | Isolated command execution & ACI log truncation |
 | L3 — Intelligence | `crow-intel` | Tree-sitter outlines, LSP bridge |
 | L4 — Reasoning | `crow-brain` | Intent compiler, budget governor, dual-track MCTS |
+| L4 | `crow-runtime` | Agent loop, auto-mode planner, task registry, session/context runtime |
 | L5 — Interface | `crow-cli` | Ratatui TUI (the user-facing binary) |
+| L5 | `crow-commands` | Shared slash-command catalog and palette metadata |
 | L5 | `crow-mcp` | MCP stdio transport (JSON-RPC 2.0) |
 
 Crates may only depend on crates in equal or lower layers. `cargo check` catches circular violations.

@@ -252,9 +252,7 @@ impl Tool for FileEditTool {
 
         // Nothing to write?
         if working == original_content {
-            return Ok(ToolOutput::error(
-                "No changes resulted from the edits.",
-            ));
+            return Ok(ToolOutput::error("No changes resulted from the edits."));
         }
 
         // Write back
