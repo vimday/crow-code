@@ -27,6 +27,15 @@ pub fn format_agent_summary(auto: &AutoRunState) -> String {
     if let Some(phase) = auto.active_phase.as_deref() {
         lines.push(format!("Phase: {phase}"));
     }
+    if auto.total_agents > 0 {
+        lines.push(format!(
+            "Progress: {}/{} agents complete",
+            auto.completed_agents, auto.total_agents
+        ));
+    }
+    if let Some(summary) = auto.last_summary.as_deref() {
+        lines.push(format!("Summary: {}", bounded_preview(summary)));
+    }
     for agent in auto.agents.iter().take(MAX_AGENT_LINES) {
         let status = match agent.success {
             Some(true) => "done",
@@ -91,5 +100,23 @@ mod tests {
             format_agent_summary(&AutoRunState::default()),
             "No active auto-mode run."
         );
+    }
+
+    #[test]
+    fn summary_includes_progress_and_last_summary() {
+        let auto = AutoRunState {
+            run_id: Some("auto-1".into()),
+            prompt: Some("ship it".into()),
+            active_phase: Some("Review".into()),
+            total_agents: 3,
+            completed_agents: 2,
+            agents: Vec::new(),
+            last_summary: Some("reviewing final evidence".into()),
+        };
+
+        let summary = format_agent_summary(&auto);
+        assert!(summary.contains("Phase: Review"));
+        assert!(summary.contains("Progress: 2/3 agents complete"));
+        assert!(summary.contains("Summary: reviewing final evidence"));
     }
 }

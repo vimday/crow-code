@@ -132,9 +132,18 @@ impl InfoBar {
             ]
         } else if let Some(label) = format_auto_label(state.auto_run.active_phase.as_deref()) {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
+            let progress = if state.auto_run.total_agents > 0 {
+                format!(
+                    " {}/{}",
+                    state.auto_run.completed_agents, state.auto_run.total_agents
+                )
+            } else {
+                String::new()
+            };
             vec![
                 format!(" {spinner} ").set_style(Styles::spinner()),
                 label.fg(colors::accent_system()),
+                progress.fg(colors::text_muted()),
             ]
         } else if let Some(ref phase) = state.turn_phase {
             // Show the enriched phase string (e.g. "🧠 Thinking (step 3/20)")

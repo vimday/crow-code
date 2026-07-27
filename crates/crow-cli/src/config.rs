@@ -669,6 +669,15 @@ impl CrowConfig {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_env() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     fn clear_llm_env() {
         for key in [
@@ -710,6 +719,7 @@ mod tests {
 
     #[test]
     fn auto_mode_defaults_are_conservative() {
+        let _env_guard = lock_env();
         clear_llm_env();
         let dir = tempfile::tempdir().unwrap();
         write_ollama_config(&dir);
@@ -724,6 +734,7 @@ mod tests {
 
     #[test]
     fn auto_mode_parses_workspace_config() {
+        let _env_guard = lock_env();
         clear_llm_env();
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".crow")).unwrap();
@@ -761,6 +772,7 @@ mod tests {
 
     #[test]
     fn test_custom_provider_fails_without_url_and_model() {
+        let _env_guard = lock_env();
         clear_llm_env();
         let dir = tempfile::tempdir().unwrap();
 

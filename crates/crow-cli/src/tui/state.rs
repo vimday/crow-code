@@ -49,6 +49,8 @@ pub struct AutoRunState {
     pub run_id: Option<String>,
     pub prompt: Option<String>,
     pub active_phase: Option<String>,
+    pub total_agents: usize,
+    pub completed_agents: usize,
     pub agents: Vec<AgentHudEntry>,
     pub last_summary: Option<String>,
 }
@@ -58,6 +60,7 @@ impl AutoRunState {
         if self.run_id.as_deref() != Some(run_id) {
             self.run_id = Some(run_id.to_string());
             self.agents.clear();
+            self.completed_agents = 0;
         }
         if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == agent_id) {
             agent.name = name;
@@ -74,6 +77,44 @@ impl AutoRunState {
             success: None,
         });
         self.agents.truncate(8);
+    }
+
+    fn mark_phase(&mut self, run_id: &str, phase: String) {
+        if self.run_id.as_deref() != Some(run_id) {
+            self.run_id = Some(run_id.to_string());
+            self.agents.clear();
+            self.completed_agents = 0;
+        }
+        self.active_phase = Some(phase.clone());
+        for agent in &mut self.agents {
+            if !agent.done {
+                agent.phase = phase.clone();
+            }
+        }
+    }
+
+    fn mark_agent_completed(&mut self, run_id: &str, agent_id: &str, success: bool) {
+        if self.run_id.as_deref() != Some(run_id) {
+            self.run_id = Some(run_id.to_string());
+        }
+        if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == agent_id) {
+            if !agent.done {
+                self.completed_agents = self.completed_agents.saturating_add(1);
+            }
+            agent.done = true;
+            agent.success = Some(success);
+        }
+    }
+
+    fn finish_run(&mut self, run_id: &str, summary: String, success: bool) {
+        self.run_id = Some(run_id.to_string());
+        self.last_summary = Some(summary);
+        self.active_phase = if success {
+            None
+        } else {
+            Some(String::from("Stopped"))
+        };
+        self.completed_agents = self.agents.iter().filter(|agent| agent.done).count();
     }
 }
 
@@ -431,7 +472,9 @@ impl AppState {
                 self.auto_run = AutoRunState {
                     run_id: Some(run_id.clone()),
                     prompt: Some(prompt.clone()),
-                    active_phase: None,
+                    active_phase: Some(String::from("Preparing")),
+                    total_agents: *agent_count,
+                    completed_agents: 0,
                     agents: Vec::with_capacity(*agent_count),
                     last_summary: None,
                 };
@@ -439,12 +482,7 @@ impl AppState {
             }
             OrchestrationEvent::PhaseStarted { run_id, phase } => {
                 self.auto_run.run_id = Some(run_id.clone());
-                self.auto_run.active_phase = Some(phase.clone());
-                for agent in &mut self.auto_run.agents {
-                    if !agent.done {
-                        agent.phase = phase.clone();
-                    }
-                }
+                self.auto_run.mark_phase(run_id, phase.clone());
                 self.active_action = Some(format!("Auto phase: {phase}"));
             }
             OrchestrationEvent::AgentStarted {
@@ -477,23 +515,15 @@ impl AppState {
                 success,
             } => {
                 self.auto_run.run_id = Some(run_id.clone());
-                if let Some(agent) = self
-                    .auto_run
-                    .agents
-                    .iter_mut()
-                    .find(|agent| agent.id == *agent_id)
-                {
-                    agent.done = true;
-                    agent.success = Some(*success);
-                }
+                self.auto_run
+                    .mark_agent_completed(run_id, agent_id, *success);
             }
             OrchestrationEvent::AutoCompleted {
                 run_id,
                 success,
                 summary,
             } => {
-                self.auto_run.run_id = Some(run_id.clone());
-                self.auto_run.last_summary = Some(summary.clone());
+                self.auto_run.finish_run(run_id, summary.clone(), *success);
                 self.active_action = None;
                 if *success {
                     self.push_log(format!("Auto mode complete: {summary}"));

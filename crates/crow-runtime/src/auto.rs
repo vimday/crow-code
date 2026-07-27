@@ -75,6 +75,7 @@ pub struct AutoAgentSpec {
 pub struct AutoPlan {
     pub user_prompt: String,
     pub agents: Vec<AutoAgentSpec>,
+    pub phase_order: Vec<AutoPhaseKind>,
 }
 
 pub fn build_auto_plan(prompt: &str, cfg: &AutoRunConfig) -> AutoPlan {
@@ -128,7 +129,7 @@ pub fn build_auto_plan(prompt: &str, cfg: &AutoRunConfig) -> AutoPlan {
 
     match cfg.strategy {
         AutoStrategy::Fast => {
-            agents.retain(|a| matches!(a.phase, AutoPhaseKind::Execute | AutoPhaseKind::Verify))
+            agents.retain(|a| matches!(a.phase, AutoPhaseKind::Execute | AutoPhaseKind::Verify));
         }
         AutoStrategy::Balanced => {}
         AutoStrategy::Thorough => {
@@ -149,9 +150,23 @@ pub fn build_auto_plan(prompt: &str, cfg: &AutoRunConfig) -> AutoPlan {
 
     agents.truncate(cfg.max_parallel_agents.max(1));
 
+    let mut phase_order = Vec::new();
+    for phase in [
+        AutoPhaseKind::Explore,
+        AutoPhaseKind::Plan,
+        AutoPhaseKind::Execute,
+        AutoPhaseKind::Review,
+        AutoPhaseKind::Verify,
+    ] {
+        if agents.iter().any(|agent| agent.phase == phase) {
+            phase_order.push(phase);
+        }
+    }
+
     AutoPlan {
         user_prompt: prompt.to_string(),
         agents,
+        phase_order,
     }
 }
 
@@ -167,6 +182,15 @@ mod tests {
         assert!(phases.contains(&AutoPhaseKind::Plan));
         assert!(phases.contains(&AutoPhaseKind::Execute));
         assert!(phases.contains(&AutoPhaseKind::Review));
+        assert_eq!(
+            plan.phase_order,
+            vec![
+                AutoPhaseKind::Explore,
+                AutoPhaseKind::Plan,
+                AutoPhaseKind::Execute,
+                AutoPhaseKind::Review
+            ]
+        );
     }
 
     #[test]
