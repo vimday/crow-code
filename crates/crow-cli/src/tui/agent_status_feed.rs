@@ -1,5 +1,6 @@
 use ratatui::style::Stylize;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::tui::state::{AgentHudEntry, AutoRunState};
 
@@ -17,6 +18,36 @@ pub fn bounded_preview(text: &str) -> String {
         .collect::<String>();
     out.push('…');
     out
+}
+
+fn truncate_cells(text: &str, max_width: u16) -> String {
+    let max_width = max_width as usize;
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width >= max_width {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out.push('…');
+    out
+}
+
+fn line_clamped(text: impl Into<String>, max_width: u16) -> Line<'static> {
+    Line::from(truncate_cells(&text.into(), max_width))
 }
 
 pub fn format_agent_summary(auto: &AutoRunState) -> String {
@@ -84,6 +115,84 @@ pub fn render_agent_lines(auto: &AutoRunState) -> Vec<Line<'static>> {
     lines
 }
 
+pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static>> {
+    let width = width.max(8);
+    let Some(run_id) = auto.run_id.as_deref() else {
+        return vec![
+            line_clamped("AUTO RUN", width),
+            line_clamped("  idle", width),
+        ];
+    };
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::from("AUTO RUN").bold(),
+        Span::from(format!(
+            " · {}",
+            truncate_cells(run_id, width.saturating_sub(11))
+        ))
+        .dim(),
+    ]));
+
+    if let Some(prompt) = auto.prompt.as_deref() {
+        lines.push(line_clamped(format!("  task  {}", bounded_preview(prompt)), width).dim());
+    }
+    if let Some(phase) = auto.active_phase.as_deref() {
+        lines.push(line_clamped(format!("  phase {}", phase), width));
+    }
+    if auto.total_agents > 0 {
+        lines.push(line_clamped(
+            format!(
+                "  {}/{} done · {} run · {} fail",
+                auto.completed_agents, auto.total_agents, auto.running_agents, auto.failed_agents
+            ),
+            width,
+        ));
+    }
+
+    if !auto.agents.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(line_clamped("AGENTS", width).bold());
+        for agent in auto.agents.iter().take(MAX_AGENT_LINES) {
+            let glyph = match agent.success {
+                Some(true) => "✓",
+                Some(false) => "✗",
+                None if agent.status == "Running" => "●",
+                None => "•",
+            };
+            lines.push(line_clamped(
+                format!("  {glyph} {} [{}] {}", agent.name, agent.role, agent.status),
+                width,
+            ));
+            if let Some(preview) = agent.preview.as_deref() {
+                lines
+                    .push(line_clamped(format!("    └ {}", bounded_preview(preview)), width).dim());
+            }
+        }
+    }
+
+    if !auto.recent_artifacts.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(line_clamped("ARTIFACTS", width).bold());
+        for artifact in auto.recent_artifacts.iter().rev().take(3) {
+            let compact = bounded_preview(artifact);
+            let compact = compact
+                .split_once(':')
+                .map(|(_, tail)| tail.trim())
+                .unwrap_or(compact.as_str());
+            lines.push(line_clamped(format!("  artifact {}", compact), width));
+        }
+    }
+
+    if let Some(summary) = auto.last_summary.as_deref() {
+        lines.push(Line::from(""));
+        lines.push(line_clamped("SUMMARY", width).bold());
+        lines.push(line_clamped(format!("  {}", bounded_preview(summary)), width).dim());
+    }
+
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,25 +214,77 @@ mod tests {
     }
 
     #[test]
-    fn summary_includes_progress_and_last_summary() {
+    fn cockpit_lines_include_run_progress_agents_and_artifacts() {
         let auto = AutoRunState {
-            run_id: Some("auto-1".into()),
-            prompt: Some("ship it".into()),
-            active_phase: Some("Review".into()),
-            total_agents: 3,
+            run_id: Some("auto-42".into()),
+            prompt: Some("redesign the tui into a cockpit".into()),
+            active_phase: Some("Synthesis".into()),
+            total_agents: 4,
             completed_agents: 2,
+            running_agents: 1,
+            failed_agents: 1,
+            cancelled_agents: 0,
+            agents: vec![AgentHudEntry {
+                id: "agent-a".into(),
+                name: "planner".into(),
+                role: "architect".into(),
+                phase: "Synthesis".into(),
+                status: "Running".into(),
+                preview: Some("mapping Codex chatwidget and multi-agent UX into Crow".into()),
+                done: false,
+                success: None,
+            }],
+            recent_artifacts: vec!["Design: cockpit frame ready".into()],
+            last_summary: Some("auto run completed with one verifier failure".into()),
+        };
+
+        let lines = render_cockpit_lines(&auto, 36);
+        let rendered = lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("AUTO RUN"));
+        assert!(rendered.contains("auto-42"));
+        assert!(rendered.contains("2/4"));
+        assert!(rendered.contains("planner"));
+        assert!(rendered.contains("artifact"));
+        assert!(rendered.contains("cockpit frame ready"));
+    }
+
+    #[test]
+    fn cockpit_lines_stay_within_requested_width() {
+        let auto = AutoRunState {
+            run_id: Some("auto-wide".into()),
+            prompt: Some("x".repeat(200)),
+            active_phase: Some("VeryLongPhaseNameThatShouldBeTrimmed".into()),
+            total_agents: 1,
+            completed_agents: 0,
             running_agents: 1,
             failed_agents: 0,
             cancelled_agents: 0,
-            agents: Vec::new(),
-            recent_artifacts: vec!["Review: no blockers".into()],
-            last_summary: Some("reviewing final evidence".into()),
+            agents: vec![AgentHudEntry {
+                id: "agent-long".into(),
+                name: "extremely-long-agent-name".into(),
+                role: "very-long-role".into(),
+                phase: "VeryLongPhaseNameThatShouldBeTrimmed".into(),
+                status: "Running".into(),
+                preview: Some("preview ".repeat(80)),
+                done: false,
+                success: None,
+            }],
+            recent_artifacts: vec!["artifact ".repeat(80)],
+            last_summary: None,
         };
 
-        let summary = format_agent_summary(&auto);
-        assert!(summary.contains("Phase: Review"));
-        assert!(summary.contains("Progress: 2/3 complete · 1 running · 0 failed"));
-        assert!(summary.contains("Latest artifact: Review: no blockers"));
-        assert!(summary.contains("Summary: reviewing final evidence"));
+        for line in render_cockpit_lines(&auto, 24) {
+            assert!(line.width() <= 24, "line exceeded width: {line:?}");
+        }
     }
 }
