@@ -6,6 +6,8 @@ use crow_runtime::cancel::CancellationToken;
 use crow_runtime::context::ConversationManager;
 use crow_runtime::event::{EngineEvent, OrchestrationEvent};
 use crow_runtime::session::{Session, SessionStore};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
@@ -15,6 +17,65 @@ fn now_micros() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros()
+}
+
+struct NativeAutoNodeExecutor {
+    runtime: Arc<SessionRuntime>,
+    workspace: std::path::PathBuf,
+    cancel_token: CancellationToken,
+}
+
+impl crow_runtime::auto::AutoNodeExecutor for NativeAutoNodeExecutor {
+    fn execute_node<'a>(
+        &'a mut self,
+        request: crow_runtime::auto::AutoNodeExecutionRequest,
+        observer: &'a mut dyn crow_runtime::event::EventHandler,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = anyhow::Result<crow_runtime::auto::AgentArtifactBundle>>
+                + Send
+                + 'a,
+        >,
+    > {
+        let runtime = Arc::clone(&self.runtime);
+        let workspace = self.workspace.clone();
+        let cancel_token = self.cancel_token.runtime_token();
+        Box::pin(async move {
+            let role = crow_runtime::role::AgentRole::builtin(&request.role.to_lowercase());
+            let worker = crow_runtime::subagent::SubagentWorker::new(
+                role,
+                (*runtime.compiler).clone(),
+                runtime.task_registry.clone(),
+                Arc::clone(&runtime.tool_registry),
+                Arc::clone(&runtime.permissions),
+            )
+            .with_parent_cancel_token(cancel_token);
+
+            let subagent_request = crow_runtime::subagent::SubagentExecutionRequest {
+                node_id: request.node_id,
+                phase: request.phase,
+                task: request.task,
+                focus_paths: request.focus_paths,
+                rationale: format!(
+                    "Auto run {run_id}; node {agent_name}; role {role}",
+                    run_id = request.run_id,
+                    agent_name = request.agent_name,
+                    role = request.role
+                ),
+                handoff_context: request.handoff_context,
+                system_messages: request.system_messages,
+            };
+
+            worker
+                .execute_for_artifact(
+                    subagent_request,
+                    &workspace,
+                    Some(runtime.mcp_manager.as_ref()),
+                    observer,
+                )
+                .await
+        })
+    }
 }
 
 /// Represents the deterministic state of an agent Turn lifecycle.
@@ -274,32 +335,26 @@ impl ThreadManager {
                 workspace_root: cfg_clone.workspace.clone(),
             };
 
-            let outcome = coordinator.run(request, &mut observer).await;
-            let mut success =
+            let mut executor = NativeAutoNodeExecutor {
+                runtime: Arc::clone(&rt_clone),
+                workspace: request.workspace_root.clone(),
+                cancel_token: token.clone(),
+            };
+            let outcome = coordinator
+                .run_with_executor(request, &mut observer, &mut executor)
+                .await;
+            let success =
                 outcome.as_ref().is_ok_and(|outcome| outcome.success) && !token.is_cancelled();
-
-            if success {
-                let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
-                    "Auto orchestration prepared. Running primary implementation turn…".into(),
-                )));
-                let mut local_msgs = msgs_clone.lock().await.clone();
-                let result = rt_clone
-                    .execute_native_turn(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
-                    .await;
-                success = result.is_ok() && !token.is_cancelled();
-                if success {
-                    *msgs_clone.lock().await = local_msgs;
-                }
-                let _ = ui_tx.send(EngineEvent::TurnComplete(success, None));
-            } else {
-                let _ = ui_tx.send(EngineEvent::TurnComplete(false, None));
-            }
+            let _ = ui_tx.send(EngineEvent::TurnComplete(success, None));
 
             let summary = match outcome {
                 Ok(outcome) if success => outcome.summary,
                 Ok(_) => "auto run stopped before completion".to_string(),
                 Err(err) => format!("auto run failed: {err}"),
             };
+            if !token.is_cancelled() {
+                msgs_clone.lock().await.push_assistant(summary.clone());
+            }
             let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Orchestration(
                 OrchestrationEvent::AutoCompleted {
                     run_id,

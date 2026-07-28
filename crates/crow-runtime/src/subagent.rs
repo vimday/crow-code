@@ -132,6 +132,13 @@ impl SubagentWorker {
         self
     }
 
+    /// Inherit only parent cancellation when the parent is not represented by a TurnContext.
+    #[must_use]
+    pub fn with_parent_cancel_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.parent_cancel = Some(token);
+        self
+    }
+
     pub async fn execute_for_artifact(
         &self,
         request: SubagentExecutionRequest,

@@ -38,6 +38,16 @@ pub struct AgentArtifactBundle {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactRunSummary {
+    pub total_artifacts: usize,
+    pub successful_artifacts: usize,
+    pub failed_artifacts: usize,
+    pub files_read: Vec<String>,
+    pub files_changed: Vec<String>,
+    pub verification_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArtifactStore {
     bundles: Vec<AgentArtifactBundle>,
 }
@@ -80,6 +90,49 @@ impl ArtifactStore {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    pub fn run_summary(&self) -> ArtifactRunSummary {
+        let mut summary = ArtifactRunSummary {
+            total_artifacts: self.bundles.len(),
+            successful_artifacts: self.bundles.iter().filter(|bundle| bundle.success).count(),
+            failed_artifacts: self.bundles.iter().filter(|bundle| !bundle.success).count(),
+            files_read: self
+                .bundles
+                .iter()
+                .flat_map(|bundle| bundle.files_read.iter().cloned())
+                .collect(),
+            files_changed: self
+                .bundles
+                .iter()
+                .flat_map(|bundle| bundle.files_changed.iter().cloned())
+                .collect(),
+            verification_commands: self
+                .bundles
+                .iter()
+                .flat_map(|bundle| bundle.verification_commands.iter().cloned())
+                .collect(),
+        };
+        summary.files_read.sort();
+        summary.files_read.dedup();
+        summary.files_changed.sort();
+        summary.files_changed.dedup();
+        summary.verification_commands.sort();
+        summary.verification_commands.dedup();
+        summary
+    }
+}
+
+pub fn bounded_preview(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    let mut out = compact
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    out.push('…');
+    out
 }
 
 #[cfg(test)]
@@ -114,26 +167,43 @@ mod tests {
     }
 
     #[test]
-    fn renders_handoff_context_with_prior_artifacts() {
+    fn run_summary_deduplicates_artifact_metadata() {
         let mut store = ArtifactStore::default();
         store.push(AgentArtifactBundle {
-            node_id: AutoNodeId("planner-1".into()),
-            phase: AutoPhaseKind::Plan,
-            final_text: "Plan the coordinator first".into(),
-            summaries: vec![ArtifactSummary {
-                kind: ArtifactKind::Plan,
-                title: "Coordinator".into(),
-                preview: "Introduce AutoRunCoordinator".into(),
-            }],
-            files_read: Vec::new(),
-            files_changed: Vec::new(),
-            verification_commands: Vec::new(),
+            node_id: AutoNodeId("verifier-1".into()),
+            phase: AutoPhaseKind::Verify,
+            final_text: "cargo test passed".into(),
+            summaries: Vec::new(),
+            files_read: vec!["Cargo.toml".into(), "Cargo.toml".into()],
+            files_changed: vec!["src/lib.rs".into()],
+            verification_commands: vec!["cargo test".into(), "cargo test".into()],
             success: true,
         });
+        store.push(AgentArtifactBundle {
+            node_id: AutoNodeId("reviewer-1".into()),
+            phase: AutoPhaseKind::Review,
+            final_text: "found gap".into(),
+            summaries: Vec::new(),
+            files_read: vec!["src/lib.rs".into()],
+            files_changed: vec!["src/lib.rs".into()],
+            verification_commands: Vec::new(),
+            success: false,
+        });
 
-        let rendered = store.render_handoff_context();
+        let summary = store.run_summary();
 
-        assert!(rendered.contains("Plan"));
-        assert!(rendered.contains("Introduce AutoRunCoordinator"));
+        assert_eq!(summary.total_artifacts, 2);
+        assert_eq!(summary.successful_artifacts, 1);
+        assert_eq!(summary.failed_artifacts, 1);
+        assert_eq!(summary.files_read, vec!["Cargo.toml", "src/lib.rs"]);
+        assert_eq!(summary.files_changed, vec!["src/lib.rs"]);
+        assert_eq!(summary.verification_commands, vec!["cargo test"]);
+    }
+
+    #[test]
+    fn bounded_preview_compacts_and_truncates_text() {
+        let preview = bounded_preview("alpha\n beta   gamma delta", 13);
+
+        assert_eq!(preview, "alpha beta g…");
     }
 }

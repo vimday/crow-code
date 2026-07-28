@@ -134,8 +134,11 @@ impl InfoBar {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
             let progress = if state.auto_run.total_agents > 0 {
                 format!(
-                    " {}/{}",
-                    state.auto_run.completed_agents, state.auto_run.total_agents
+                    " {}/{} · {} run · {} fail",
+                    state.auto_run.completed_agents,
+                    state.auto_run.total_agents,
+                    state.auto_run.running_agents,
+                    state.auto_run.failed_agents
                 )
             } else {
                 String::new()

@@ -39,6 +39,7 @@ pub struct AgentHudEntry {
     pub name: String,
     pub role: String,
     pub phase: String,
+    pub status: String,
     pub preview: Option<String>,
     pub done: bool,
     pub success: Option<bool>,
@@ -51,17 +52,29 @@ pub struct AutoRunState {
     pub active_phase: Option<String>,
     pub total_agents: usize,
     pub completed_agents: usize,
+    pub running_agents: usize,
+    pub failed_agents: usize,
+    pub cancelled_agents: usize,
     pub agents: Vec<AgentHudEntry>,
+    pub recent_artifacts: Vec<String>,
     pub last_summary: Option<String>,
 }
 
 impl AutoRunState {
-    fn upsert_agent(&mut self, run_id: &str, agent_id: &str, name: String, role: String) {
+    fn reset_for_run(&mut self, run_id: &str) {
         if self.run_id.as_deref() != Some(run_id) {
             self.run_id = Some(run_id.to_string());
             self.agents.clear();
+            self.recent_artifacts.clear();
             self.completed_agents = 0;
+            self.running_agents = 0;
+            self.failed_agents = 0;
+            self.cancelled_agents = 0;
         }
+    }
+
+    fn upsert_agent(&mut self, run_id: &str, agent_id: &str, name: String, role: String) {
+        self.reset_for_run(run_id);
         if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == agent_id) {
             agent.name = name;
             agent.role = role;
@@ -72,6 +85,7 @@ impl AutoRunState {
             name,
             role,
             phase: self.active_phase.clone().unwrap_or_default(),
+            status: String::from("Queued"),
             preview: None,
             done: false,
             success: None,
@@ -80,11 +94,7 @@ impl AutoRunState {
     }
 
     fn mark_phase(&mut self, run_id: &str, phase: String) {
-        if self.run_id.as_deref() != Some(run_id) {
-            self.run_id = Some(run_id.to_string());
-            self.agents.clear();
-            self.completed_agents = 0;
-        }
+        self.reset_for_run(run_id);
         self.active_phase = Some(phase.clone());
         for agent in &mut self.agents {
             if !agent.done {
@@ -93,28 +103,74 @@ impl AutoRunState {
         }
     }
 
-    fn mark_agent_completed(&mut self, run_id: &str, agent_id: &str, success: bool) {
-        if self.run_id.as_deref() != Some(run_id) {
-            self.run_id = Some(run_id.to_string());
-        }
+    fn mark_agent_running(&mut self, run_id: &str, agent_id: &str, phase: String) {
+        self.reset_for_run(run_id);
+        self.upsert_agent(
+            run_id,
+            agent_id,
+            agent_id.to_string(),
+            String::from("agent"),
+        );
         if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == agent_id) {
-            if !agent.done {
-                self.completed_agents = self.completed_agents.saturating_add(1);
-            }
+            agent.phase = phase;
+            agent.status = String::from("Running");
+            agent.done = false;
+            agent.success = None;
+        }
+        self.recount_agents();
+    }
+
+    fn mark_agent_completed(&mut self, run_id: &str, agent_id: &str, success: bool) {
+        self.reset_for_run(run_id);
+        if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == agent_id) {
             agent.done = true;
             agent.success = Some(success);
+            agent.status = if success {
+                String::from("Completed")
+            } else {
+                String::from("Failed")
+            };
+        }
+        self.recount_agents();
+    }
+
+    fn push_artifact_preview(&mut self, title: &str, preview: &str) {
+        self.recent_artifacts
+            .push(format!("{}: {}", title, truncate_preview(preview)));
+        if self.recent_artifacts.len() > 4 {
+            let overflow = self.recent_artifacts.len() - 4;
+            self.recent_artifacts.drain(0..overflow);
         }
     }
 
     fn finish_run(&mut self, run_id: &str, summary: String, success: bool) {
-        self.run_id = Some(run_id.to_string());
+        self.reset_for_run(run_id);
         self.last_summary = Some(summary);
         self.active_phase = if success {
             None
         } else {
             Some(String::from("Stopped"))
         };
+        self.recount_agents();
+    }
+
+    fn recount_agents(&mut self) {
         self.completed_agents = self.agents.iter().filter(|agent| agent.done).count();
+        self.running_agents = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == "Running")
+            .count();
+        self.failed_agents = self
+            .agents
+            .iter()
+            .filter(|agent| agent.success == Some(false))
+            .count();
+        self.cancelled_agents = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == "Cancelled")
+            .count();
     }
 }
 
@@ -475,7 +531,11 @@ impl AppState {
                     active_phase: Some(String::from("Preparing")),
                     total_agents: *agent_count,
                     completed_agents: 0,
+                    running_agents: 0,
+                    failed_agents: 0,
+                    cancelled_agents: 0,
                     agents: Vec::with_capacity(*agent_count),
+                    recent_artifacts: Vec::new(),
                     last_summary: None,
                 };
                 self.active_action = Some(format!("Auto mode running {agent_count} agents…"));
@@ -523,8 +583,11 @@ impl AppState {
                 self.auto_run.total_agents = *node_count;
                 self.active_action = Some(format!("Auto graph ready: {node_count} nodes"));
             }
-            OrchestrationEvent::NodeQueued { run_id, .. } => {
-                self.auto_run.run_id = Some(run_id.clone());
+            OrchestrationEvent::NodeQueued {
+                run_id, node_id, ..
+            } => {
+                self.auto_run
+                    .upsert_agent(run_id, node_id, node_id.clone(), String::from("agent"));
             }
             OrchestrationEvent::NodeStarted {
                 run_id,
@@ -533,7 +596,7 @@ impl AppState {
             } => {
                 self.auto_run.mark_phase(run_id, phase.clone());
                 self.auto_run
-                    .upsert_agent(run_id, node_id, node_id.clone(), phase.clone());
+                    .mark_agent_running(run_id, node_id, phase.clone());
                 self.active_action = Some(format!("Auto phase: {phase}"));
             }
             OrchestrationEvent::ArtifactProduced {
@@ -553,6 +616,7 @@ impl AppState {
                     self.auto_run
                         .upsert_agent(run_id, node_id, node_id.clone(), phase);
                 }
+                self.auto_run.push_artifact_preview(title, preview);
                 if let Some(agent) = self
                     .auto_run
                     .agents
@@ -645,5 +709,37 @@ mod tests {
             explorer.and_then(|agent| agent.preview.as_deref()),
             Some("Files: auto.rs and thread_manager.rs")
         );
+        assert_eq!(state.auto_run.running_agents, 1);
+        assert_eq!(state.auto_run.recent_artifacts.len(), 1);
+    }
+
+    #[test]
+    fn auto_state_tracks_completion_and_failure_counts() {
+        let mut state = AppState::new("test-model".into(), "sandbox".into(), "repo".into());
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::AutoStarted {
+            run_id: "auto-1".into(),
+            prompt: "refactor".into(),
+            agent_count: 2,
+        });
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::NodeStarted {
+            run_id: "auto-1".into(),
+            node_id: "executor-1".into(),
+            phase: "Execute".into(),
+        });
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::NodeFailed {
+            run_id: "auto-1".into(),
+            node_id: "executor-1".into(),
+            error: "tests failed".into(),
+        });
+
+        assert_eq!(state.auto_run.running_agents, 0);
+        assert_eq!(state.auto_run.completed_agents, 1);
+        assert_eq!(state.auto_run.failed_agents, 1);
+        let executor = state
+            .auto_run
+            .agents
+            .iter()
+            .find(|agent| agent.id == "executor-1");
+        assert_eq!(executor.map(|agent| agent.status.as_str()), Some("Failed"));
     }
 }

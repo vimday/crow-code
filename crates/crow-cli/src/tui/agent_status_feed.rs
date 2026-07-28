@@ -29,21 +29,21 @@ pub fn format_agent_summary(auto: &AutoRunState) -> String {
     }
     if auto.total_agents > 0 {
         lines.push(format!(
-            "Progress: {}/{} agents complete",
-            auto.completed_agents, auto.total_agents
+            "Progress: {}/{} complete · {} running · {} failed",
+            auto.completed_agents, auto.total_agents, auto.running_agents, auto.failed_agents
         ));
+    }
+    if let Some(latest) = auto.recent_artifacts.last() {
+        lines.push(format!("Latest artifact: {}", bounded_preview(latest)));
     }
     if let Some(summary) = auto.last_summary.as_deref() {
         lines.push(format!("Summary: {}", bounded_preview(summary)));
     }
     for agent in auto.agents.iter().take(MAX_AGENT_LINES) {
-        let status = match agent.success {
-            Some(true) => "done",
-            Some(false) => "failed",
-            None if agent.done => "done",
-            None => "running",
-        };
-        lines.push(format!("- {} [{}] {status}", agent.name, agent.role));
+        lines.push(format!(
+            "- {} [{}] {}",
+            agent.name, agent.role, agent.status
+        ));
         if let Some(preview) = agent.preview.as_deref() {
             lines.push(format!("  └ {}", bounded_preview(preview)));
         }
@@ -64,6 +64,7 @@ pub fn render_agent_lines(auto: &AutoRunState) -> Vec<Line<'static>> {
     for AgentHudEntry {
         name,
         role,
+        status,
         preview,
         success,
         ..
@@ -72,9 +73,10 @@ pub fn render_agent_lines(auto: &AutoRunState) -> Vec<Line<'static>> {
         let glyph = match success {
             Some(true) => "✓",
             Some(false) => "✗",
+            None if status == "Running" => "●",
             None => "•",
         };
-        lines.push(Line::from(format!("  {glyph} {name} [{role}]")));
+        lines.push(Line::from(format!("  {glyph} {name} [{role}] {status}")));
         if let Some(preview) = preview {
             lines.push(Line::from(format!("    └ {}", bounded_preview(preview))).dim());
         }
@@ -110,13 +112,18 @@ mod tests {
             active_phase: Some("Review".into()),
             total_agents: 3,
             completed_agents: 2,
+            running_agents: 1,
+            failed_agents: 0,
+            cancelled_agents: 0,
             agents: Vec::new(),
+            recent_artifacts: vec!["Review: no blockers".into()],
             last_summary: Some("reviewing final evidence".into()),
         };
 
         let summary = format_agent_summary(&auto);
         assert!(summary.contains("Phase: Review"));
-        assert!(summary.contains("Progress: 2/3 agents complete"));
+        assert!(summary.contains("Progress: 2/3 complete · 1 running · 0 failed"));
+        assert!(summary.contains("Latest artifact: Review: no blockers"));
         assert!(summary.contains("Summary: reviewing final evidence"));
     }
 }

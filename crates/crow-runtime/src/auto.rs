@@ -9,13 +9,18 @@ use crate::registry::AgentTaskKind;
 
 pub mod artifact;
 pub mod coordinator;
+pub mod execution;
 pub mod graph;
 pub mod prompt;
 
 pub use artifact::{
-    AgentArtifactBundle, ArtifactKind, ArtifactRef, ArtifactStore, ArtifactSummary,
+    AgentArtifactBundle, ArtifactKind, ArtifactRef, ArtifactRunSummary, ArtifactStore,
+    ArtifactSummary,
 };
 pub use coordinator::{AutoRunCoordinator, AutoRunOutcome, AutoRunRequest};
+pub use execution::{
+    AutoExecutionGuard, AutoExecutionLimiter, AutoNodeExecutionRequest, AutoNodeExecutor,
+};
 pub use graph::{
     build_auto_graph, AutoFailurePolicy, AutoGraph, AutoNode, AutoNodeId, AutoNodeState,
 };
