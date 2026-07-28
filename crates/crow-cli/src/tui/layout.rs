@@ -62,7 +62,7 @@ mod tests {
         let frame = compute_frame_layout(Rect::new(0, 0, 120, 32));
 
         assert_eq!(frame.mode, FrameMode::Standard);
-        assert_eq!(frame.cockpit.expect("cockpit visible").width, 24);
+        assert_eq!(frame.cockpit.map(|area| area.width), Some(24));
         assert_eq!(frame.main.width, 96);
     }
 
@@ -71,7 +71,7 @@ mod tests {
         let frame = compute_frame_layout(Rect::new(0, 0, 180, 40));
 
         assert_eq!(frame.mode, FrameMode::Cockpit);
-        assert_eq!(frame.cockpit.expect("cockpit visible").width, 36);
+        assert_eq!(frame.cockpit.map(|area| area.width), Some(36));
         assert_eq!(frame.main.width, 144);
     }
 }

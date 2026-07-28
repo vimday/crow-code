@@ -138,7 +138,7 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
         lines.push(line_clamped(format!("  task  {}", bounded_preview(prompt)), width).dim());
     }
     if let Some(phase) = auto.active_phase.as_deref() {
-        lines.push(line_clamped(format!("  phase {}", phase), width));
+        lines.push(line_clamped(format!("  phase {phase}"), width));
     }
     if auto.total_agents > 0 {
         lines.push(line_clamped(
@@ -180,7 +180,7 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
                 .split_once(':')
                 .map(|(_, tail)| tail.trim())
                 .unwrap_or(compact.as_str());
-            lines.push(line_clamped(format!("  artifact {}", compact), width));
+            lines.push(line_clamped(format!("  artifact {compact}"), width));
         }
     }
 
