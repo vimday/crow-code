@@ -19,6 +19,9 @@
 //! `delegation_count` check. The 120s `tokio::time::timeout` wrapping
 //! the entire execution prevents stalled LLM calls from hanging forever.
 
+use crate::auto::artifact::{AgentArtifactBundle, ArtifactKind, ArtifactSummary};
+use crate::auto::graph::AutoNodeId;
+use crate::auto::AutoPhaseKind;
 use crate::context::ConversationManager;
 use crate::event::{AgentEvent, EventHandler};
 use crate::role::AgentRole;
@@ -41,6 +44,56 @@ pub struct SubagentWorker {
     parent_provider: String,
     /// Parent cancellation token — derived child token propagates ESC to subagents.
     parent_cancel: Option<tokio_util::sync::CancellationToken>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubagentExecutionRequest {
+    pub node_id: AutoNodeId,
+    pub phase: AutoPhaseKind,
+    pub task: String,
+    pub focus_paths: Vec<crow_patch::WorkspacePath>,
+    pub rationale: String,
+    pub handoff_context: String,
+    pub system_messages: Vec<crow_brain::ChatMessage>,
+}
+
+fn artifact_kind_for_phase(phase: AutoPhaseKind) -> ArtifactKind {
+    match phase {
+        AutoPhaseKind::Explore => ArtifactKind::Exploration,
+        AutoPhaseKind::Plan => ArtifactKind::Plan,
+        AutoPhaseKind::Execute => ArtifactKind::Implementation,
+        AutoPhaseKind::Review => ArtifactKind::Review,
+        AutoPhaseKind::Verify => ArtifactKind::Verification,
+    }
+}
+
+fn artifact_from_loop_result(
+    node_id: AutoNodeId,
+    phase: AutoPhaseKind,
+    result: crate::agent_loop::AgentLoopResult,
+    success: bool,
+) -> AgentArtifactBundle {
+    let preview = result
+        .final_text
+        .split_whitespace()
+        .take(40)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    AgentArtifactBundle {
+        node_id,
+        phase,
+        final_text: result.final_text,
+        summaries: vec![ArtifactSummary {
+            kind: artifact_kind_for_phase(phase),
+            title: phase.as_str().to_string(),
+            preview,
+        }],
+        files_read: Vec::new(),
+        files_changed: Vec::new(),
+        verification_commands: Vec::new(),
+        success,
+    }
 }
 
 impl SubagentWorker {
@@ -77,6 +130,41 @@ impl SubagentWorker {
         self.parent_provider = ctx.provider.clone();
         self.parent_cancel = Some(ctx.child_cancel_token());
         self
+    }
+
+    pub async fn execute_for_artifact(
+        &self,
+        request: SubagentExecutionRequest,
+        workspace_root: &Path,
+        mcp_manager: Option<&crate::mcp::McpManager>,
+        parent_observer: &mut dyn EventHandler,
+    ) -> anyhow::Result<AgentArtifactBundle> {
+        let handoff_rationale = format!(
+            "{}\n\nPrior auto artifacts:\n{}",
+            request.rationale, request.handoff_context
+        );
+        let node_id = request.node_id;
+        let phase = request.phase;
+
+        let plan = self
+            .execute(
+                &request.task,
+                &request.focus_paths,
+                &handoff_rationale,
+                request.system_messages,
+                workspace_root,
+                mcp_manager,
+                parent_observer,
+            )
+            .await?;
+
+        let result = crate::agent_loop::AgentLoopResult {
+            final_text: plan.rationale,
+            tool_call_count: 0,
+            timing_snapshot: None,
+            metrics: crate::agent_loop::TurnMetrics::default(),
+        };
+        Ok(artifact_from_loop_result(node_id, phase, result, true))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -382,5 +470,37 @@ impl EventHandler for SubagentEventHandler<'_> {
 
     fn is_cancelled(&self) -> bool {
         self.parent.is_cancelled()
+    }
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+    use crate::agent_loop::{AgentLoopResult, TurnMetrics};
+    use crate::auto::artifact::ArtifactKind;
+    use crate::auto::graph::AutoNodeId;
+    use crate::auto::AutoPhaseKind;
+
+    #[test]
+    fn converts_agent_loop_result_to_artifact_bundle() {
+        let result = AgentLoopResult {
+            final_text: "Explored auto orchestration files".into(),
+            tool_call_count: 3,
+            timing_snapshot: None,
+            metrics: TurnMetrics::default(),
+        };
+
+        let bundle = artifact_from_loop_result(
+            AutoNodeId("explorer-1".into()),
+            AutoPhaseKind::Explore,
+            result,
+            true,
+        );
+
+        assert_eq!(bundle.node_id, AutoNodeId("explorer-1".into()));
+        assert_eq!(bundle.phase, AutoPhaseKind::Explore);
+        assert!(bundle.success);
+        assert_eq!(bundle.summaries[0].kind, ArtifactKind::Exploration);
+        assert!(bundle.summaries[0].preview.contains("Explored auto"));
     }
 }

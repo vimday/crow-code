@@ -257,98 +257,31 @@ impl ThreadManager {
             max_agent_depth: cfg_clone.auto_mode.max_agent_depth,
             strategy,
         };
-        let plan = crow_runtime::auto::build_auto_plan(&prompt, &auto_cfg);
         let run_id = format!("auto-{:08x}", now_micros() as u32);
 
         tokio::spawn(async move {
-            let send_orchestration = |event| {
-                let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Orchestration(event)));
-            };
-            send_orchestration(OrchestrationEvent::AutoStarted {
+            let mut observer = crow_runtime::event::ChannelEventHandler::with_cancellation(
+                ui_tx.clone(),
+                token.clone(),
+            );
+            let coordinator =
+                crow_runtime::auto::AutoRunCoordinator::new(auto_cfg.max_parallel_agents);
+            let request = crow_runtime::auto::AutoRunRequest {
                 run_id: run_id.clone(),
                 prompt: prompt.clone(),
-                agent_count: plan.agents.len(),
-            });
+                config: auto_cfg,
+                system_messages: msgs_clone.lock().await.as_messages(),
+                workspace_root: cfg_clone.workspace.clone(),
+            };
 
-            let mut success = true;
-            for spec in plan.agents {
-                if token.is_cancelled() {
-                    success = false;
-                    break;
-                }
-                send_orchestration(OrchestrationEvent::PhaseStarted {
-                    run_id: run_id.clone(),
-                    phase: spec.phase.as_str().to_string(),
-                });
+            let outcome = coordinator.run(request, &mut observer).await;
+            let mut success =
+                outcome.as_ref().is_ok_and(|outcome| outcome.success) && !token.is_cancelled();
 
-                let reservation = match rt_clone.task_registry.reserve(
-                    spec.name.clone(),
-                    spec.prompt.clone(),
-                    spec.phase.task_kind(),
-                ) {
-                    Ok(reservation) => reservation,
-                    Err(e) => {
-                        success = false;
-                        send_orchestration(OrchestrationEvent::AutoCompleted {
-                            run_id: run_id.clone(),
-                            success: false,
-                            summary: format!("Could not reserve agent slot: {e:?}"),
-                        });
-                        break;
-                    }
-                };
-                let agent_id = reservation.id().to_string();
-                send_orchestration(OrchestrationEvent::AgentStarted {
-                    run_id: run_id.clone(),
-                    agent_id: agent_id.clone(),
-                    name: spec.name.clone(),
-                    role: spec.role.clone(),
-                });
-                let _ = rt_clone.task_registry.set_running(&agent_id);
-                let _ = rt_clone
-                    .task_registry
-                    .set_preview(&agent_id, spec.prompt.clone());
-                send_orchestration(OrchestrationEvent::AgentPreview {
-                    run_id: run_id.clone(),
-                    agent_id: agent_id.clone(),
-                    preview: spec.prompt.clone(),
-                });
-
-                // First slice wires deterministic lifecycle and status; execution remains
-                // in the primary turn path until subagent scheduling is fully parallelized.
-                tokio::task::yield_now().await;
-                if spec.read_only {
-                    let _ = rt_clone.task_registry.set_completed(
-                        &agent_id,
-                        Some("Prepared read-only orchestration context.".to_string()),
-                    );
-                } else {
-                    let _ = rt_clone.task_registry.set_completed(
-                        &agent_id,
-                        Some("Primary execution is delegated to normal turn handling.".to_string()),
-                    );
-                }
-                let _ = reservation.commit();
-                send_orchestration(OrchestrationEvent::AgentCompleted {
-                    run_id: run_id.clone(),
-                    agent_id,
-                    success: true,
-                });
-            }
-
-            if token.is_cancelled() {
-                success = false;
-            }
             if success {
                 let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Log(
                     "Auto orchestration prepared. Running primary implementation turn…".into(),
                 )));
-                // Execute the requested task through the proven native turn path after
-                // surfacing the orchestration lifecycle to the TUI.
-                let mut observer = crow_runtime::event::ChannelEventHandler::with_cancellation(
-                    ui_tx.clone(),
-                    token.clone(),
-                );
                 let mut local_msgs = msgs_clone.lock().await.clone();
                 let result = rt_clone
                     .execute_native_turn(&cfg_clone, &prompt, &mut local_msgs, &mut observer)
@@ -362,15 +295,18 @@ impl ThreadManager {
                 let _ = ui_tx.send(EngineEvent::TurnComplete(false, None));
             }
 
-            send_orchestration(OrchestrationEvent::AutoCompleted {
-                run_id,
-                success,
-                summary: if success {
-                    "auto run completed".to_string()
-                } else {
-                    "auto run stopped before completion".to_string()
+            let summary = match outcome {
+                Ok(outcome) if success => outcome.summary,
+                Ok(_) => "auto run stopped before completion".to_string(),
+                Err(err) => format!("auto run failed: {err}"),
+            };
+            let _ = ui_tx.send(EngineEvent::AgentEvent(AgentEvent::Orchestration(
+                OrchestrationEvent::AutoCompleted {
+                    run_id,
+                    success,
+                    summary,
                 },
-            });
+            )));
             let mut state = thread_state.lock().await;
             state.status = if success {
                 TurnStatus::Completed(None)

@@ -7,6 +7,19 @@
 
 use crate::registry::AgentTaskKind;
 
+pub mod artifact;
+pub mod coordinator;
+pub mod graph;
+pub mod prompt;
+
+pub use artifact::{
+    AgentArtifactBundle, ArtifactKind, ArtifactRef, ArtifactStore, ArtifactSummary,
+};
+pub use coordinator::{AutoRunCoordinator, AutoRunOutcome, AutoRunRequest};
+pub use graph::{
+    build_auto_graph, AutoFailurePolicy, AutoGraph, AutoNode, AutoNodeId, AutoNodeState,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoStrategy {
     Fast,
@@ -148,8 +161,6 @@ pub fn build_auto_plan(prompt: &str, cfg: &AutoRunConfig) -> AutoPlan {
         }
     }
 
-    agents.truncate(cfg.max_parallel_agents.max(1));
-
     let mut phase_order = Vec::new();
     for phase in [
         AutoPhaseKind::Explore,
@@ -188,9 +199,55 @@ mod tests {
                 AutoPhaseKind::Explore,
                 AutoPhaseKind::Plan,
                 AutoPhaseKind::Execute,
-                AutoPhaseKind::Review
+                AutoPhaseKind::Review,
+                AutoPhaseKind::Verify
             ]
         );
+    }
+
+    #[test]
+    fn balanced_plan_keeps_verify_even_when_parallel_limit_is_four() {
+        let cfg = AutoRunConfig {
+            max_parallel_agents: 4,
+            max_agent_depth: 2,
+            strategy: AutoStrategy::Balanced,
+        };
+
+        let plan = build_auto_plan("refactor tui", &cfg);
+        let phases: Vec<_> = plan.agents.iter().map(|a| a.phase).collect();
+
+        assert!(phases.contains(&AutoPhaseKind::Explore));
+        assert!(phases.contains(&AutoPhaseKind::Plan));
+        assert!(phases.contains(&AutoPhaseKind::Execute));
+        assert!(phases.contains(&AutoPhaseKind::Review));
+        assert!(phases.contains(&AutoPhaseKind::Verify));
+        assert_eq!(
+            plan.phase_order,
+            vec![
+                AutoPhaseKind::Explore,
+                AutoPhaseKind::Plan,
+                AutoPhaseKind::Execute,
+                AutoPhaseKind::Review,
+                AutoPhaseKind::Verify,
+            ]
+        );
+    }
+
+    #[test]
+    fn max_parallel_agents_does_not_remove_required_plan_nodes() {
+        let cfg = AutoRunConfig {
+            max_parallel_agents: 1,
+            max_agent_depth: 2,
+            strategy: AutoStrategy::Balanced,
+        };
+
+        let plan = build_auto_plan("fix bug", &cfg);
+
+        assert_eq!(plan.agents.len(), 5);
+        assert!(plan
+            .agents
+            .iter()
+            .any(|agent| agent.phase == AutoPhaseKind::Verify));
     }
 
     #[test]

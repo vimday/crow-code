@@ -518,6 +518,77 @@ impl AppState {
                 self.auto_run
                     .mark_agent_completed(run_id, agent_id, *success);
             }
+            OrchestrationEvent::GraphReady { run_id, node_count } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                self.auto_run.total_agents = *node_count;
+                self.active_action = Some(format!("Auto graph ready: {node_count} nodes"));
+            }
+            OrchestrationEvent::NodeQueued { run_id, .. } => {
+                self.auto_run.run_id = Some(run_id.clone());
+            }
+            OrchestrationEvent::NodeStarted {
+                run_id,
+                node_id,
+                phase,
+            } => {
+                self.auto_run.mark_phase(run_id, phase.clone());
+                self.auto_run
+                    .upsert_agent(run_id, node_id, node_id.clone(), phase.clone());
+                self.active_action = Some(format!("Auto phase: {phase}"));
+            }
+            OrchestrationEvent::ArtifactProduced {
+                run_id,
+                node_id,
+                title,
+                preview,
+            } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                if !self
+                    .auto_run
+                    .agents
+                    .iter()
+                    .any(|agent| agent.id == *node_id)
+                {
+                    let phase = self.auto_run.active_phase.clone().unwrap_or_default();
+                    self.auto_run
+                        .upsert_agent(run_id, node_id, node_id.clone(), phase);
+                }
+                if let Some(agent) = self
+                    .auto_run
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.id == *node_id)
+                {
+                    agent.preview = Some(truncate_preview(&format!("{title}: {preview}")));
+                }
+            }
+            OrchestrationEvent::NodeCompleted {
+                run_id,
+                node_id,
+                success,
+            } => {
+                self.auto_run.run_id = Some(run_id.clone());
+                self.auto_run
+                    .mark_agent_completed(run_id, node_id, *success);
+            }
+            OrchestrationEvent::NodeFailed {
+                run_id,
+                node_id,
+                error,
+            } => {
+                let phase = self.auto_run.active_phase.clone().unwrap_or_default();
+                self.auto_run
+                    .upsert_agent(run_id, node_id, node_id.clone(), phase);
+                if let Some(agent) = self
+                    .auto_run
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.id == *node_id)
+                {
+                    agent.preview = Some(truncate_preview(error));
+                }
+                self.auto_run.mark_agent_completed(run_id, node_id, false);
+            }
             OrchestrationEvent::AutoCompleted {
                 run_id,
                 success,
@@ -544,21 +615,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn orchestration_events_update_agent_hud() {
+    fn auto_state_tracks_artifact_preview_for_node() {
         let mut state = AppState::new("test-model".into(), "sandbox".into(), "repo".into());
         state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::AutoStarted {
             run_id: "auto-1".into(),
-            prompt: "ship it".into(),
+            prompt: "refactor".into(),
             agent_count: 2,
         });
-        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::AgentStarted {
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::NodeStarted {
             run_id: "auto-1".into(),
-            agent_id: "a1".into(),
-            name: "explorer".into(),
-            role: "explorer".into(),
+            node_id: "explorer-1".into(),
+            phase: "Explore".into(),
         });
-        assert_eq!(state.auto_run.run_id.as_deref(), Some("auto-1"));
-        assert_eq!(state.auto_run.agents.len(), 1);
-        assert_eq!(state.auto_run.agents[0].name, "explorer");
+        state.apply_orchestration_event(
+            &crow_runtime::event::OrchestrationEvent::ArtifactProduced {
+                run_id: "auto-1".into(),
+                node_id: "explorer-1".into(),
+                title: "Files".into(),
+                preview: "auto.rs and thread_manager.rs".into(),
+            },
+        );
+
+        let explorer = state
+            .auto_run
+            .agents
+            .iter()
+            .find(|agent| agent.id == "explorer-1");
+        assert_eq!(
+            explorer.and_then(|agent| agent.preview.as_deref()),
+            Some("Files: auto.rs and thread_manager.rs")
+        );
     }
 }

@@ -104,6 +104,36 @@ pub enum OrchestrationEvent {
         prompt: String,
         agent_count: usize,
     },
+    GraphReady {
+        run_id: String,
+        node_count: usize,
+    },
+    NodeQueued {
+        run_id: String,
+        node_id: String,
+        dependencies: Vec<String>,
+    },
+    NodeStarted {
+        run_id: String,
+        node_id: String,
+        phase: String,
+    },
+    ArtifactProduced {
+        run_id: String,
+        node_id: String,
+        title: String,
+        preview: String,
+    },
+    NodeCompleted {
+        run_id: String,
+        node_id: String,
+        success: bool,
+    },
+    NodeFailed {
+        run_id: String,
+        node_id: String,
+        error: String,
+    },
     PhaseStarted {
         run_id: String,
         phase: String,
