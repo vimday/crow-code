@@ -53,6 +53,7 @@ pub struct AutoRunState {
     pub total_agents: usize,
     pub completed_agents: usize,
     pub running_agents: usize,
+    pub queued_agents: usize,
     pub failed_agents: usize,
     pub cancelled_agents: usize,
     pub agents: Vec<AgentHudEntry>,
@@ -68,6 +69,7 @@ impl AutoRunState {
             self.recent_artifacts.clear();
             self.completed_agents = 0;
             self.running_agents = 0;
+            self.queued_agents = 0;
             self.failed_agents = 0;
             self.cancelled_agents = 0;
         }
@@ -160,6 +162,11 @@ impl AutoRunState {
             .agents
             .iter()
             .filter(|agent| agent.status == "Running")
+            .count();
+        self.queued_agents = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == "Queued")
             .count();
         self.failed_agents = self
             .agents
@@ -532,6 +539,7 @@ impl AppState {
                     total_agents: *agent_count,
                     completed_agents: 0,
                     running_agents: 0,
+                    queued_agents: 0,
                     failed_agents: 0,
                     cancelled_agents: 0,
                     agents: Vec::with_capacity(*agent_count),
@@ -584,10 +592,29 @@ impl AppState {
                 self.active_action = Some(format!("Auto graph ready: {node_count} nodes"));
             }
             OrchestrationEvent::NodeQueued {
-                run_id, node_id, ..
+                run_id,
+                node_id,
+                dependencies,
             } => {
                 self.auto_run
                     .upsert_agent(run_id, node_id, node_id.clone(), String::from("agent"));
+                if let Some(agent) = self
+                    .auto_run
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.id == *node_id)
+                {
+                    agent.status = String::from("Queued");
+                    if dependencies.is_empty() {
+                        agent.preview = Some(String::from("Ready now"));
+                    } else {
+                        agent.preview = Some(truncate_preview(&format!(
+                            "Ready after {}",
+                            dependencies.join(", ")
+                        )));
+                    }
+                }
+                self.auto_run.recount_agents();
             }
             OrchestrationEvent::NodeStarted {
                 run_id,
@@ -711,6 +738,32 @@ mod tests {
         );
         assert_eq!(state.auto_run.running_agents, 1);
         assert_eq!(state.auto_run.recent_artifacts.len(), 1);
+    }
+
+    #[test]
+    fn auto_state_projects_node_queue_dependencies() {
+        let mut state = AppState::new("test-model".into(), "sandbox".into(), "repo".into());
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::AutoStarted {
+            run_id: "auto-1".into(),
+            prompt: "refactor".into(),
+            agent_count: 2,
+        });
+        state.apply_orchestration_event(&crow_runtime::event::OrchestrationEvent::NodeQueued {
+            run_id: "auto-1".into(),
+            node_id: "planner-1".into(),
+            dependencies: vec!["explorer-1".into(), "architecture-scout-1".into()],
+        });
+
+        let planner = state
+            .auto_run
+            .agents
+            .iter()
+            .find(|agent| agent.id == "planner-1");
+        assert_eq!(state.auto_run.queued_agents, 1);
+        assert_eq!(
+            planner.and_then(|agent| agent.preview.as_deref()),
+            Some("Ready after explorer-1, architecture-scout-1")
+        );
     }
 
     #[test]

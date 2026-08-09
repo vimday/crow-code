@@ -15,6 +15,27 @@ use tokio::sync::mpsc;
 
 const CTRL_C_QUIT_WINDOW: Duration = Duration::from_millis(1500);
 
+fn request_interrupt(
+    state: &mut AppState,
+    thread_manager: &Arc<crate::thread_manager::ThreadManager>,
+    label: &str,
+) {
+    if let Some(token) = &state.cancellation {
+        token.cancel();
+    }
+    state.active_action = Some("Interrupting…".into());
+    state.status_indicator = Some(state::StatusIndicatorState {
+        header: "Interrupting…".into(),
+        details: Some(label.into()),
+        details_max_lines: 1,
+        progress_pct: None,
+    });
+    let tm = Arc::clone(thread_manager);
+    tokio::spawn(async move {
+        tm.submit(crate::thread_manager::Op::Interrupt).await;
+    });
+}
+
 pub async fn run_tui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
@@ -58,10 +79,7 @@ pub async fn run_tui_loop(
                     {
                         if state.is_task_running() {
                             // First press while running: interrupt the task
-                            if let Some(token) = &state.cancellation {
-                                token.cancel();
-                            }
-                            state.active_action = None;
+                            request_interrupt(state, thread_manager, "ctrl+c");
                             state.push_log("Interrupted.");
                             state.last_ctrl_c = Some(Instant::now());
                         } else if let Some(last) = state.last_ctrl_c {
@@ -89,10 +107,7 @@ pub async fn run_tui_loop(
                     // ESC does NOT quit. It interrupts a running agent turn.
                     if key.code == KeyCode::Esc {
                         if state.is_task_running() {
-                            if let Some(token) = &state.cancellation {
-                                token.cancel();
-                            }
-                            state.active_action = None;
+                            request_interrupt(state, thread_manager, "esc");
                             state.push_log("Interrupted.");
                         }
                         // When idle, ESC does nothing (no quit).
@@ -413,19 +428,19 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
                 }
                 TurnEvent::PhaseChanged { phase, .. } => {
                     let label = match &phase {
-                        TurnPhase::Materializing => "📦 Materializing".to_string(),
-                        TurnPhase::Planning => "🧭 Planning".to_string(),
-                        TurnPhase::BuildingRepoMap => "🗺️ Building repo map".to_string(),
-                        TurnPhase::Compacting => "🔄 Compacting context".to_string(),
+                        TurnPhase::Materializing => "materializing".to_string(),
+                        TurnPhase::Planning => "planning".to_string(),
+                        TurnPhase::BuildingRepoMap => "mapping repo".to_string(),
+                        TurnPhase::Compacting => "compacting".to_string(),
                         TurnPhase::EpistemicLoop { step, max_steps } => {
-                            format!("🧠 Thinking (step {step}/{max_steps})")
+                            format!("thinking {step}/{max_steps}")
                         }
-                        TurnPhase::CruciblePreflight => "🔍 Preflight checks".to_string(),
+                        TurnPhase::CruciblePreflight => "preflight".to_string(),
                         TurnPhase::CrucibleVerification { attempt } => {
-                            format!("🧪 Verifying (attempt {attempt})")
+                            format!("verify {attempt}")
                         }
-                        TurnPhase::Applying => "⚡ Applying changes".to_string(),
-                        TurnPhase::Complete => "✅ Complete".to_string(),
+                        TurnPhase::Applying => "applying".to_string(),
+                        TurnPhase::Complete => "done".to_string(),
                     };
                     state.active_action = Some(label.clone());
                     state.turn_phase = Some(label);
@@ -443,9 +458,9 @@ fn handle_agent_event(state: &mut AppState, event: AgentEvent) {
             }
         }
         AgentEvent::Thinking(_, _) => {
-            state.active_action = Some("Thinking...".into());
+            state.active_action = Some("thinking".into());
             state.status_indicator = Some(state::StatusIndicatorState {
-                header: "Thinking...".into(),
+                header: "thinking".into(),
                 details: None,
                 details_max_lines: 3,
                 progress_pct: None,

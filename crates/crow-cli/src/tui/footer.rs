@@ -39,7 +39,7 @@ pub fn footer_hint_lines(state: &AppState) -> Vec<Line<'static>> {
         FooterMode::ShortcutOverlay => vec![
             Line::from(vec![
                 "  enter".bold().dim(),
-                " submit".dim(),
+                " send".dim(),
                 "      ".into(),
                 "esc".bold().dim(),
                 " interrupt".dim(),
@@ -55,24 +55,23 @@ pub fn footer_hint_lines(state: &AppState) -> Vec<Line<'static>> {
                 "  /".bold().dim(),
                 " commands".dim(),
                 "        ".into(),
-                "ctrl+d".bold().dim(),
-                " quit now".dim(),
+                "tab".bold().dim(),
+                " focus".dim(),
             ]),
             Line::from(vec![
                 "  !".bold().dim(),
-                " shell cmd".dim(),
-                "       ".into(),
-                "tab".bold().dim(),
-                " switch focus".dim(),
+                " shell".dim(),
+                "           ".into(),
+                "ctrl+u".bold().dim(),
+                " clear".dim(),
             ]),
             Line::from(vec![
                 "  pgup/pgdn".bold().dim(),
                 " scroll".dim(),
                 "   ".into(),
-                "ctrl+u".bold().dim(),
-                " clear input".dim(),
+                "↑/↓".bold().dim(),
+                " history".dim(),
             ]),
-            Line::from(vec!["  ↑/↓".bold().dim(), " input history".dim()]),
             Line::from("  ? again to dismiss".dim()),
         ],
         FooterMode::QuitConfirm => vec![Line::from(vec![
@@ -97,7 +96,7 @@ pub fn footer_hint_lines(state: &AppState) -> Vec<Line<'static>> {
             vec![Line::from(vec![
                 Span::from("  "),
                 "?".bold().dim(),
-                " shortcuts".dim(),
+                " keys".dim(),
                 " · ".dim(),
                 "/".bold().dim(),
                 " commands".dim(),
@@ -125,7 +124,7 @@ mod tests {
 
         assert_eq!(footer_height(&state), 1);
         let text = line_text(footer_hint_lines(&state).remove(0));
-        assert!(text.contains("? shortcuts"));
+        assert!(text.contains("? keys"));
         assert!(text.contains("/ commands"));
         assert!(text.contains("focus composer"));
     }

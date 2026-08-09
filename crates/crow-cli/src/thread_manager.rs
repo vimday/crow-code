@@ -26,15 +26,15 @@ struct NativeAutoNodeExecutor {
 }
 
 impl crow_runtime::auto::AutoNodeExecutor for NativeAutoNodeExecutor {
-    fn execute_node<'a>(
-        &'a mut self,
+    fn execute_node(
+        &self,
         request: crow_runtime::auto::AutoNodeExecutionRequest,
-        observer: &'a mut dyn crow_runtime::event::EventHandler,
+        event_sink: tokio::sync::mpsc::UnboundedSender<crow_runtime::event::AgentEvent>,
     ) -> Pin<
         Box<
             dyn Future<Output = anyhow::Result<crow_runtime::auto::AgentArtifactBundle>>
                 + Send
-                + 'a,
+                + 'static,
         >,
     > {
         let runtime = Arc::clone(&self.runtime);
@@ -66,15 +66,26 @@ impl crow_runtime::auto::AutoNodeExecutor for NativeAutoNodeExecutor {
                 system_messages: request.system_messages,
             };
 
+            let mut observer = ChannelEventHandler { event_sink };
             worker
                 .execute_for_artifact(
                     subagent_request,
                     &workspace,
                     Some(runtime.mcp_manager.as_ref()),
-                    observer,
+                    &mut observer,
                 )
                 .await
         })
+    }
+}
+
+struct ChannelEventHandler {
+    event_sink: tokio::sync::mpsc::UnboundedSender<crow_runtime::event::AgentEvent>,
+}
+
+impl crow_runtime::event::EventHandler for ChannelEventHandler {
+    fn handle_event(&mut self, event: crow_runtime::event::AgentEvent) {
+        let _ = self.event_sink.send(event);
     }
 }
 
@@ -113,6 +124,19 @@ pub struct TurnState {
     pub turn_id: Option<String>,
     pub phase: TurnPhase,
     pub started_at: Option<Instant>,
+}
+
+impl TurnState {
+    fn request_interrupt(&mut self) -> bool {
+        if self.status != TurnStatus::InProgress {
+            return false;
+        }
+        if let Some(token) = &self.cancellation {
+            token.cancel();
+        }
+        self.status = TurnStatus::Aborted;
+        true
+    }
 }
 
 /// ThreadManager sits between the TUI loop and the SessionRuntime, decoupling
@@ -186,12 +210,8 @@ impl ThreadManager {
             }
             Op::Interrupt => {
                 let mut state = self.thread_state.lock().await;
-                if state.status == TurnStatus::InProgress {
-                    if let Some(token) = &state.cancellation {
-                        token.cancel();
-                        state.status = TurnStatus::Aborted;
-                        let _ = self.ui_tx.send(EngineEvent::SessionComplete);
-                    }
+                if state.request_interrupt() {
+                    let _ = self.ui_tx.send(EngineEvent::SessionComplete);
                 }
             }
             Op::Clear => {
@@ -335,13 +355,13 @@ impl ThreadManager {
                 workspace_root: cfg_clone.workspace.clone(),
             };
 
-            let mut executor = NativeAutoNodeExecutor {
+            let executor = NativeAutoNodeExecutor {
                 runtime: Arc::clone(&rt_clone),
                 workspace: request.workspace_root.clone(),
                 cancel_token: token.clone(),
             };
             let outcome = coordinator
-                .run_with_executor(request, &mut observer, &mut executor)
+                .run_with_executor(request, &mut observer, Arc::new(executor))
                 .await;
             let success =
                 outcome.as_ref().is_ok_and(|outcome| outcome.success) && !token.is_cancelled();
@@ -706,5 +726,40 @@ impl ThreadManager {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn_state(status: TurnStatus, cancellation: Option<CancellationToken>) -> TurnState {
+        TurnState {
+            status,
+            cancellation,
+            turn_id: Some("turn-test".into()),
+            phase: TurnPhase::Materializing,
+            started_at: Some(Instant::now()),
+        }
+    }
+
+    #[test]
+    fn interrupt_cancels_active_turn_token() {
+        let token = CancellationToken::new();
+        let mut state = turn_state(TurnStatus::InProgress, Some(token.clone()));
+
+        assert!(state.request_interrupt());
+        assert!(token.is_cancelled());
+        assert_eq!(state.status, TurnStatus::Aborted);
+    }
+
+    #[test]
+    fn interrupt_when_idle_is_noop() {
+        let token = CancellationToken::new();
+        let mut state = turn_state(TurnStatus::Idle, Some(token.clone()));
+
+        assert!(!state.request_interrupt());
+        assert!(!token.is_cancelled());
+        assert_eq!(state.status, TurnStatus::Idle);
     }
 }

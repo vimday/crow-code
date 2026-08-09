@@ -42,6 +42,15 @@ impl AutoGraph {
     pub fn ready_node_ids(&self) -> Vec<AutoNodeId> {
         self.nodes
             .iter()
+            .filter(|node| node.state == AutoNodeState::Ready)
+            .map(|node| node.id.clone())
+            .collect()
+    }
+
+    pub fn mark_new_ready(&mut self) -> Vec<AutoNodeId> {
+        let ready_ids: Vec<_> = self
+            .nodes
+            .iter()
             .filter(|node| node.state == AutoNodeState::Pending)
             .filter(|node| {
                 node.dependencies.iter().all(|dep| {
@@ -51,7 +60,15 @@ impl AutoGraph {
                 })
             })
             .map(|node| node.id.clone())
-            .collect()
+            .collect();
+
+        for id in &ready_ids {
+            if let Some(node) = self.node_mut(id) {
+                node.state = AutoNodeState::Ready;
+            }
+        }
+
+        ready_ids
     }
 
     pub fn node_mut(&mut self, id: &AutoNodeId) -> Option<&mut AutoNode> {

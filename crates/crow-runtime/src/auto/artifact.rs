@@ -1,3 +1,7 @@
+use std::collections::BTreeSet;
+
+use crate::event::AgentEvent;
+
 use super::graph::AutoNodeId;
 use super::AutoPhaseKind;
 
@@ -45,6 +49,50 @@ pub struct ArtifactRunSummary {
     pub files_read: Vec<String>,
     pub files_changed: Vec<String>,
     pub verification_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactEventCollector {
+    files_read: BTreeSet<String>,
+    files_changed: BTreeSet<String>,
+    verification_commands: BTreeSet<String>,
+}
+
+impl ArtifactEventCollector {
+    pub fn record(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::ReadFiles(paths) => {
+                self.files_read.extend(paths.iter().cloned());
+            }
+            AgentEvent::ToolCallCompleted {
+                tool_name,
+                is_error,
+                ..
+            } if !*is_error => {
+                if let Some(command) = verification_command_from_tool_name(tool_name) {
+                    self.verification_commands.insert(command);
+                }
+            }
+            AgentEvent::ActionComplete(message) => {
+                if let Some(command) = verification_command_from_text(message) {
+                    self.verification_commands.insert(command);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn files_read(&self) -> Vec<String> {
+        self.files_read.iter().cloned().collect()
+    }
+
+    pub fn files_changed(&self) -> Vec<String> {
+        self.files_changed.iter().cloned().collect()
+    }
+
+    pub fn verification_commands(&self) -> Vec<String> {
+        self.verification_commands.iter().cloned().collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -120,6 +168,38 @@ impl ArtifactStore {
         summary.verification_commands.dedup();
         summary
     }
+}
+
+fn verification_command_from_tool_name(tool_name: &str) -> Option<String> {
+    let normalized = tool_name.to_ascii_lowercase();
+    match normalized.as_str() {
+        "cargo_check" => Some("cargo check".into()),
+        "cargo_test" => Some("cargo test".into()),
+        "cargo_clippy" => Some("cargo clippy".into()),
+        "make_test" => Some("make test".into()),
+        _ => None,
+    }
+}
+
+fn verification_command_from_text(text: &str) -> Option<String> {
+    text.lines()
+        .map(normalize_command_line)
+        .find(|line| looks_like_verification_command(line))
+}
+
+fn normalize_command_line(line: &str) -> String {
+    line.trim_start_matches(['$', '>', ' ']).trim().to_string()
+}
+
+fn looks_like_verification_command(line: &str) -> bool {
+    line.starts_with("cargo test")
+        || line.starts_with("cargo check")
+        || line.starts_with("cargo clippy")
+        || line.starts_with("cargo build")
+        || line.starts_with("make test")
+        || line.starts_with("npm test")
+        || line.starts_with("pytest")
+        || line.starts_with("go test")
 }
 
 pub fn bounded_preview(text: &str, max_chars: usize) -> String {
@@ -198,6 +278,54 @@ mod tests {
         assert_eq!(summary.files_read, vec!["Cargo.toml", "src/lib.rs"]);
         assert_eq!(summary.files_changed, vec!["src/lib.rs"]);
         assert_eq!(summary.verification_commands, vec!["cargo test"]);
+    }
+
+    #[test]
+    fn collector_deduplicates_read_files() {
+        let mut collector = ArtifactEventCollector::default();
+        collector.record(&AgentEvent::ReadFiles(vec![
+            "src/lib.rs".into(),
+            "Cargo.toml".into(),
+            "src/lib.rs".into(),
+        ]));
+
+        assert_eq!(collector.files_read(), vec!["Cargo.toml", "src/lib.rs"]);
+    }
+
+    #[test]
+    fn collector_extracts_verification_commands_conservatively() {
+        let mut collector = ArtifactEventCollector::default();
+        collector.record(&AgentEvent::ToolCallCompleted {
+            call_id: "1".into(),
+            tool_name: "cargo_test".into(),
+            duration_ms: 10,
+            output_bytes: 20,
+            is_error: false,
+            retry_count: 0,
+            from_cache: false,
+            preview: String::new(),
+        });
+        collector.record(&AgentEvent::ActionComplete(
+            "ran checks\n$ cargo clippy --workspace --all-targets".into(),
+        ));
+        collector.record(&AgentEvent::ToolCallCompleted {
+            call_id: "2".into(),
+            tool_name: "bash".into(),
+            duration_ms: 10,
+            output_bytes: 20,
+            is_error: true,
+            retry_count: 0,
+            from_cache: false,
+            preview: String::new(),
+        });
+
+        assert_eq!(
+            collector.verification_commands(),
+            vec![
+                "cargo clippy --workspace --all-targets".to_string(),
+                "cargo test".to_string()
+            ]
+        );
     }
 
     #[test]

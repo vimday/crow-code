@@ -410,10 +410,10 @@ impl<'a> Component for ComposerComponent<'a> {
         let popup_area = split[0];
         let composer_area = split[1];
 
-        // Give the entire composer area a top border to separate it from history/status
+        // Thin command-line divider: keep the input grounded without boxing it in.
         let composer_block = Block::default()
             .borders(Borders::TOP)
-            .border_style(ratatui::style::Style::new().fg(ratatui::style::Color::DarkGray));
+            .border_style(ratatui::style::Style::new().fg(crate::tui::theme::colors::divider()));
 
         let inner_composer_area = composer_block.inner(composer_area);
         frame.render_widget(composer_block, composer_area);

@@ -19,7 +19,9 @@
 //! `delegation_count` check. The 120s `tokio::time::timeout` wrapping
 //! the entire execution prevents stalled LLM calls from hanging forever.
 
-use crate::auto::artifact::{AgentArtifactBundle, ArtifactKind, ArtifactSummary};
+use crate::auto::artifact::{
+    AgentArtifactBundle, ArtifactEventCollector, ArtifactKind, ArtifactSummary,
+};
 use crate::auto::graph::AutoNodeId;
 use crate::auto::AutoPhaseKind;
 use crate::context::ConversationManager;
@@ -72,6 +74,7 @@ fn artifact_from_loop_result(
     phase: AutoPhaseKind,
     result: crate::agent_loop::AgentLoopResult,
     success: bool,
+    collector: &ArtifactEventCollector,
 ) -> AgentArtifactBundle {
     let preview = result
         .final_text
@@ -89,9 +92,9 @@ fn artifact_from_loop_result(
             title: phase.as_str().to_string(),
             preview,
         }],
-        files_read: Vec::new(),
-        files_changed: Vec::new(),
-        verification_commands: Vec::new(),
+        files_read: collector.files_read(),
+        files_changed: collector.files_changed(),
+        verification_commands: collector.verification_commands(),
         success,
     }
 }
@@ -153,8 +156,9 @@ impl SubagentWorker {
         let node_id = request.node_id;
         let phase = request.phase;
 
+        let mut collector = ArtifactEventCollector::default();
         let plan = self
-            .execute(
+            .execute_with_event_collector(
                 &request.task,
                 &request.focus_paths,
                 &handoff_rationale,
@@ -162,6 +166,7 @@ impl SubagentWorker {
                 workspace_root,
                 mcp_manager,
                 parent_observer,
+                &mut collector,
             )
             .await?;
 
@@ -171,7 +176,9 @@ impl SubagentWorker {
             timing_snapshot: None,
             metrics: crate::agent_loop::TurnMetrics::default(),
         };
-        Ok(artifact_from_loop_result(node_id, phase, result, true))
+        Ok(artifact_from_loop_result(
+            node_id, phase, result, true, &collector,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -182,8 +189,34 @@ impl SubagentWorker {
         rationale: &str,
         sys_msgs: Vec<crow_brain::ChatMessage>,
         workspace_root: &Path,
+        mcp_manager: Option<&crate::mcp::McpManager>,
+        parent_observer: &mut dyn EventHandler,
+    ) -> anyhow::Result<crow_patch::IntentPlan> {
+        let mut collector = ArtifactEventCollector::default();
+        self.execute_with_event_collector(
+            task,
+            focus_paths,
+            rationale,
+            sys_msgs,
+            workspace_root,
+            mcp_manager,
+            parent_observer,
+            &mut collector,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_with_event_collector(
+        &self,
+        task: &str,
+        focus_paths: &[crow_patch::WorkspacePath],
+        rationale: &str,
+        sys_msgs: Vec<crow_brain::ChatMessage>,
+        workspace_root: &Path,
         _mcp_manager: Option<&crate::mcp::McpManager>,
         parent_observer: &mut dyn EventHandler,
+        artifact_collector: &mut ArtifactEventCollector,
     ) -> anyhow::Result<crow_patch::IntentPlan> {
         let identity = format!(
             "You are a specialized Subagent Worker (Role: {role}, ID: {id}). You have been delegated the following bounded task by the Architect Orchestrator:\n\n\
@@ -241,6 +274,7 @@ impl SubagentWorker {
             id: self.id.clone(),
             role: self.role.clone(),
             parent: parent_observer,
+            artifact_collector,
         };
 
         // Register task in the task registry
@@ -352,10 +386,12 @@ pub struct SubagentEventHandler<'a> {
     id: String,
     role: AgentRole,
     parent: &'a mut dyn EventHandler,
+    artifact_collector: &'a mut ArtifactEventCollector,
 }
 
 impl EventHandler for SubagentEventHandler<'_> {
     fn handle_event(&mut self, event: AgentEvent) {
+        self.artifact_collector.record(&event);
         match event {
             AgentEvent::StreamChunk(c) => self.parent.handle_event(AgentEvent::StreamChunk(c)),
             AgentEvent::Orchestration(ev) => {
@@ -497,11 +533,13 @@ mod artifact_tests {
             metrics: TurnMetrics::default(),
         };
 
+        let collector = ArtifactEventCollector::default();
         let bundle = artifact_from_loop_result(
             AutoNodeId("explorer-1".into()),
             AutoPhaseKind::Explore,
             result,
             true,
+            &collector,
         );
 
         assert_eq!(bundle.node_id, AutoNodeId("explorer-1".into()));
@@ -509,5 +547,34 @@ mod artifact_tests {
         assert!(bundle.success);
         assert_eq!(bundle.summaries[0].kind, ArtifactKind::Exploration);
         assert!(bundle.summaries[0].preview.contains("Explored auto"));
+    }
+
+    #[test]
+    fn artifact_bundle_includes_collected_event_metadata() {
+        let result = AgentLoopResult {
+            final_text: "Verified implementation".into(),
+            tool_call_count: 2,
+            timing_snapshot: None,
+            metrics: TurnMetrics::default(),
+        };
+        let mut collector = ArtifactEventCollector::default();
+        collector.record(&AgentEvent::ReadFiles(vec!["src/lib.rs".into()]));
+        collector.record(&AgentEvent::ActionComplete(
+            "$ cargo test -p crow-runtime".into(),
+        ));
+
+        let bundle = artifact_from_loop_result(
+            AutoNodeId("verifier-1".into()),
+            AutoPhaseKind::Verify,
+            result,
+            true,
+            &collector,
+        );
+
+        assert_eq!(bundle.files_read, vec!["src/lib.rs"]);
+        assert_eq!(
+            bundle.verification_commands,
+            vec!["cargo test -p crow-runtime"]
+        );
     }
 }

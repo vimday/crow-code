@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crow_brain::ChatMessage;
+use tokio::task::JoinSet;
 
 use super::artifact::{
     bounded_preview, AgentArtifactBundle, ArtifactKind, ArtifactStore, ArtifactSummary,
@@ -46,7 +47,7 @@ impl AutoRunCoordinator {
         request: AutoRunRequest,
         observer: &mut dyn EventHandler,
     ) -> Result<AutoRunOutcome> {
-        self.run_with_executor(request, observer, &mut SyntheticAutoNodeExecutor)
+        self.run_with_executor(request, observer, Arc::new(SyntheticAutoNodeExecutor))
             .await
     }
 
@@ -54,43 +55,41 @@ impl AutoRunCoordinator {
         &self,
         request: AutoRunRequest,
         observer: &mut dyn EventHandler,
-        executor: &mut E,
+        executor: Arc<E>,
     ) -> Result<AutoRunOutcome>
     where
-        E: AutoNodeExecutor,
+        E: AutoNodeExecutor + 'static,
     {
         let mut graph = build_auto_graph(&request.prompt, &request.config, request.run_id.clone());
         let mut artifacts = ArtifactStore::default();
         let limiter = Arc::new(AutoExecutionLimiter::new(self.max_parallel_agents));
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut running = JoinSet::new();
 
         emit_run_started(&graph, observer);
 
         let mut stopped_by_error = false;
-        while !graph.is_terminal() {
+        while !graph.is_terminal() || !running.is_empty() {
+            drain_node_events(&mut event_rx, observer);
+
             if observer.is_cancelled() {
                 cancel_open_nodes(&mut graph);
+                running.abort_all();
                 break;
             }
 
-            let ready = graph.ready_node_ids();
-            if ready.is_empty() {
-                break;
-            }
-
-            for node_id in ready.into_iter().take(self.max_parallel_agents) {
-                if observer.is_cancelled() {
-                    cancel_open_nodes(&mut graph);
+            mark_ready_nodes(&mut graph, observer);
+            while running.len() < limiter.max_parallel() {
+                let Some(node_id) = graph.ready_node_ids().into_iter().next() else {
                     break;
-                }
-
+                };
                 let handoff_context = artifacts.render_handoff_context();
                 let Some(prepared) =
                     prepare_node(&mut graph, &node_id, &handoff_context, &request, observer)
                 else {
                     continue;
                 };
-
-                let guard = match limiter.try_acquire() {
+                let guard = match limiter.clone().try_acquire() {
                     Ok(guard) => guard,
                     Err(err) => {
                         mark_node_failed(&mut graph, &node_id, &err.to_string(), observer);
@@ -98,27 +97,59 @@ impl AutoRunCoordinator {
                         break;
                     }
                 };
+                let node_executor = Arc::clone(&executor);
+                let node_events = event_tx.clone();
+                running.spawn(async move {
+                    let node_id = prepared.node_id.clone();
+                    let result = node_executor.execute_node(prepared, node_events).await;
+                    drop(guard);
+                    NodeExecutionResult { node_id, result }
+                });
+            }
 
-                let result = executor.execute_node(prepared, observer).await;
-                drop(guard);
+            if stopped_by_error {
+                cancel_open_nodes(&mut graph);
+                running.abort_all();
+                break;
+            }
 
-                match result {
-                    Ok(bundle) => {
-                        complete_node(&mut graph, &node_id, bundle, &mut artifacts, observer)
-                    }
+            if running.is_empty() {
+                break;
+            }
+
+            if let Some(joined) = running.join_next().await {
+                drain_node_events(&mut event_rx, observer);
+                match joined {
+                    Ok(NodeExecutionResult { node_id, result }) => match result {
+                        Ok(bundle) => {
+                            complete_node(&mut graph, &node_id, bundle, &mut artifacts, observer)
+                        }
+                        Err(err) => {
+                            mark_node_failed(&mut graph, &node_id, &err.to_string(), observer);
+                            stopped_by_error = true;
+                        }
+                    },
                     Err(err) => {
-                        mark_node_failed(&mut graph, &node_id, &err.to_string(), observer);
                         stopped_by_error = true;
-                        break;
+                        observer.handle_event(AgentEvent::Orchestration(
+                            OrchestrationEvent::NodeFailed {
+                                run_id: graph.run_id.clone(),
+                                node_id: "unknown".into(),
+                                error: err.to_string(),
+                            },
+                        ));
                     }
                 }
             }
 
             if stopped_by_error {
                 cancel_open_nodes(&mut graph);
+                running.abort_all();
                 break;
             }
         }
+
+        drain_node_events(&mut event_rx, observer);
 
         let success = graph
             .nodes
@@ -135,6 +166,20 @@ impl AutoRunCoordinator {
     }
 }
 
+struct NodeExecutionResult {
+    node_id: AutoNodeId,
+    result: Result<AgentArtifactBundle>,
+}
+
+fn drain_node_events(
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    observer: &mut dyn EventHandler,
+) {
+    while let Ok(event) = event_rx.try_recv() {
+        observer.handle_event(event);
+    }
+}
+
 fn emit_run_started(graph: &AutoGraph, observer: &mut dyn EventHandler) {
     observer.handle_event(AgentEvent::Orchestration(OrchestrationEvent::AutoStarted {
         run_id: graph.run_id.clone(),
@@ -145,13 +190,17 @@ fn emit_run_started(graph: &AutoGraph, observer: &mut dyn EventHandler) {
         run_id: graph.run_id.clone(),
         node_count: graph.nodes.len(),
     }));
+}
 
-    for node in &graph.nodes {
-        observer.handle_event(AgentEvent::Orchestration(OrchestrationEvent::NodeQueued {
-            run_id: graph.run_id.clone(),
-            node_id: node.id.0.clone(),
-            dependencies: node.dependencies.iter().map(|dep| dep.0.clone()).collect(),
-        }));
+fn mark_ready_nodes(graph: &mut AutoGraph, observer: &mut dyn EventHandler) {
+    for node_id in graph.mark_new_ready() {
+        if let Some(node) = graph.nodes.iter().find(|node| node.id == node_id) {
+            observer.handle_event(AgentEvent::Orchestration(OrchestrationEvent::NodeQueued {
+                run_id: graph.run_id.clone(),
+                node_id: node.id.0.clone(),
+                dependencies: node.dependencies.iter().map(|dep| dep.0.clone()).collect(),
+            }));
+        }
     }
 }
 
@@ -271,12 +320,13 @@ fn summarize_run(success: bool, artifacts: &ArtifactStore) -> String {
 struct SyntheticAutoNodeExecutor;
 
 impl AutoNodeExecutor for SyntheticAutoNodeExecutor {
-    fn execute_node<'a>(
-        &'a mut self,
+    fn execute_node(
+        &self,
         request: AutoNodeExecutionRequest,
-        _observer: &'a mut dyn EventHandler,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<AgentArtifactBundle>> + Send + 'a>>
-    {
+        _event_sink: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<AgentArtifactBundle>> + Send + 'static>,
+    > {
         Box::pin(async move { Ok(synthetic_artifact(request)) })
     }
 }
@@ -308,9 +358,6 @@ fn synthetic_artifact(request: AutoNodeExecutionRequest) -> AgentArtifactBundle 
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::Pin;
-
     use anyhow::anyhow;
 
     use super::*;
@@ -324,7 +371,8 @@ mod tests {
             max_agent_depth: 2,
             strategy: AutoStrategy::Thorough,
         };
-        let graph = build_auto_graph("refactor", &cfg, "auto-test");
+        let mut graph = build_auto_graph("refactor", &cfg, "auto-test");
+        graph.mark_new_ready();
         let ready = graph.ready_node_ids();
 
         assert!(ready.iter().any(|id| id.0.starts_with("explorer")));
@@ -368,11 +416,13 @@ mod tests {
             strategy: AutoStrategy::Balanced,
         };
         let mut graph = build_auto_graph("refactor", &cfg, "auto-test");
+        graph.mark_new_ready();
         let first = graph.ready_node_ids()[0].clone();
         let Some(first_node) = graph.node_mut(&first) else {
             panic!("expected first ready node to exist");
         };
         first_node.state = AutoNodeState::Succeeded;
+        graph.mark_new_ready();
 
         let ready = graph.ready_node_ids();
 
@@ -426,10 +476,10 @@ mod tests {
             system_messages: Vec::new(),
             workspace_root: std::path::PathBuf::from("."),
         };
-        let mut executor = FailingExecutor;
+        let executor = FailingExecutor;
         let mut observer = RecordingObserver::new();
         let outcome = match coordinator
-            .run_with_executor(request, &mut observer, &mut executor)
+            .run_with_executor(request, &mut observer, Arc::new(executor))
             .await
         {
             Ok(outcome) => outcome,
@@ -465,11 +515,13 @@ mod tests {
     struct FailingExecutor;
 
     impl AutoNodeExecutor for FailingExecutor {
-        fn execute_node<'a>(
-            &'a mut self,
+        fn execute_node(
+            &self,
             _request: AutoNodeExecutionRequest,
-            _observer: &'a mut dyn EventHandler,
-        ) -> Pin<Box<dyn Future<Output = Result<AgentArtifactBundle>> + Send + 'a>> {
+            _event_sink: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<AgentArtifactBundle>> + Send + 'static>,
+        > {
             Box::pin(async { Err(anyhow!("planned failure")) })
         }
     }

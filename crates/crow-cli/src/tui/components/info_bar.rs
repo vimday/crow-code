@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::Styled;
 use ratatui::style::{Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
 use ratatui::Frame;
 
@@ -66,9 +66,9 @@ impl InfoBar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(35),
-                Constraint::Percentage(35),
+                Constraint::Percentage(34),
+                Constraint::Percentage(34),
+                Constraint::Percentage(32),
             ])
             .split(area);
 
@@ -86,11 +86,19 @@ impl InfoBar {
         };
 
         let left = Line::from(vec![
-            format!(" {model_display} ")
-                .fg(colors::accent_system())
-                .bold(),
-            " │ ".fg(colors::divider()),
-            format!(" {branch_display} ").fg(colors::accent_warning()),
+            Span::styled(
+                format!(" {model_display} "),
+                ratatui::style::Style::default()
+                    .fg(colors::accent_system())
+                    .bold(),
+            ),
+            Span::styled("│", ratatui::style::Style::default().fg(colors::divider())),
+            Span::styled(
+                format!(" {branch_display} "),
+                ratatui::style::Style::default()
+                    .fg(colors::accent_warning())
+                    .bold(),
+            ),
         ]);
 
         let left_widget = Paragraph::new(left).block(Block::default().borders(Borders::NONE));
@@ -126,6 +134,7 @@ impl InfoBar {
 
             vec![
                 format!(" {spinner} ").set_style(Styles::spinner()),
+                "thinking".fg(colors::accent_system()).bold(),
                 token_display.fg(colors::text_secondary()),
                 tok_per_sec.fg(colors::text_muted()),
                 format!(" · {elapsed}").fg(colors::text_secondary()),
@@ -149,16 +158,20 @@ impl InfoBar {
                 progress.fg(colors::text_muted()),
             ]
         } else if let Some(ref phase) = state.turn_phase {
-            // Show the enriched phase string (e.g. "🧠 Thinking (step 3/20)")
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
+            let label = if phase.len() > 22 {
+                format!("{}…", &phase[..21])
+            } else {
+                phase.clone()
+            };
             vec![
                 format!(" {spinner} ").set_style(Styles::spinner()),
-                phase.clone().fg(colors::accent_system()),
+                label.fg(colors::accent_system()),
             ]
         } else if let Some(ref action) = state.active_action {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
-            let action_display = if action.len() > 30 {
-                format!("{}…", &action[..29])
+            let action_display = if action.len() > 22 {
+                format!("{}…", &action[..21])
             } else {
                 action.clone()
             };
@@ -173,7 +186,7 @@ impl InfoBar {
                 elapsed.fg(colors::text_muted()),
             ]
         } else {
-            vec![" Ready".fg(colors::text_muted())]
+            vec![" ready".fg(colors::text_muted())]
         };
 
         let center_widget =

@@ -4,7 +4,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::tui::state::{AgentHudEntry, AutoRunState};
 
-const MAX_AGENT_LINES: usize = 8;
+const MAX_AGENT_LINES: usize = 6;
 const MAX_PREVIEW_CHARS: usize = 240;
 
 pub fn bounded_preview(text: &str) -> String {
@@ -60,8 +60,12 @@ pub fn format_agent_summary(auto: &AutoRunState) -> String {
     }
     if auto.total_agents > 0 {
         lines.push(format!(
-            "Progress: {}/{} complete · {} running · {} failed",
-            auto.completed_agents, auto.total_agents, auto.running_agents, auto.failed_agents
+            "Progress: {}/{} complete · {} running · {} queued · {} failed",
+            auto.completed_agents,
+            auto.total_agents,
+            auto.running_agents,
+            auto.queued_agents,
+            auto.failed_agents
         ));
     }
     if let Some(latest) = auto.recent_artifacts.last() {
@@ -118,32 +122,29 @@ pub fn render_agent_lines(auto: &AutoRunState) -> Vec<Line<'static>> {
 pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static>> {
     let width = width.max(8);
     let Some(run_id) = auto.run_id.as_deref() else {
-        return vec![
-            line_clamped("AUTO RUN", width),
-            line_clamped("  idle", width),
-        ];
+        return vec![line_clamped("run", width), line_clamped("  idle", width)];
     };
 
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
-        Span::from("AUTO RUN").bold(),
+        Span::from("run").bold(),
         Span::from(format!(
             " · {}",
-            truncate_cells(run_id, width.saturating_sub(11))
+            truncate_cells(run_id, width.saturating_sub(7))
         ))
         .dim(),
     ]));
 
     if let Some(prompt) = auto.prompt.as_deref() {
-        lines.push(line_clamped(format!("  task  {}", bounded_preview(prompt)), width).dim());
+        lines.push(line_clamped(format!("  {}", bounded_preview(prompt)), width).dim());
     }
     if let Some(phase) = auto.active_phase.as_deref() {
-        lines.push(line_clamped(format!("  phase {phase}"), width));
+        lines.push(line_clamped(format!("  {phase}"), width));
     }
     if auto.total_agents > 0 {
         lines.push(line_clamped(
             format!(
-                "  {}/{} done · {} run · {} fail",
+                "  {}/{} · {} run · {} fail",
                 auto.completed_agents, auto.total_agents, auto.running_agents, auto.failed_agents
             ),
             width,
@@ -152,7 +153,7 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
 
     if !auto.agents.is_empty() {
         lines.push(Line::from(""));
-        lines.push(line_clamped("AGENTS", width).bold());
+        lines.push(line_clamped("agents", width).bold());
         for agent in auto.agents.iter().take(MAX_AGENT_LINES) {
             let glyph = match agent.success {
                 Some(true) => "✓",
@@ -173,7 +174,7 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
 
     if !auto.recent_artifacts.is_empty() {
         lines.push(Line::from(""));
-        lines.push(line_clamped("ARTIFACTS", width).bold());
+        lines.push(line_clamped("drops", width).bold());
         for artifact in auto.recent_artifacts.iter().rev().take(3) {
             let compact = bounded_preview(artifact);
             let compact = compact
@@ -186,7 +187,7 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
 
     if let Some(summary) = auto.last_summary.as_deref() {
         lines.push(Line::from(""));
-        lines.push(line_clamped("SUMMARY", width).bold());
+        lines.push(line_clamped("summary", width).bold());
         lines.push(line_clamped(format!("  {}", bounded_preview(summary)), width).dim());
     }
 
@@ -222,6 +223,7 @@ mod tests {
             total_agents: 4,
             completed_agents: 2,
             running_agents: 1,
+            queued_agents: 1,
             failed_agents: 1,
             cancelled_agents: 0,
             agents: vec![AgentHudEntry {
@@ -250,7 +252,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("AUTO RUN"));
+        assert!(rendered.contains("run"));
         assert!(rendered.contains("auto-42"));
         assert!(rendered.contains("2/4"));
         assert!(rendered.contains("planner"));
@@ -267,6 +269,7 @@ mod tests {
             total_agents: 1,
             completed_agents: 0,
             running_agents: 1,
+            queued_agents: 0,
             failed_agents: 0,
             cancelled_agents: 0,
             agents: vec![AgentHudEntry {

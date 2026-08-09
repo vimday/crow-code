@@ -10,7 +10,7 @@ use crow_patch::WorkspacePath;
 use super::artifact::AgentArtifactBundle;
 use super::graph::AutoNodeId;
 use super::AutoPhaseKind;
-use crate::event::EventHandler;
+use crate::event::AgentEvent;
 
 #[derive(Debug, Clone)]
 pub struct AutoNodeExecutionRequest {
@@ -25,12 +25,14 @@ pub struct AutoNodeExecutionRequest {
     pub system_messages: Vec<ChatMessage>,
 }
 
-pub trait AutoNodeExecutor: Send {
-    fn execute_node<'a>(
-        &'a mut self,
+pub type AutoNodeEventSink = tokio::sync::mpsc::UnboundedSender<AgentEvent>;
+
+pub trait AutoNodeExecutor: Send + Sync {
+    fn execute_node(
+        &self,
         request: AutoNodeExecutionRequest,
-        observer: &'a mut dyn EventHandler,
-    ) -> Pin<Box<dyn Future<Output = Result<AgentArtifactBundle>> + Send + 'a>>;
+        event_sink: AutoNodeEventSink,
+    ) -> Pin<Box<dyn Future<Output = Result<AgentArtifactBundle>> + Send + 'static>>;
 }
 
 #[derive(Debug, Default)]

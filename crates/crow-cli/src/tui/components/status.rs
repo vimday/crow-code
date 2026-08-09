@@ -84,29 +84,33 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
 
         // ── Right side context ──
         let mut right_parts: Vec<String> = Vec::new();
-        right_parts.push(self.state.model_info.clone());
+        let model = if self.state.model_info.chars().count() > 24 {
+            let compact = self.state.model_info.chars().take(23).collect::<String>();
+            format!("{compact}…")
+        } else {
+            self.state.model_info.clone()
+        };
+        right_parts.push(model);
 
         #[allow(clippy::cast_precision_loss)]
         if let Some((tokens, context_window)) = self.state.ctx_usage {
             if context_window > 0 {
                 let pct = tokens as f32 / context_window as f32;
-                let cw_k = context_window / 1000;
-                right_parts.push(format!("{:.1}% ({cw_k}K)", pct * 100.0));
+                right_parts.push(format!("{:.0}%", pct * 100.0));
             }
         }
 
-        // streaming tokens
         if self.state.is_streaming {
             let tokens = self.state.streaming_token_estimate;
             let token_display = if tokens < 1000.0 {
-                format!("{tokens:.0} tok")
+                format!("{tokens:.0}t")
             } else {
-                format!("{:.1}k tok", tokens / 1000.0)
+                format!("{:.1}kt", tokens / 1000.0)
             };
             right_parts.push(token_display);
         }
 
-        right_parts.push(format!("{:?}", self.state.view_mode));
+        right_parts.push(format!("{:?}", self.state.view_mode).to_lowercase());
         let right_text = format!(" {} ", right_parts.join(" · "));
         let right_w = right_text.chars().count() as u16;
 

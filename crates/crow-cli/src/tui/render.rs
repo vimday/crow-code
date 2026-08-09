@@ -41,21 +41,14 @@ pub fn render_app(
     let main_area = frame_layout.main;
     let side_area = frame_layout.cockpit;
 
-    let status_lines = if state.is_streaming
-        || state.active_action.is_some()
-        || state.status_indicator.is_some()
-    {
-        if state
-            .status_indicator
-            .as_ref()
-            .is_some_and(|i| i.details.is_some())
-        {
-            4 // Status header + 3 details lines max
+    let status_lines = if let Some(ind) = state.status_indicator.as_ref() {
+        if ind.details.is_some() || ind.progress_pct.is_some() {
+            2
         } else {
             1
         }
     } else {
-        1 // just the right side context
+        1
     };
 
     let chunks = Layout::default()
@@ -100,63 +93,39 @@ pub fn render_app(
 // ── Side Context Dashboard ───────────────────────────────────────────────────
 
 fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
-    use ratatui::style::{Color, Style};
+    use ratatui::style::Style;
     use ratatui::widgets::{Block, Borders, Paragraph};
 
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::new().fg(Color::DarkGray));
+        .border_style(Style::new().fg(colors::divider()));
 
     let mut lines = Vec::new();
-    lines.push(Line::from(""));
-
     lines.push(Line::from(vec![
-        format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
-        "ENVIRONMENT".set_style(Styles::evidence()),
+        "  CROW".set_style(Styles::user_header()),
+        " / ".set_style(Styles::evidence()),
+        state
+            .workspace_name
+            .as_str()
+            .set_style(Styles::code_block()),
     ]));
 
-    let path = if state.workspace_name.is_empty() {
-        "memfs"
-    } else {
-        &state.workspace_name
-    };
+    let dirty = if state.is_dirty { "*" } else { "" };
     lines.push(Line::from(vec![
-        "    Path:   ".set_style(Styles::evidence()),
-        path.set_style(Styles::code_block()),
-    ]));
-
-    lines.push(Line::from(vec![
-        "    Branch: ".set_style(Styles::evidence()),
-        state.git_branch.as_str().set_style(Styles::code_block()),
-        if state.is_dirty {
-            " *".set_style(Styles::error())
-        } else {
-            "".set_style(Styles::evidence())
-        },
-    ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
-        "AGENT CONTEXT".set_style(Styles::evidence()),
-    ]));
-
-    let mode_str = format!("{:?}", state.view_mode);
-    lines.push(Line::from(vec![
-        "    Auth:   ".set_style(Styles::evidence()),
-        mode_str.set_style(Styles::success()),
-    ]));
-
-    lines.push(Line::from(vec![
-        "    Write:  ".set_style(Styles::evidence()),
+        "  ".into(),
+        state.git_branch.as_str().set_style(Styles::success()),
+        dirty.set_style(Styles::error()),
+        " · ".set_style(Styles::evidence()),
+        format!("{:?}", state.view_mode).set_style(Styles::evidence()),
+        " · ".set_style(Styles::evidence()),
         state.write_mode.as_str().set_style(Styles::warning()),
     ]));
 
     if !state.auto_run.agents.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            format!(" {} ", chars::CODE_TOP_LEFT).set_style(Styles::user_header()),
-            "AUTO HUD".set_style(Styles::evidence()),
+            "  AUTO".set_style(Styles::user_header()),
+            " swarm".set_style(Styles::evidence()),
         ]));
         for line in crate::tui::agent_status_feed::render_cockpit_lines(
             &state.auto_run,
