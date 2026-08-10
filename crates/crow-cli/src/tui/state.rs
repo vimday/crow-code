@@ -1,4 +1,5 @@
 use crate::event::{AgentEvent, ViewMode};
+use crate::tui::text_utils::truncate_to_width;
 use crow_patch::SnapshotId;
 pub use crow_runtime::cancel::CancellationToken;
 use std::time::Instant;
@@ -183,12 +184,7 @@ impl AutoRunState {
 
 fn truncate_preview(preview: &str) -> String {
     let compact = preview.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() <= 240 {
-        return compact;
-    }
-    let mut out = compact.chars().take(239).collect::<String>();
-    out.push('…');
-    out
+    truncate_to_width(&compact, 240)
 }
 
 impl StatusIndicatorState {
