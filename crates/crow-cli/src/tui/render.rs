@@ -100,6 +100,8 @@ fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
         .borders(Borders::LEFT)
         .border_style(Style::new().fg(colors::divider()));
 
+    let narrow = area.width < 32;
+
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
         "  CROW".set_style(Styles::user_header()),
@@ -111,22 +113,35 @@ fn render_side_context(f: &mut Frame, state: &AppState, area: Rect) {
     ]));
 
     let dirty = if state.is_dirty { "*" } else { "" };
-    lines.push(Line::from(vec![
-        "  ".into(),
-        state.git_branch.as_str().set_style(Styles::success()),
-        dirty.set_style(Styles::error()),
-        " · ".set_style(Styles::evidence()),
-        format!("{:?}", state.view_mode).set_style(Styles::evidence()),
-        " · ".set_style(Styles::evidence()),
-        state.write_mode.as_str().set_style(Styles::warning()),
-    ]));
+    let branch_line = if narrow {
+        vec![
+            "  ".into(),
+            state.git_branch.as_str().set_style(Styles::success()),
+            dirty.set_style(Styles::error()),
+            " · ".set_style(Styles::evidence()),
+            state.write_mode.as_str().set_style(Styles::warning()),
+        ]
+    } else {
+        vec![
+            "  ".into(),
+            state.git_branch.as_str().set_style(Styles::success()),
+            dirty.set_style(Styles::error()),
+            " · ".set_style(Styles::evidence()),
+            format!("{:?}", state.view_mode).set_style(Styles::evidence()),
+            " · ".set_style(Styles::evidence()),
+            state.write_mode.as_str().set_style(Styles::warning()),
+        ]
+    };
+    lines.push(Line::from(branch_line));
 
     if !state.auto_run.agents.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            "  AUTO".set_style(Styles::user_header()),
-            " swarm".set_style(Styles::evidence()),
-        ]));
+        if !narrow {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                "  AUTO".set_style(Styles::user_header()),
+                " swarm".set_style(Styles::evidence()),
+            ]));
+        }
         for line in crate::tui::agent_status_feed::render_cockpit_lines(
             &state.auto_run,
             area.width.saturating_sub(2),
