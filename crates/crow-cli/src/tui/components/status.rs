@@ -6,6 +6,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::tui::shimmer::shimmer_spans;
 use crate::tui::state::AppState;
+use crate::tui::text_utils::{text_width, truncate_to_width};
 use crate::tui::theme::{chars, colors};
 
 const DETAILS_PREFIX: &str = "  └ ";
@@ -54,12 +55,7 @@ fn truncate_line_with_ellipsis(line: Line<'static>, max_width: usize) -> Line<'s
 
 pub fn status_strip_right_parts(state: &AppState) -> Vec<String> {
     let mut parts = Vec::new();
-    let model = if state.model_info.chars().count() > 24 {
-        let compact = state.model_info.chars().take(23).collect::<String>();
-        format!("{compact}…")
-    } else {
-        state.model_info.clone()
-    };
+    let model = truncate_to_width(&state.model_info, 24);
     parts.push(model);
 
     #[allow(clippy::cast_precision_loss)]
@@ -116,7 +112,7 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
 
         // ── Right side context ──
         let right_text = format!(" {} ", status_strip_right_parts(self.state).join(" · "));
-        let right_w = right_text.chars().count() as u16;
+        let right_w = text_width(&right_text) as u16;
 
         let right_color = self
             .state

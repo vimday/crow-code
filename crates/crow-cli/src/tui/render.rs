@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use super::state::AppState;
 use super::theme::{chars, colors, Styles};
+use crate::tui::text_utils::truncate_to_width;
 
 // Re-export MarkdownStreamState for state.rs
 pub use crate::render::MarkdownStreamState;
@@ -213,11 +214,7 @@ fn render_swarm_bar(f: &mut Frame, state: &AppState, area: Rect) {
     let frame = SPINNER[state.spinner_idx % SPINNER.len()];
 
     for (i, (id, task)) in state.active_swarms.iter().enumerate() {
-        let display_task = if task.len() > 30 {
-            format!("{}...", &task[..27])
-        } else {
-            task.clone()
-        };
+        let display_task = truncate_to_width(task, 30);
         spans.push(format!("{frame}{id} [{display_task}]").cyan());
         if i < state.active_swarms.len() - 1 {
             spans.push(Span::raw("   "));

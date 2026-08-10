@@ -17,4 +17,5 @@ pub mod state;
 pub mod stream_controller;
 pub mod terminal_palette;
 pub mod terminal_title;
+pub mod text_utils;
 pub mod theme;

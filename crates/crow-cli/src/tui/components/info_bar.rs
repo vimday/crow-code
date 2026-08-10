@@ -6,6 +6,7 @@
 
 use crate::tui::component::Component;
 use crate::tui::state::AppState;
+use crate::tui::text_utils::truncate_to_width;
 use crate::tui::theme::{chars, colors, Styles};
 use crossterm::event::Event;
 use ratatui::layout::Rect;
@@ -79,11 +80,7 @@ impl InfoBar {
             state.git_branch.clone()
         };
 
-        let model_display = if state.model_info.len() > 20 {
-            format!("{}…", &state.model_info[..19])
-        } else {
-            state.model_info.clone()
-        };
+        let model_display = truncate_to_width(&state.model_info, 20);
 
         let left = Line::from(vec![
             Span::styled(
@@ -159,22 +156,14 @@ impl InfoBar {
             ]
         } else if let Some(ref phase) = state.turn_phase {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
-            let label = if phase.len() > 22 {
-                format!("{}…", &phase[..21])
-            } else {
-                phase.clone()
-            };
+            let label = truncate_to_width(phase, 22);
             vec![
                 format!(" {spinner} ").set_style(Styles::spinner()),
                 label.fg(colors::accent_system()),
             ]
         } else if let Some(ref action) = state.active_action {
             let spinner = chars::SPINNER[state.spinner_idx % chars::SPINNER.len()];
-            let action_display = if action.len() > 22 {
-                format!("{}…", &action[..21])
-            } else {
-                action.clone()
-            };
+            let action_display = truncate_to_width(action, 22);
             let elapsed = state
                 .task_start_time
                 .map(|t| format!(" {}s", t.elapsed().as_secs()))
