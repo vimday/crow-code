@@ -126,6 +126,7 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
     };
 
     let mut lines = Vec::new();
+    let compact = width < 34;
     lines.push(Line::from(vec![
         Span::from("run").bold(),
         Span::from(format!(
@@ -135,8 +136,10 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
         .dim(),
     ]));
 
-    if let Some(prompt) = auto.prompt.as_deref() {
-        lines.push(line_clamped(format!("  {}", bounded_preview(prompt)), width).dim());
+    if !compact {
+        if let Some(prompt) = auto.prompt.as_deref() {
+            lines.push(line_clamped(format!("  {}", bounded_preview(prompt)), width).dim());
+        }
     }
     if let Some(phase) = auto.active_phase.as_deref() {
         lines.push(line_clamped(format!("  {phase}"), width));
@@ -161,18 +164,23 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
                 None if agent.status == "Running" => "●",
                 None => "•",
             };
-            lines.push(line_clamped(
-                format!("  {glyph} {} [{}] {}", agent.name, agent.role, agent.status),
-                width,
-            ));
-            if let Some(preview) = agent.preview.as_deref() {
-                lines
-                    .push(line_clamped(format!("    └ {}", bounded_preview(preview)), width).dim());
+            let agent_line = if compact {
+                format!("  {glyph} {} {}", agent.name, agent.status)
+            } else {
+                format!("  {glyph} {} [{}] {}", agent.name, agent.role, agent.status)
+            };
+            lines.push(line_clamped(agent_line, width));
+            if !compact {
+                if let Some(preview) = agent.preview.as_deref() {
+                    lines.push(
+                        line_clamped(format!("    └ {}", bounded_preview(preview)), width).dim(),
+                    );
+                }
             }
         }
     }
 
-    if !auto.recent_artifacts.is_empty() {
+    if !compact && !auto.recent_artifacts.is_empty() {
         lines.push(Line::from(""));
         lines.push(line_clamped("drops", width).bold());
         for artifact in auto.recent_artifacts.iter().rev().take(3) {
@@ -185,10 +193,12 @@ pub fn render_cockpit_lines(auto: &AutoRunState, width: u16) -> Vec<Line<'static
         }
     }
 
-    if let Some(summary) = auto.last_summary.as_deref() {
-        lines.push(Line::from(""));
-        lines.push(line_clamped("summary", width).bold());
-        lines.push(line_clamped(format!("  {}", bounded_preview(summary)), width).dim());
+    if !compact {
+        if let Some(summary) = auto.last_summary.as_deref() {
+            lines.push(Line::from(""));
+            lines.push(line_clamped("summary", width).bold());
+            lines.push(line_clamped(format!("  {}", bounded_preview(summary)), width).dim());
+        }
     }
 
     lines
@@ -258,6 +268,49 @@ mod tests {
         assert!(rendered.contains("planner"));
         assert!(rendered.contains("artifact"));
         assert!(rendered.contains("cockpit frame ready"));
+    }
+
+    #[test]
+    fn cockpit_lines_compact_at_narrow_widths() {
+        let auto = AutoRunState {
+            run_id: Some("auto-compact".into()),
+            prompt: Some("Polish every visible cockpit line".into()),
+            active_phase: Some("Render".into()),
+            total_agents: 2,
+            completed_agents: 1,
+            running_agents: 1,
+            queued_agents: 0,
+            failed_agents: 0,
+            cancelled_agents: 0,
+            agents: vec![AgentHudEntry {
+                id: "agent-1".into(),
+                name: "renderer".into(),
+                role: "designer".into(),
+                phase: "Render".into(),
+                status: "Running".into(),
+                preview: Some("long preview should be hidden in compact mode".into()),
+                done: false,
+                success: None,
+            }],
+            recent_artifacts: vec!["artifact: compact output".into()],
+            last_summary: Some("summary hidden".into()),
+        };
+
+        let rendered = render_cockpit_lines(&auto, 28)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("renderer Running"));
+        assert!(!rendered.contains("designer"));
+        assert!(!rendered.contains("long preview"));
+        assert!(!rendered.contains("compact output"));
     }
 
     #[test]

@@ -52,6 +52,38 @@ fn truncate_line_with_ellipsis(line: Line<'static>, max_width: usize) -> Line<'s
     Line::from(out_spans)
 }
 
+pub fn status_strip_right_parts(state: &AppState) -> Vec<String> {
+    let mut parts = Vec::new();
+    let model = if state.model_info.chars().count() > 24 {
+        let compact = state.model_info.chars().take(23).collect::<String>();
+        format!("{compact}…")
+    } else {
+        state.model_info.clone()
+    };
+    parts.push(model);
+
+    #[allow(clippy::cast_precision_loss)]
+    if let Some((tokens, context_window)) = state.ctx_usage {
+        if context_window > 0 {
+            let pct = tokens as f32 / context_window as f32;
+            parts.push(format!("ctx {:.0}%", pct * 100.0));
+        }
+    }
+
+    if state.is_streaming {
+        let tokens = state.streaming_token_estimate;
+        let token_display = if tokens < 1000.0 {
+            format!("{tokens:.0}t")
+        } else {
+            format!("{:.1}kt", tokens / 1000.0)
+        };
+        parts.push(token_display);
+    }
+
+    parts.push(format!("{:?}", state.view_mode).to_lowercase());
+    parts
+}
+
 pub struct StatusIndicatorWidget<'a> {
     state: &'a AppState,
 }
@@ -83,35 +115,7 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
         }
 
         // ── Right side context ──
-        let mut right_parts: Vec<String> = Vec::new();
-        let model = if self.state.model_info.chars().count() > 24 {
-            let compact = self.state.model_info.chars().take(23).collect::<String>();
-            format!("{compact}…")
-        } else {
-            self.state.model_info.clone()
-        };
-        right_parts.push(model);
-
-        #[allow(clippy::cast_precision_loss)]
-        if let Some((tokens, context_window)) = self.state.ctx_usage {
-            if context_window > 0 {
-                let pct = tokens as f32 / context_window as f32;
-                right_parts.push(format!("{:.0}%", pct * 100.0));
-            }
-        }
-
-        if self.state.is_streaming {
-            let tokens = self.state.streaming_token_estimate;
-            let token_display = if tokens < 1000.0 {
-                format!("{tokens:.0}t")
-            } else {
-                format!("{:.1}kt", tokens / 1000.0)
-            };
-            right_parts.push(token_display);
-        }
-
-        right_parts.push(format!("{:?}", self.state.view_mode).to_lowercase());
-        let right_text = format!(" {} ", right_parts.join(" · "));
+        let right_text = format!(" {} ", status_strip_right_parts(self.state).join(" · "));
         let right_w = right_text.chars().count() as u16;
 
         let right_color = self
@@ -286,5 +290,28 @@ impl<'a> Widget for StatusIndicatorWidget<'a> {
             },
             buf,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_strip_parts_are_compact() {
+        let mut state = AppState::new(
+            "claude-opus-with-a-very-long-model-name".into(),
+            "write".into(),
+            "workspace".into(),
+        );
+        state.ctx_usage = Some((42_000, 100_000));
+        state.is_streaming = true;
+        state.streaming_token_estimate = 1_250.0;
+
+        let parts = status_strip_right_parts(&state);
+
+        assert_eq!(parts[0], "claude-opus-with-a-very…");
+        assert!(parts.contains(&"ctx 42%".to_string()));
+        assert!(parts.contains(&"1.2kt".to_string()));
     }
 }
